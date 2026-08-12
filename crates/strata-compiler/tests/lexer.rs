@@ -167,6 +167,15 @@ fn indentation_ignores_blank_and_comment_only_lines() {
 }
 
 #[test]
+fn code_after_a_multiline_comment_terminator_keeps_indentation() {
+    let lexed = lex_source("function main\n  /* c\n  */ value\nnext\n");
+    let kinds = lexed.tokens.iter().map(|token| token.kind).collect::<Vec<_>>();
+    assert_eq!(kinds.iter().filter(|kind| **kind == TokenKind::Indent).count(), 1);
+    assert_eq!(kinds.iter().filter(|kind| **kind == TokenKind::Dedent).count(), 1);
+    assert!(lexed.tokens.iter().any(|token| token.text == "value"));
+}
+
+#[test]
 fn malformed_lexemes_report_originating_bytes() {
     for (text, code, start) in [
         ("count-1", "L0005", 5),
