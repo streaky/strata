@@ -212,6 +212,8 @@ At this milestone the frontend may support only the exact constructs needed by `
 
 Exit criterion: one purpose-built Strata file produces a real executable and exact expected output; malformed input fails through the diagnostic framework.
 
+Implementation note: milestone zero names the intended pipeline boundaries, but its bootstrap frontend is deliberately not yet structurally separated. Its `lex` stage records logical lines rather than tokens, import and binding forms are recognized as exact supported lines, unresolved-object detection remains parser-local, and the current resolve/lower boundaries mostly transfer fields. Milestone one therefore builds the real tokenizing lexer rather than extending a complete lexer, and later milestones make resolution and typed lowering substantive.
+
 ### Milestone 1 — Lexer and indentation correctness
 
 Deliver:
