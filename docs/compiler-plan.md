@@ -96,7 +96,7 @@ The first compiler and its CLI should be implemented in Rust. This gives the pro
 
 Use mature Rust parsing tooling rather than treating Rust as a requirement to hand-write every frontend component. Chumsky is a strong initial candidate: it supports separate character and token parsers, token-associated spans, recursive combinators, Pratt expression parsing, rich errors, and recovery. Prototype Strata's hardest lexical and grammatical boundaries with it before freezing the parser architecture. Keep Strata tokens, syntax nodes, spans, and diagnostics compiler-owned so replacing or selectively bypassing the parsing library would not change the language model.
 
-Do not create a runtime crate until an implemented feature requires one. Start with direct Rust lowering and add a small support crate only for behavior that cannot be expressed cleanly per generated crate.
+Do not create a general runtime crate before an implemented feature requires one. Core `int` is the first such feature: introduce a small support crate with its first semantic/lowering slice for adaptive exact integers and their normative failures. Keep other statically known values on direct Rust lowering and add support only for behavior that generated code cannot express cleanly.
 
 ## 5. Test corpus design
 
@@ -138,7 +138,7 @@ Create these incrementally rather than borrowing from `demos/`:
 1. **hello:** import/bind output, define `main`, print exact text.
 2. **build-report:** kebab-case bindings, typed integers and strings, receiver-based string concatenation, named arguments, and output.
 3. **fizz-buzz:** arithmetic, comparisons, `if`/`else`, a loop, function calls, and return.
-4. **word-count:** command-line arguments, string iteration or splitting, a standard collection, mutation, and deterministic formatted output. Add only when the necessary collection semantics are implemented.
+4. **word-count:** command-line arguments, string iteration or splitting, a standard collection, mutation, and deterministic formatted output. Add only after milestone 4 selects and implements an explicit grapheme/scalar/byte iteration contract and a collection subset whose mutation preserves version-one value semantics.
 5. **multi-file greeting:** two namespaces, explicit object import, ordinary binding, and deterministic module lowering.
 
 Each program becomes a permanent end-to-end regression test. Examples should demonstrate only released behavior and must build in CI.
@@ -225,8 +225,8 @@ Deliver:
 - `#`, `//`, and `/* ... */` comments;
 - quoted, tail, and indented block strings plus numeric literals;
 - identifiers with operator-bearing joiners, while a terminal joiner followed by a digits-only unit is rejected;
-- structural punctuation and spacing-sensitive operator attachment;
-- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, and attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix;
+- structural punctuation and spacing-sensitive operator attachment, including `++`/`--` as declared postfix tokens and `<`/`>` as punctuation rather than angle-generic delimiters;
+- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix, and angle-bracket generic spellings such as `list<string>` with a canonical `list of string` fix;
 
 Required conformance boundaries include:
 
@@ -240,6 +240,8 @@ a +b
 print.concat
 print .concat
 count-1
+-einval
+list<string>
 ```
 
 Indentation cases must cover consistently space-indented and consistently tab-indented files, a mixture within one indentation prefix, and a style change between different code lines in one file.
@@ -251,26 +253,29 @@ Exit criterion: lexer corpus covers every token class and malformed boundary; al
 Deliver:
 
 - namespace declarations;
-- namespace-local and typed binding syntax;
+- namespace-local bindings, typed bindings with and without initializers, visibility modifiers, `global`, and `constant`;
 - function declarations and parameter lists;
 - block statements and legal empty blocks;
-- literals, names, object-form lookup, member access, calls, unary/binary expressions, assignment, and grouping;
+- literals, names, object-form lookup, member access, calls, unary/binary expressions, assignment, grouping, and postfix `++`/`--`;
 - `if`/`else`, `while`, collection and three-clause `for`, `return`, `break`, and `continue` syntax;
 - parser recovery at newline and dedent boundaries;
 - normalized parse-tree serializer for goldens;
-- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters.
+- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters and angle-bracket generic spelling.
 
 Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 
 - `print.concat` versus invalid `print .concat` adjacency;
 - `.thing` versus the explicit zero-argument call `.thing;`;
 - tail-string markers versus comparison and shift operators;
-- operator-bearing identifiers versus spaced operators;
+- operator-bearing identifiers, prefix negation, postfix `++`/`--`, and spaced operators;
 - namespace whitespace tiers versus expressions;
 - call semicolon precedence, named arguments, and grouping of nested calls;
-- grouping calls inside the clauses of a three-clause `for`.
+- grouping calls inside the clauses of a three-clause `for`;
+- `is a` as identity against an ordinary binding versus type membership when `a` is followed by a complete type expression.
 
 Invalid adjacency and missing grouping must produce source-oriented diagnostics with valid explicit-semicolon and parenthesized-call fixes; the parser must never repair them silently.
+
+The parser must implement the normative §34 precedence and associativity table, including non-associative comparisons, and mechanically expand the call-free-expression variant used by argument grammar rather than maintaining a second expression grammar.
 
 Exit criterion: every first-version construct has accepted and rejected parse cases; no semantic decision is required merely to recover the intended tree shape.
 
@@ -278,20 +283,23 @@ Exit criterion: every first-version construct has accepted and rejected parse ca
 
 Deliver:
 
+- a minimal package manifest contract and loader that enumerate the complete source-unit set and select whether the default prelude is enabled;
+- a single-file CLI input modeled as an implicit one-unit package with a stable package identity and the default prelude, without filename-to-namespace inference or on-demand namespace search;
 - namespace tree assembled from the complete manifest-enumerated set of package source units before resolution;
 - deterministic multi-file discovery and source-unit assembly order;
 - exact root `/` and parent `..` anchoring;
 - separate ordinary and object-form symbol tables, with lexical object-form lookup;
 - namespace-local, function-local, parameter, and program-global scopes needed by the first version;
-- duplicate, shadowing, inaccessible, unresolved-name, and same-scope object-form collision diagnostics;
+- explicit `global` handling for program-global creation/replacement and rejection of plain top-level assignment where a global operation is required;
+- duplicate, shadowing, visibility/inaccessibility, unresolved-name, and same-scope object-form collision diagnostics;
 - idempotent reimport of the same object-form export, with aliases required for distinct colliding exports;
 - fixed bootstrap importer limited to compiler-owned core facilities and processed as a structural compilation phase rather than an ordinary runtime call;
 - the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`;
-- import resolution that does not create an ordinary binding automatically.
+- import resolution that does not create an ordinary binding automatically, and proof that an ordinary binding named `import` cannot alter structural import syntax or importer selection.
 
 Defer custom importer execution and package acquisition. The initial bootstrap environment may resolve compiler-owned modules from a fixed, versioned table.
 
-Exit criterion: a purpose-built manifest-enumerated multi-file test proves complete source-unit assembly, symmetric namespace declaration/import resolution, explicit object-to-ordinary binding, lexical object-form lookup, collision and idempotent-reimport rules, prelude enablement and disablement, shadowing, and root/parent lookup.
+Exit criterion: a purpose-built manifest-enumerated multi-file test proves manifest loading, complete source-unit assembly, implicit single-file package identity, symmetric namespace declaration/import resolution, explicit object-to-ordinary binding, lexical object-form lookup, collision and idempotent-reimport rules, prelude enablement and disablement, `global` versus namespace-local assignment, visibility, shadowing, root/parent lookup, and structural import independence from ordinary bindings.
 
 ### Milestone 4 — Types, calls, and control-flow semantics
 
@@ -299,15 +307,22 @@ Deliver:
 
 - direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, `string`, and `none`, where the Rust representation preserves the complete Strata contract;
 - core `int` as an exact signed integer with adaptive `i64`, `i128`, and arbitrary-precision tiers, including normalization to the smallest exact tier;
-- typed literals and inferred local bindings;
+- the initial integer support component and lowering hooks for checked tier promotion, exact wide operations, normalization, and capability rejection where arbitrary-precision promotion is unavailable;
+- typed literals and inferred local bindings, including signed fixed-width minimum literals handled without first rejecting their positive magnitude;
 - typed parameters, optional parameters with defaults, and return contracts;
+- initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
 - assignment compatibility without implicit cross-type coercion;
-- unary, arithmetic, comparison, Boolean, equality, and type-appropriate operator checking;
-- exact `int` arithmetic and Euclidean division/remainder, without inheriting Rust overflow or signed division behavior;
+- unary, arithmetic, shift, bitwise, comparison, Boolean, equality, identity/type-membership, and type-appropriate operator checking;
+- exact `int` arithmetic, infinite two's-complement bitwise behavior, exact/arithmetic shifts, and Euclidean division/remainder without inheriting Rust overflow, shift, or signed division behavior;
+- fixed-width checked ordinary arithmetic and explicit checked, wrapping, saturating, and overflowing operation families without host debug/release dependence;
+- an interim uncaught-runtime-failure contract for division by zero, fixed-width overflow, and invalid shifts: preserve the normative error identity and source location, render it deterministically, and exit nonzero while source `throw`/`try`/`catch` remains deferred;
 - positional and named argument binding, arity and default checks, explicit zero-argument `;`, and duplicate-argument errors;
 - semantic distinction among calls, member access, and dot-objects passed explicitly as ordinary argument values;
+- strict left-to-right operand and argument evaluation, receiver-before-selection, exactly-once assignment receiver/index evaluation, `and`/`or` short-circuiting, and call-site defaults after supplied arguments in parameter order;
 - truth protocol initially implemented for core types only;
-- branch and loop checking, loop-control placement, unreachable-code facts, and definite return analysis;
+- branch and loop checking, postfix-update placement and integer-family semantics, loop-control placement, unreachable-code facts, and definite return analysis;
+- an explicit version-one string iteration/length choice among graphemes, scalars, or bytes, with required capability diagnostics rather than silent substitution;
+- an explicit minimal collection subset for iteration, with mutation accepted only where ordinary assignment cannot expose aliasing that violates deferred universal COW semantics;
 - explicit unsupported-feature diagnostics for source-declared type parameters rather than accidental parser or type-checker failures;
 - finite dynamic bindings only where all alternatives lower soundly without a universal box.
 
@@ -318,7 +333,7 @@ message = ': '.concat; project-name, build-target, build-status
 print; message
 ```
 
-Exit criterion: `fizz-buzz` and `build-report` pass semantic checking, compile, and run; plausible type and call mistakes fail before Rust generation.
+Exit criterion: semantic and lowering conformance for `fizz-buzz` and `build-report` proves the specified integer, type, call, evaluation-order, and control-flow contracts; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, and capability mistakes fail at Strata source spans.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -328,7 +343,7 @@ Deliver:
 - deterministic module and item ordering;
 - injective source-name-to-Rust-name encoding;
 - direct fixed-width scalar and function lowering where Rust preserves the source contract;
-- runtime/support lowering for adaptive core `int`, with checked tier promotion, exact wide operations, result normalization, and capability diagnostics where arbitrary-precision promotion is unavailable;
+- integration of the adaptive core-`int` support component into the explicit Rust IR, preserving checked tier promotion, exact wide operations, result normalization, normative runtime failures, and target capability diagnostics;
 - structured expression/block emission with a pinned formatter policy;
 - generated `Cargo.toml`, source tree, compiler metadata, and entrypoint;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
@@ -393,17 +408,18 @@ The release pipeline must prove, from a clean checkout:
 
 ### Required in first version
 
-- UTF-8, indentation, comments, exact spans;
-- identifiers and spacing-sensitive operators;
-- namespace declaration and fixed bootstrap imports;
-- ordinary/object-form lookup distinction;
-- locals, namespace bindings, and minimal globals;
-- core literals and static scalar types;
-- functions, parameters, calls, and return values;
-- basic expressions and assignment;
-- `if`/`else`, `while`, collection `for`, `break`, `continue`, `return`;
-- a minimal string/output/iteration surface sufficient for real CLI programs;
-- direct Rust lowering, Cargo build/run, source maps, and diagnostics.
+- UTF-8, indentation, all three comment forms, exact spans, and legal empty blocks;
+- exact identifier character/joiner policy, spacing-sensitive operators, prefix negation, postfix `++`/`--`, and angle-generic rejection;
+- normative §34 precedence, associativity, non-associative comparisons, call-free arguments, explicit semicolon calls, and grouping rules;
+- a minimal package manifest, manifest-enumerated source units, implicit single-file package identity, namespace declarations, and fixed bootstrap imports;
+- ordinary/object-form lexical lookup distinction, collision/idempotent-import rules, and structural imports unaffected by ordinary bindings;
+- locals, namespace bindings, visibility, explicit `global` bindings, definite assignment, and the exact default prelude;
+- core literals and static scalar types, including adaptive exact `int`, fixed-width integer contracts, normative arithmetic failures, and target capability diagnostics;
+- functions, required/optional parameters, positional/named arguments, calls, and return values;
+- basic expressions, identity/type-membership predicates, assignment, shifts, bitwise operators, and specified evaluation order;
+- `if`/`else`, `while`, collection and three-clause `for`, `break`, `continue`, and `return`;
+- a selected string iteration/length contract and minimal collection/output surface sufficient for real CLI programs without violating deferred universal COW semantics;
+- deterministic Rust lowering, the first integer support component, Cargo build/run, source maps, and diagnostics.
 
 ### Explicitly deferred
 
