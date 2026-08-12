@@ -50,6 +50,15 @@ fn tail_string_can_be_empty() {
 }
 
 #[test]
+fn tail_string_preserves_leading_whitespace() {
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; > hello",
+    );
+    let compilation = strata_compiler::compile("leading-space.strata", source).unwrap();
+    assert!(compilation.rust.contains("println!(\"{}\", \" hello\");"));
+}
+#[test]
 fn rejects_empty_block_string() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",

@@ -509,7 +509,7 @@ send; recipient, >Error: file not found!
 
 The second value is exactly `Hello! From, "Strata"! >>`. Quotes, commas, operators, comment markers, and further `>` characters have no grammatical meaning after the opening marker. Whitespace is preserved exactly, including whitespace immediately after `>` and trailing horizontal whitespace. An attached `>` with no following content is the empty string.
 
-The marker must begin an expression and must be attached to its content. This keeps it distinct from infix comparison:
+The marker must begin an expression and must be lexically attached to the expression position; its content begins with the very next character, which may be whitespace. This keeps it distinct from infix comparison:
 
 ```text
 is-larger = left > right
