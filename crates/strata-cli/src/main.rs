@@ -75,10 +75,14 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
 }
 
 fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, String> {
-    let root = std::env::current_dir()
-        .map_err(|error| format!("cannot locate working directory: {error}"))?;
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("cannot locate source file {}: {error}", source.display()))?;
+    let root = source
+        .parent()
+        .ok_or_else(|| format!("source file {} has no parent directory", source.display()))?;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in source.to_string_lossy().bytes().chain(rust.bytes()) {
+    for byte in rust.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
