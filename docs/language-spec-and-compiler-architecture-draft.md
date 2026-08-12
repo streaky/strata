@@ -2,9 +2,9 @@
 
 **Draft 0.1 — a human-facing object language lowered transparently to Rust**
 
-> This document turns the design discussion into a coherent working specification. It is intentionally opinionated enough to build from, while keeping a small set of genuinely unresolved choices in a final validation-points section.
+> This document is the current integrated design source: normative language semantics, compiler/lowering contracts, and rationale share one file while the design is still changing quickly. Normative requirements are identified by the terms below; implementation sequencing lives separately in `compiler-plan.md`. A future publication may split these views without changing their contract. The constitutional invariants in §41 govern every section and take precedence over illustrative architecture or rationale.
 >
-> The project and language have the working name **Strata**. Examples continue to use `lang` as a placeholder command name until the command-line interface is named.
+> The project, language, and command-line interface have the working name **Strata**; the CLI command is `strata`.
 
 ---
 
@@ -38,7 +38,7 @@ The language is designed around a deliberately small set of ideas:
 - Ordinary assignment has value semantics.
 - Value assignment is copy-on-write by default; explicit `ref` shares mutable identity and `move` transfers ownership.
 - The default global namespace is extremely small and clean.
-- Engineers may define or replace their own global and namespace-local bindings, including things such as `print` and `import`.
+- Engineers may define or replace their own global and namespace-local bindings, including facilities such as `print`; compile-time constructs such as `import` use separate structural extension slots.
 - Imports populate an object-facing namespace without automatically polluting the ordinary variable/function namespace.
 - Namespaces are tiered using whitespace; `/` anchors resolution at the root but is not a separator.
 - Ordinary syntax favours unshifted characters and readable words over punctuation gymnastics.
@@ -82,7 +82,7 @@ Conceptually:
 The output is:
 
 ```text
-strata: native executable: ready to build
+Strata: native executable: ready to build
 ```
 
 ---
@@ -409,6 +409,10 @@ An identifier begins with a letter and ends with a letter or digit. Between thos
 - letters and digits;
 - runs of the identifier-joiner glyphs `+`, `-`, `*`, `/`, `%`, `<`, and `>`.
 
+Identifiers may end in digits: `http2`, `sha256`, and `vector4` are valid. The restriction applies only when a terminal digits-only unit is introduced by an identifier joiner. Compact forms such as `count-1`, `page/2`, and `x+4` are lexical errors rather than identifiers or arithmetic. Names such as `http2-client`, `ipv4/ipv6`, and `sha3-256sum` remain valid because each unit after a joiner contains a letter.
+
+A compact letter-to-letter joiner sequence is always an identifier, permanently: `total-count`, `page-size`, and `width-height` never mean subtraction without surrounding operator whitespace, even if a same-spelled binding exists. Arithmetic must be written `total - count`. This asymmetry is intentional: kebab-case names require a stable lexical interpretation, while a terminal joiner-plus-digits form is reserved as an error because it is not needed for that naming convention.
+
 Examples:
 
 ```text
@@ -420,29 +424,24 @@ ipv4/ipv6
 input>output
 ```
 
-The rule is lexical and universal for those glyphs: a maximal joiner run directly surrounded on both sides by identifier characters belongs to the identifier. A symbolic run cannot begin an identifier. When it begins a token after whitespace, a delimiter, or the start of a line and is immediately followed by an identifier character, it has behavioural/operator meaning rather than becoming part of the following name.
+The rule is lexical and universal for those glyphs: a maximal joiner run directly surrounded on both sides by identifier characters belongs to the identifier only when the following identifier unit contains a letter. A symbolic run cannot begin an identifier. When it begins a token after whitespace, a delimiter, or the start of a line and is immediately followed by an identifier character, it has behavioural/operator meaning rather than becoming part of the following name.
 
 ```text
 a+b      # one identifier token
 a + b    # detached operator expression
 a +b     # the same operator, right-attached to its operand
 a+ b     # postfix/left-attached form; an error unless `+` declares that behaviour
+count-1  # lexical error: attached joiner followed by a digits-only suffix
 -einval  # prefix negation, never an identifier named `-einval`
 ```
 
-Consequently:
+Consequently `x=foo+bar` binds `x` to the exact identifier `foo+bar`, while `x=count-1` is rejected with a diagnostic suggesting `x = count - 1`. `=` and other structural delimiters are not identifier joiners, so assignment remains recognisable without surrounding spaces. Nevertheless, canonical Strata style requires whitespace around these delimiters: compact forms such as `x=foo+bar` visually obscure the boundary between assignment syntax and operator-bearing identifiers. Formatters insert the spaces, and linters should warn when they are omitted. The warning targets the compact structural delimiter, not the operator-bearing identifier; `result = foo+bar` remains ordinary canonical source. Ordinary numeric suffixes remain valid when no joiner introduces them, as in `sha256`.
 
-```text
-x=foo+bar
-```
-
-binds `x` to the value looked up under the exact identifier `foo+bar`; it is not addition. `=` and other structural delimiters are not identifier joiners, so assignment remains recognisable without surrounding spaces, although the formatter writes `x = foo+bar`.
-
-Prefix, right-attached, and postfix forms are grammar-specific. `-1` and `-einval` apply declared prefix negation; `a +b` is the same infix addition as `a + b` because the preceding whitespace starts an operator token; and `i++` retains its declared postfix meaning. A left-attached form such as `a+ b` is reserved for declared postfix behaviour and is otherwise an error. `foo++bar`, by contrast, is an identifier because the joiner run is surrounded by identifier characters. Comment openers take lexical priority, so `//` and `/*` begin comments rather than forming identifier content.
+Prefix, right-attached, and postfix forms are grammar-specific. `-1` and `-einval` apply declared prefix negation; `a +b` is the same infix addition as `a + b` because the preceding whitespace starts an operator token; and `i++` retains its declared postfix meaning. A left-attached form such as `a+ b` is reserved for declared postfix behaviour and is otherwise an error. `foo++bar`, by contrast, is an identifier because its post-joiner unit contains letters. Comment openers take lexical priority, so `//` and `/*` begin comments rather than forming identifier content.
 
 Comparison tokens containing `=`, such as `==`, `!=`, `<=`, and `>=`, cannot occur inside identifiers because `=` is structural. They may be detached or right-attached (`a == b` or `a ==b`); a left-attached spelling is invalid unless that token acquires an explicit postfix meaning. Future symbolic operators must explicitly declare whether each glyph is an identifier joiner and which prefix, infix, or postfix behaviours it supports; adding an operator must not silently change how existing source tokenises.
 
-This design deliberately makes whitespace and attachment two of the language's small number of semantic signals. It permits domain names such as `ipv4/ipv6`, makes `-einval` unambiguously behavioural, and leaves left-attached syntax available for future postfix behaviours without assigning it accidentally.
+This design deliberately makes whitespace and attachment two of the language's small number of semantic signals. Rejecting a terminal joiner-plus-number suffix prevents a likely misspelling from silently changing between a name and arithmetic. The diagnostic must identify the attached suffix and offer the corresponding spaced expression as a fix.
 
 ### 6.6 Contextual words
 
@@ -474,7 +473,7 @@ rust
 unsafe
 ```
 
-`import` is special: it participates in the grammar of a `from ... import ...` form but is also an ordinary overridable binding that supplies the form’s behaviour.
+`import` is special: it participates structurally in both `from ... import ...` and `import with ...`. The latter selects a compile-time importer slot; neither form resolves an ordinary binding named `import`.
 
 The language should use contextual rather than gratuitously reserved keywords where doing so remains unambiguous.
 
@@ -573,7 +572,6 @@ The core punctuation has rigid jobs:
 |---|---|
 | `.name` | object-form lookup |
 | `value.member` | member lookup |
-| `value .name` | inherent dot-object argument to `value`’s default invocation |
 | `;` | begin an invocation’s argument list |
 | `,` | separate arguments or values |
 | `|` between types | construct a union type |
@@ -586,21 +584,15 @@ The core punctuation has rigid jobs:
 | `#` or `//` | begin a line comment outside text literals |
 | `/* ... */` | block comment, possibly multiline |
 
-Whitespace around a dot is semantic:
+Whitespace before a dot separates expressions; it is not a call form:
 
 ```text
-print.concat
+print.concat   # member lookup
+print .concat  # invalid adjacency
+print; .concat # pass the dot-object explicitly
 ```
 
-selects the `concat` member of `print`.
-
-```text
-print .concat
-```
-
-passes the dot-object `.concat` inherently to the default behaviour of `print`.
-
-The formatter must never collapse or introduce this space casually.
+The formatter must preserve member attachment and must never turn invalid adjacency into invocation.
 
 ---
 
@@ -627,6 +619,8 @@ root
 The namespace hierarchy is logical and is not required to mirror the filesystem.
 
 A file may contribute declarations to an existing namespace. Multiple files may contribute to the same namespace unless a package policy forbids it.
+
+Package metadata enumerates every source unit belonging to the package. The compiler parses that complete set before resolving namespace declarations; there is no filename-to-namespace convention and no on-demand search by namespace name. Incremental builds may avoid reparsing unchanged units from validated summaries, but adding or removing a source unit changes the package input and invalidates namespace assembly.
 
 ### 7.2 Root anchoring
 
@@ -723,6 +717,10 @@ global print = .print
 
 This separation is central to the language.
 
+Object-form symbols have their own lexical scope chain. A `from ... import` populates the object-form scope containing that import: block imports last to the end of the block, function imports last to the end of the function, and namespace-top-level imports populate that exact namespace. Lookup proceeds from the current object-form lexical scope through enclosing lexical scopes, the current namespace, and parent namespaces nearest first; it does not consult program-global ordinary bindings or the prelude's ordinary view. Namespace-level object imports are inherited by descendant namespaces under the same visibility rules as ordinary namespace bindings.
+
+A nearer object-form symbol shadows a farther one. Introducing two different symbols under the same object-form name in one scope is a compile-time collision; source order never chooses a winner. Reimporting the same export is idempotent. Aliasing is required when both colliding objects must remain available. Declaration-modifier lookup uses this same object-form chain.
+
 ### 7.6 Declarations and object-form symbols
 
 A declaration creates:
@@ -782,24 +780,43 @@ global database = .database;
 ```
 
 Program globals are ordinary bindings. They are not a privileged language-owned namespace.
+
+`global` is required whenever source creates or replaces a program-global binding, including in a source unit assigned to the root namespace. A plain top-level assignment always remains namespace-local. Requiring the marker prevents moving a file or changing its namespace declaration from silently changing the reach of its bindings.
+
 A global declaration still retains its lexical declaring namespace for visibility and name resolution. `global` controls program-wide identity and lifetime; it does not erase declaration provenance or imply public visibility. Therefore `private global max-threads int = 0` denotes one program-wide binding whose source-visible name is resolvable only inside its exact declaring namespace.
 
 A package may not silently mutate the consuming program’s global bindings merely by being installed. Global composition belongs to the program entry configuration or explicitly evaluated program source.
 
-### 7.10 The prelude
+### 7.10 The core prelude
 
-The default prelude must be intentionally small.
+The default prelude is a deliberately small set of ordinary program-global bindings selected from the `/core` implementation. `/core` is an ordinary, explicitly addressable root package namespace, so its objects remain directly importable:
 
-A plausible minimal prelude contains:
+```text
+from /core output import .print
+print = .print
+```
 
-- scalar type objects such as `int`, `float`, `bool`, `string`, `bytes`, and `none`;
-- `print`;
-- `import`;
-- the minimal error and reflection protocols required by the toolchain.
+That creates a namespace-local `print` even though the default prelude already supplies the same core object globally. The explicit form is useful in a project that disables the prelude, under an alias, or when declaring exactly which implementation a namespace uses.
 
-Most facilities belong in namespaces and packages.
+The version-one default ordinary bindings are:
 
-A project may replace, extend, or disable the default prelude through its build manifest.
+- `print`, sourced from `/core output`’s `.print`;
+- scalar type objects `int`, `float`, `bool`, `string`, `bytes`, and `none`, sourced from `/core types`.
+
+This is the complete default list. In particular, collections, filesystem access, concurrency, formatting helpers, and reflection helpers require imports. `import` remains structural syntax whose behaviour is supplied by the active importer object; it is not an ordinary prelude binding.
+
+Prelude bindings are defaults, not reserved names. Explicit program composition may replace any of them:
+
+```text
+from mylib tools import .myprint
+global print = .myprint
+```
+
+After this declaration, ordinary lookup of `print` through the program-global tier resolves to `mylib tools`’ `.myprint`. The original remains available by explicitly importing `/core output`’s `.print`. A prelude replacement does not mutate `/core`, the imported object-form scopes, or namespace-local bindings that shadow the global.
+
+A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
+
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -833,7 +850,7 @@ print = .pretty-print
 fallback-print = .core-print
 ```
 
-### 8.2 Import is an object
+### 8.2 Import is a compile-time construct slot
 
 The parser recognises the structural form:
 
@@ -841,29 +858,27 @@ The parser recognises the structural form:
 from path import objects
 ```
 
-The behaviour of that form is supplied by the currently resolved `import` object.
+Its behaviour is supplied by the importer selected for the current compile-time construct scope. The standard importer is a precompiled `/core` host extension implementing the versioned compiler importer protocol; it is not an ordinary prelude object or runtime binding.
 
-The standard importer is an ordinary prelude object implementing a compiler-time importer protocol.
-
-A namespace may override it:
+A namespace may select another importer for subsequent imports in that namespace and its descendants:
 
 ```text
 namespace plugins
 
 from /build importers import .sandboxed-import
-import = .sandboxed-import
+import with .sandboxed-import
 ```
 
-A program may override it globally:
+A program entry source may select one at the program-global construct tier:
 
 ```text
 from /build importers import .content-addressed-import
-global import = .content-addressed-import
+global import with .content-addressed-import
 ```
 
-Subsequent imports resolved through that scope use the replacement importer.
+`import with` and `global import with` are structural compile-time selection statements, not assignments. Their right operand must resolve through the object-form scope to a declared, precompiled host extension implementing the importer protocol. Namespace selection applies after the statement to that namespace and descendants unless a nearer selection replaces it. Global selection applies after the statement wherever no nearer namespace selection exists. Lexical blocks and functions cannot replace the importer because their imports are resolved before runtime scope exists.
 
-If the replacement importer breaks importing, importing is broken. This is an intentional consequence of giving the engineer control over a fundamental object.
+If a replacement importer breaks importing, importing is broken. This is an intentional consequence of giving the entry project control over a fundamental compiler extension slot. An ordinary binding named `import` is legal but has no effect on import syntax.
 
 ### 8.3 The importer protocol
 
@@ -901,7 +916,7 @@ The compiler has a minimal bootstrap importer capable of loading:
 
 After a custom importer is installed, normal imports may be delegated to it.
 
-For deterministic behaviour, imports and importer rebinding inside a compilation unit are processed in source order. A manifest-level importer applies before ordinary source imports.
+For deterministic behaviour, imports and `import with` selections inside a compilation unit are processed in source order. A manifest-level importer applies before source selections and imports.
 
 A recovery option should allow a build to force the bootstrap importer when a custom importer prevents the project from compiling.
 
@@ -988,36 +1003,27 @@ A zero-argument method invocation remains explicit:
 buffer.clear;
 ```
 
-### 9.4 Inherent dot-object arguments
+### 9.4 Dot-object arguments
 
-A whitespace-separated dot-object expression immediately following an expression is passed as an inherent object argument to the left expression’s default invocation.
-
-```text
-print .render; report
-```
-
-desugars conceptually to:
+A dot-object is an ordinary argument value and never invokes the expression to its left through adjacency. Calls always retain the explicit semicolon:
 
 ```text
-temporary = .render; report
-print; temporary
+print; (.render; report)
 ```
 
-This differs fundamentally from:
+This invokes `.render` with `report`, then passes its result to `print`. It differs from:
 
 ```text
 print.render; report
 ```
 
-which invokes the `render` member of the print object.
+which invokes the `render` member of the print object. The invalid spelling `print .render; report` receives a diagnostic suggesting one of those two forms; whitespace is not general function application.
 
-Only a dot-object expression has this inherent adjacency behaviour. Ordinary values remain explicit arguments:
+An uninvoked dot-object can be passed without grouping:
 
 ```text
-print; message
+configure; .render
 ```
-
-This avoids turning whitespace into general function application and keeps expression boundaries unambiguous.
 
 ### 9.5 Positional and named arguments
 
@@ -1061,6 +1067,10 @@ result = (convert; uint64, pages) * page-size
 ```
 
 `if (is-enabled; ...)` is therefore supported grouping, not C-style invocation. The formatter removes redundant whole-condition parentheses and preserves parentheses that determine expression structure.
+
+A call clause extends to the end of its containing logical expression. Commas delimit its top-level arguments, but a semicolon inside an ungrouped argument does not start a nested call: `print; format; value` is invalid. A call used as an operand or argument inside a larger expression must be parenthesised, as in `print; (format; value)` or `result = (convert; uint64, pages) * page-size`.
+
+The semicolons in a three-clause `for` belong to the `for` grammar and delimit its clauses. Any call inside one of those clauses must therefore be parenthesised: `for i = (start-at; limit); i < limit; i++`. These rules make every semicolon's owner syntactically determinate without a closing-call token.
 
 ### 9.6 Object protocols
 
@@ -1215,31 +1225,24 @@ This is a lint/contract mode, not the default language experience.
 
 ### 10.5 Package-supplied declaration modifiers
 
-The fixed declaration grammar cannot grow a keyword for every ecosystem's storage, linkage, ABI, section, calling-convention, or code-generation requirement. An imported object may implement the constrained declaration-modifier protocol and appear before a declaration:
+The fixed declaration grammar cannot grow a keyword for every ecosystem's storage, linkage, ABI, section, calling-convention, or code-generation requirement. An imported object may implement the constrained declaration-modifier protocol and appear in object form before a declaration:
 
 ```text
 from /linux kernel import .per-cpu, .cacheline-aligned, .weak, .syscall
 
-per-cpu global process-counts unsigned-long = 0
-cacheline-aligned global tasklist-lock rwlock = .rwlock;
-weak function arch-release-task-struct void; tsk ref task-struct
-syscall function unshare long; unshare-flags unsigned-long
+.per-cpu global process-counts unsigned-long = 0
+.cacheline-aligned global tasklist-lock rwlock = .rwlock;
+.weak function arch-release-task-struct void; tsk ref task-struct
+.syscall function unshare long; unshare-flags unsigned-long
 ```
 
-Here each leading bare identifier is a contextual lookup of the corresponding object-form symbol: `per-cpu` in declaration-modifier position resolves `.per-cpu`. Modifier lookup consults the object-facing namespace exclusively; it neither consults nor creates an ordinary binding, and an ordinary binding named `per-cpu` cannot shadow the modifier. These names are not core keywords. A declaration modifier receives the declaration's typed semantic descriptor during compilation and may return a constrained transformation or attach metadata consumed by lowering.
-In this example, `.per-cpu` is supplied by the imported Linux-kernel package; `per-cpu` is not a core language keyword and is not implicitly available merely because a Linux target was selected. Its modifier implementation requests per-CPU storage through the compiler's storage-placement extension point, so the declaration has one source-level global name but target-defined CPU-local instances. Using `per-cpu` without importing a modifier object that implements that contract is a compile-time unresolved-modifier error.
+A leading object-form symbol is structurally a modifier; bare identifiers are never inferred to be modifiers. Modifier lookup uses the object-form scope rules in §7.5. A declaration modifier receives the declaration's typed semantic descriptor during compilation and may return a constrained transformation or attach metadata consumed by lowering. In this example `.per-cpu` is supplied by the imported package; using it without importing that object is an unresolved-object error.
 
-The protocol may affect only declared compiler extension points, including storage placement, linkage, exported symbol names, ABI/calling convention, alignment, target sections, generated wrappers, and checked declaration constraints. It must not:
+The protocol may affect only declared compiler extension points, including storage placement, linkage, exported symbol names, ABI/calling convention, alignment, target sections, generated wrappers, and checked declaration constraints. It must not replace a declaration body with hidden runtime behaviour, weaken source-visible ownership or effects, capture undeclared inputs, perform unrestricted syntax rewriting, or evade safety, capability, visibility, or type checks.
 
-- replace the declaration body with arbitrary hidden runtime behaviour;
-- change source-visible parameter, return, assignment, ownership, or effect semantics without reporting that contract in reflection;
-- capture ambient undeclared build inputs;
-- perform unrestricted syntax rewriting;
-- evade `unsafe`, capability, visibility, or type checks.
+Modifier resolution, order, provenance, effects, and emitted native attributes are recorded in reflection and build metadata. Versions and consulted build inputs participate in cache keys. Unsupported or conflicting modifiers are compile-time errors.
 
-Modifier resolution, order, provenance, effects, and emitted native attributes are recorded in reflection and build metadata. Their package versions and all consulted build inputs participate in dependency resolution and cache keys. Unsupported or conflicting modifiers are compile-time errors at the declaration.
-
-Core declaration words such as `global`, `constant`, `class`, and `function` determine the syntactic declaration shape. A run of bare identifiers immediately before that shape is parsed as zero-argument declaration modifiers, so ordinary expressions and bare typed bindings remain unambiguous. Multiple modifiers apply left to right. A modifier that requires arguments is not valid in this prefix run; parameterised declaration metadata uses an explicit compile-time descriptor call after the declaration, such as `native-name; mmdrop, '__mmdrop'`. A compiler must never reinterpret a failed parameterised call as a prefix modifier or vice versa.
+Core declaration words determine declaration shape. A run of leading object names before a core declaration is a left-to-right zero-argument modifier list. Bare typed bindings do not admit prefix modifiers because they have no structural declaration introducer; metadata for one must use an explicit descriptor operation after declaration. A modifier requiring arguments likewise uses such an explicit compile-time descriptor operation. Failed calls and modifiers are never reinterpreted as one another.
 
 ---
 
@@ -1251,22 +1254,28 @@ At minimum, the language defines:
 
 | Type | Proposed semantics |
 |---|---|
-| `int` | signed 64-bit integer with checked arithmetic |
+| `int` | arbitrary-precision signed integer with transparent representation promotion and normalisation |
 | `float` | IEEE 754 binary64 |
 | `bool` | `true` or `false` |
 | `string` | Unicode text, stored as UTF-8 by the standard implementation |
 | `bytes` | arbitrary binary data |
 | `none` | the single absence value |
 
-Additional explicit numeric types should include:
+The explicit fixed-width numeric types are:
 
 ```text
-int8 int16 int32 int64
-uint8 uint16 uint32 uint64
+int8 int16 int32 int64 int128
+uint8 uint16 uint32 uint64 uint128
 float32 float64
 ```
 
-A `big-int` type may be provided by the standard ecosystem. It is not assumed on allocator-free targets.
+`int` is one source type, not an alias for `int64` and not a union of source-visible width types. Its values have no language-level minimum or maximum. Ordinary `int` arithmetic produces the exact mathematical result; crossing a representation boundary is internal runtime control flow, not a throw, panic, type change, or observable conversion.
+
+The standard runtime represents `int` values adaptively: a compact `i64` fast tier, an `i128` middle tier, and arbitrary-precision signed limb storage beyond that. The erased wrapper must keep an ordinary small integer machine-word-sized where the target permits; it must not inflate every `int` to an inline 128-bit payload merely because wider values are supported. A wide tier may therefore be boxed or share a wide/big allocation header. Statically proven values may lower directly to `i64`, `i128`, or specialised limb operations without constructing the erased wrapper.
+
+Every completed `int` operation normalises its result to the smallest tier that represents it exactly: first `i64`, then `i128`, then arbitrary precision. Thus a widened value that later falls within `int64` range becomes compact again, and a big result that fits `i128` or `i64` does not remain unnecessarily large. Tier choice is not observable through equality, ordering, hashing, serialization, source reflection, ownership, or value semantics; profiling and generated-code inspection may report it as a physical cost.
+
+The fixed-width integer names are distinct source types whose bounds and bit widths are contractual. Their ordinary arithmetic never promotes to `int` or another width. They exist for bounded storage, predictable machine operations, layout, and ABI contracts.
 
 ### 11.2 Literals are typed objects
 
@@ -1278,7 +1287,17 @@ name = my rifle # string
 empty = none    # none
 ```
 
-The compiler may represent these as native Rust primitives when semantics permit.
+An unconstrained whole-number literal is an `int` regardless of magnitude. The front end parses its magnitude without a fixed-width limit, and the compiler selects the smallest exact runtime tier. In a fixed-width initializer, the literal is checked at compile time against the destination range:
+
+For a signed fixed-width initializer whose source is a syntactic unary `-` applied directly to a whole-number literal, range checking applies to the signed mathematical value after negation, not to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected. Parenthesised constant expressions use the same compile-time constant evaluation and destination-range check; this rule introduces no general implicit conversion.
+
+```text
+large = 9223372036854775808
+wide int128 = 9223372036854775808
+too-large int64 = 9223372036854775808 # compile-time range error
+```
+
+This contextual literal check is not an implicit runtime conversion. The compiler may represent scalar objects as native Rust primitives when semantics permit.
 
 ### 11.3 Dynamic bindings
 
@@ -1409,7 +1428,12 @@ array of function from int to boolean, 16
 `function to R` takes no arguments. In `function from A, B to R`, the comma separates parameter types and the final `to` introduces the return type. Function types associate to the right: an ungrouped nested `function` consumes its own `to` and return type before parsing resumes in the enclosing parameter list. The formatter must add grouping whenever nested `from`/`to` structure would otherwise be difficult to scan. Calling convention, variadic behaviour, and foreign ABI are type-constructor or declaration metadata; they do not alter this core grammar.
 
 Type constructors and function types remain human-facing and compositional. Compilers, formatters, documentation, and generated bindings must render these canonical forms rather than leaking Rust, C++, or adapter-specific generic notation.
-### 11.8 Strict typing scopes
+### 11.8 Source generic declarations
+
+The first core language deliberately does not declare source type parameters. `list of string` applies a constructor supplied by the language or a package; it does not imply that users can declare `T`. Generic Rust APIs may be exposed only when an adapter can erase them behind a concrete object/interface contract or generate named concrete instantiations. Otherwise they require a wrapper and are not directly representable.
+
+Strict code uses concrete types, unions, interfaces, or generated concrete declarations. It must not fall back to dynamic typing merely to simulate a missing type parameter. Source-declared generics remain a future language change requiring syntax, constraint rules, inference, dispatch, reflection, and code-generation semantics; no implementation may invent private syntax meanwhile.
+### 11.9 Strict typing scopes
 
 A `strict types` directive may apply to a function, class, namespace, package, or build profile.
 
@@ -1423,13 +1447,13 @@ In strict type mode:
 
 Strictness is local and composable. A strict package may call a dynamic package through generated checked boundaries.
 
-### 11.9 Type checking time
+### 11.10 Type checking time
 
 A type violation should be reported at compile time when provable.
 
 When a dynamic value crosses a typed boundary and its concrete type is not known until runtime, the generated program performs a runtime check and throws a source-language type error.
 
-### 11.10 Truth
+### 11.11 Truth
 
 Conditions use an object’s truth protocol:
 
@@ -1444,7 +1468,7 @@ Other standard objects may implement truth, but the rules are explicit and inspe
 
 Strict type mode may require a `bool` condition.
 
-### 11.11 `none`
+### 11.12 `none`
 
 There is exactly one core absence value:
 
@@ -1463,7 +1487,7 @@ false
 
 A typed binding rejects `none` unless its type expression includes it.
 
-### 11.12 Equality, identity, and type membership
+### 11.13 Equality, identity, and type membership
 
 The language keeps three different questions separate:
 
@@ -1473,19 +1497,24 @@ The language keeps three different questions separate:
 
 `==` performs value equality with no unrelated implicit coercion. A type may explicitly define meaningful cross-type equality through its equality protocol, but equality never performs a hidden general conversion merely to make operands comparable.
 
-`is` observes semantic identity only. Copy-on-write backing storage, compiler boxing, interning, and other representation sharing are not observable through it. Values with no source-visible identity compare false by identity rather than acquiring accidental identity from their runtime representation.
+`is` observes semantic identity only. Copy-on-write backing storage, compiler boxing, interning, and other representation sharing are not observable through it. If either evaluated operand has no source-visible identity, the result is false, even for `x is x` or two evaluations of `items[0]`. Obtaining an explicit `ref` creates or preserves source-visible identity; comparing aliases of that identity is true.
 
 ```text
 a = .list; 1, 2
 b = a
 c = ref a
+d = c
 
 a == b  # true
 a is b  # false under value assignment
 a is c  # true
+c is d  # true: value assignment of a ref value preserves the referenced identity
+42 is 42 # false
 ```
 
 `is a` is a contextual two-word operator whose right operand is a type expression:
+
+The parser treats `is a` as type membership only when the contextual `a` is followed by a complete type expression. At the end of an expression, or whenever no type expression follows, `a` remains an ordinary identifier and `left is a` is identity comparison against that binding. Thus `value is a serializable` is membership while `c is a` is identity. Formatters preserve the two-word membership spelling and do not rewrite identity comparisons.
 
 ```text
 if value is a serializable
@@ -1493,6 +1522,14 @@ if value is a serializable
 ```
 
 It tests assignability to that type, not exact runtime-type equality. It is true for an instance of the named class, a permitted subclass, an implementation of the named interface, or a value admitted by a union type. `isa` is not an operator: it remains available as an ordinary identifier and is less readable than the separated phrase.
+
+The following values carry source-visible identity without requiring a new `ref` at the comparison site:
+
+- every value participating in an explicit `ref` identity group, including the original logical value from which the reference was obtained;
+- linear and other uniquely owned resource objects, such as device handles, capabilities, guards, and foreign-runtime proxies;
+- canonical semantic descriptor objects whose contract defines one identity, including type, namespace, package, and declared-function descriptors.
+
+Other ordinary values—including scalars, strings, collections, non-linear class instances, closures, and bound methods—have no source-visible identity merely because an implementation boxes, interns, caches, or shares them. Their type may expose identity only through `ref` or by declaring an inherently identity-bearing linear/resource/descriptor contract. Whether a type is inherently identity-bearing is reflected in its public type metadata and cannot vary secretly by representation or instance.
 
 Exact runtime type is expressed through the value’s `type` descriptor. Requiring both exact type and value equality remains an explicit conjunction:
 
@@ -1548,6 +1585,10 @@ b.profile.name = 'new name'
 An implementation may use reference-counted backing storage, persistent data structures, path copying, a trivial machine copy, Rust `Copy`, copy elision, or an immutable representation. These representation references are not source-language `ref` values and are not observable as shared identity.
 
 By-value containment cannot create an identity cycle: a cyclic or back-reference edge must use an explicit `ref`. Implementations may therefore share acyclic value storage without turning every program into a tracing-GC program.
+
+Creating `ref a` makes the logical value currently denoted by `a` and every alias in the resulting reference group identity-bearing; this is why `a is c` is true after `c = ref a`. It does not give identity to independent values that merely share copy-on-write storage.
+
+A reference to a field, element, or other path inside a copy-on-write value is permitted only while the compiler can preserve a stable logical owner. Taking `ref items[0]` first separates `items` from any independent values with which it shares backing storage, then creates identity for that element path and pins that path against relocation while the reference is live. A later value assignment of `items` produces an independent logical value; mutations of that copy separate from the pinned owner. The reference continues to reach the element in the original `items`, never whichever backing allocation happens to survive a split. Operations that could invalidate or remove the referenced path, such as removing that element or replacing its container wholesale, are rejected while the reference is live. If a container cannot implement this contract for an operation or target, taking the interior `ref` is rejected at compile time.
 
 Tracing and profiling must distinguish:
 
@@ -1627,6 +1668,8 @@ Lower-level packages may expose stricter type constructors when the distinction 
 - `function from A, B to R` is the core callable type; `ref function from A, B to R` adds safe source-visible callable identity, while a package-owned ABI-address constructor may impose a calling convention or foreign provenance.
 
 These contracts are not aliases for one another. Adapters define package-owned operations and lowering, but may not weaken the core guarantees: a `user-ref` never silently becomes `ref`, a `raw-address` never silently becomes dereferenceable, and a borrow cannot escape its proven lifetime. Use `ref T` when shared language-level identity is intended; use a narrower domain type only when provenance, address space, extent, ABI, or lifetime differs observably.
+
+Linear resource values are inherently identity-bearing because their unique ownership denotes one source-visible resource even before `ref` is taken. Moving such a value preserves that identity; the moved-from binding becomes unavailable. If the type permits `ref`, aliases compare identical to the resource. Foreign-runtime proxies follow the same rule because the proxy contract denotes a particular foreign object.
 
 Every borrow carries compiler-assigned provenance and a compiler-assigned lifetime region; ordinary source does not name these regions. Member lookup, indexing, iteration, destructuring, calls, and other values derived from a borrow preserve its provenance and may retain or narrow its lifetime, but never widen it. Assignment, return, closure capture, field storage, global storage, and async suspension must preserve that constraint. A borrowed collection yields borrowed elements unless its declared protocol explicitly returns independently owned values or shared identity. Diagnostics identify the source binding that originated the borrow and the operation that would let it escape.
 
@@ -1886,6 +1929,9 @@ The compiler may lower a generator to:
 - a boxed dynamic iterator when required.
 
 Generator support may follow the first compiler milestone, but its semantics should be reserved early to avoid later control-flow conflicts.
+### 13.11 Generic functions
+
+Functions cannot declare type parameters in the first core language. See §11.8. An interface-typed function is dynamically dispatched through that interface contract; it is not an implicitly monomorphised generic.
 
 ---
 
@@ -1962,7 +2008,7 @@ Postfix `++` and `--` are statement/update operations on compatible mutable nume
 
 They return the previous value only if used in an expression; linters should discourage clever expression use.
 
-The forms lower through numeric increment/decrement protocols and retain checked overflow behaviour unless an explicitly wrapping type/operation is selected.
+The forms lower through numeric increment/decrement protocols. For fixed-width receivers they retain checked overflow behaviour unless an explicitly wrapping operation is selected; for `int` they compute the exact mathematical successor or predecessor and promote representation as necessary.
 
 ### 14.6 Loop control
 
@@ -2077,9 +2123,26 @@ Recoverable source-language throws should lower primarily through Rust `Result`-
 
 The compiler may synthesise propagation code so source remains uncluttered.
 
+A function's public contract records whether it may throw. The `throws` qualifier may declare that effect before `function`; otherwise it is inferred for non-public functions and must be written or compiler-generated in exported interface metadata. A direct call to a function proven not to throw is non-throwing. A call through a dynamic callable or interface whose contract does not explicitly exclude throwing is conservatively may-throw. Propagation remains implicit in source, but reflection and generated signatures expose it; generated Rust therefore uses `Result`-like propagation at every may-throw boundary.
+
 Rust panic is reserved for unrecoverable invariant failure, explicit panic, or a native dependency panic that is not translated.
 
-### 15.5 Panic
+### 15.5 Standard error objects
+
+The `/core errors` namespace defines the standard error protocol and the following language-mandated error objects:
+
+| Object | Meaning | Operations that raise it | Required information |
+|---|---|---|---|
+| `.arithmetic-overflow` | A checked fixed-width arithmetic result is outside the receiver type's range. | Ordinary checked fixed-width addition, subtraction, multiplication, signed negation, increment/decrement, and signed `MIN / -1`. | operation and fixed-width type |
+| `.division-by-zero` | An integer division or remainder operation has a zero divisor. | `/`, `%`, and `div-rem` for every integer type and arithmetic mode. | operation and numeric type |
+| `.integer-conversion-overflow` | An explicit throwing integer conversion cannot represent the mathematical source value in its destination type. | `coerce` to a fixed-width integer destination. | source value/type and destination type |
+| `.negative-shift-count` | An integer shift count is negative. | Unbounded-`int` `<<` and `>>`. | attempted count and shift operation |
+
+Each is a subtype or conforming instance of `.error`, is catchable through the ordinary `throw`/`catch` model, and has the standard `message` plus the structured information listed above. Implementations may attach additional diagnostic fields without changing program-visible matching. Names such as `.file-error`, `.not-found`, `.config-error`, and `.python-error` used elsewhere are package- or adapter-defined error objects, not additional implicit core errors.
+
+
+
+### 15.6 Panic
 
 A standard panic object or operation should exist separately from `throw`.
 
@@ -2091,7 +2154,7 @@ Build profiles may choose abort or unwind behaviour.
 
 Kernel and embedded profiles will commonly abort or invoke a target panic handler.
 
-### 15.6 Stack traces
+### 15.7 Stack traces
 
 An uncaught error reports:
 
@@ -2238,7 +2301,7 @@ text.graphemes.length
 
 `text.length` and `text.graphemes.length` are semantically identical. The explicit form is useful when the unit deserves emphasis alongside byte or scalar operations. `text.bytes.length` reports encoded storage bytes; an API named `raw` is deliberately avoided because it does not identify a unit.
 
-Grapheme and scalar counts generally require traversal, while the UTF-8 byte length may be available in constant time. Performance tooling should expose that distinction rather than changing the default unit. An implementation must not silently substitute byte or scalar count when grapheme support is unavailable.
+Grapheme and scalar counts generally require traversal, while the UTF-8 byte length may be available in constant time. Performance tooling should expose that distinction rather than changing the default unit. Grapheme operations, including default `string.length`, require the Unicode grapheme-segmentation-data capability. A target without it reports the source operation and suggests `text.bytes.length`, `text.scalars.length`, or enabling/providing the capability; it must not silently substitute another unit. Programs that use only byte or scalar views do not acquire the grapheme capability.
 
 String indexing should either return graphemes or be rejected in favour of explicit views; it must never ambiguously mean bytes on one target and characters on another.
 
@@ -2279,7 +2342,7 @@ A symbolic infix operator may be detached from both operands (`left & right`) or
 
 Operators lower through object/type protocols.
 
-The compiler may statically emit native Rust operators where the operand types are known.
+The compiler may statically emit native Rust operators only where the operand types are known and the Rust operation has the same complete source contract. In particular, signed integer `/` and `%` cannot lower directly to Rust's truncating operators when the dividend may be negative; lowering must use an equivalent Euclidean operation or correction sequence. The same rule applies to overflow, shifts, and every other host/source semantic difference.
 
 Dynamic dispatch occurs only where required by source semantics.
 
@@ -2297,18 +2360,84 @@ Coercion remains explicit:
 1 + '2'.coerce; int
 ```
 
-### 17.4 Overflow
+### 17.4 Unbounded `int` arithmetic
 
-Default integer arithmetic is checked.
+Ordinary `int` arithmetic is exact and promotes only when required. Addition, subtraction, and unary negation first use checked operations in the current representation tier and continue in the next tier on representation overflow. Negating the value represented as `i64::MIN`, for example, produces positive `2^63` in the `i128` tier.
 
-Explicit operations or numeric types expose:
+Multiplication uses an exact wider intermediate rather than losing the operands and retrying a source-level operation. The product of two `i64` values is computed exactly in `i128`; multiplication involving `i128` values uses an exact 256-bit/two-limb or arbitrary-precision intermediate; operations involving a big value use the arbitrary-precision backend. The result is then normalised. Implementations may specialise multiplication by `0`, `1`, and `-1` only when the same exactness and normalisation rules remain true.
 
-- wrapping;
-- saturating;
-- overflowing-with-flag;
-- checked-returning-none/error.
+Promotion is not implemented as a thrown `.arithmetic-overflow` followed by retry. It is part of the integer operation's normal runtime path. A promotion that requires storage has an allocation effect and must be transactional: compute and normalise the new value before publishing it, leave value-semantic aliases unchanged, and leave the destination unchanged if allocation fails. Allocation failure follows the ordinary allocation-failure contract, never the `.arithmetic-overflow` contract.
 
-The profiler and debugger should identify overflow mode in lowered Rust.
+Bitwise operations on `int` use the mathematical infinite two's-complement model. Conceptually, nonnegative values have infinitely many leading zero bits and negative values infinitely many leading one bits; `&`, `|`, `^`, and `~` operate pointwise on that representation and return the corresponding mathematical integer. Consequently `~x == -x - 1`, `-1 & x == x`, and no finite runtime limb width is source-observable.
+
+For `int`, `x << n` is exact multiplication by `2^n`, and `x >> n` is arithmetic right shift, equal to floor division by `2^n`, for a nonnegative `int` count `n`. A negative shift count throws `.negative-shift-count`. A count that cannot be represented by the target's indexing/allocation machinery, or a left shift whose exact result cannot be materialised, follows the ordinary resource/capability failure contract rather than wrapping the count or reporting `.arithmetic-overflow`. Right shift by a count at least the represented significant width yields `0` for nonnegative values and `-1` for negative values without requiring proportional allocation.
+
+The implementation may perform these operations in `i64`, `i128`, or limb storage, but it must normalise the result and preserve the same value across representation tiers. Fixed-width bitwise operations instead operate on exactly `N` two's-complement bits and retain their declared type. Their shift-count policy must be selected explicitly by the fixed-width protocol and must never inherit host debug/release behaviour; it is not the unbounded-`int` rule above.
+
+### 17.5 Division and remainder
+
+Integer `/` and `%` use Euclidean division. For divisor `b != 0`, quotient `q` and remainder `r` satisfy:
+
+```text
+a = b * q + r
+0 <= r < abs; b
+```
+
+Consequently:
+
+```text
+ 7 /  3 ==  2    7 %  3 == 1
+-7 /  3 == -3   -7 %  3 == 2
+ 7 / -3 == -2    7 % -3 == 1
+-7 / -3 ==  3   -7 % -3 == 2
+```
+
+The standard integer protocol exposes `div-rem; divisor`, returning one result object with `quotient` and `remainder` members so an implementation need not divide twice. `/` selects the quotient and `%` selects the remainder. Division by zero throws `.division-by-zero` for every integer type and arithmetic mode.
+
+For `int`, a representation minimum divided by `-1` promotes and then normalises; it is not overflow. For a signed fixed-width type, `MIN / -1` is arithmetic overflow because the mathematical quotient is outside that type.
+
+### 17.6 Fixed-width overflow modes
+
+Ordinary arithmetic on `int8` through `int128` and `uint8` through `uint128` is checked. Its result has the same fixed-width type, and an exact mathematical result outside that type's range throws the standard catchable `.arithmetic-overflow` error through `Result`-like control flow rather than platform unwinding. This includes addition, subtraction, multiplication, signed negation, `MIN / -1`, and any increment or decrement expressed through those operations. Unsigned negation is rejected.
+
+Every fixed-width integer implements consistent explicit operation families:
+
+```text
+checked-add       wrapping-add       saturating-add       overflowing-add
+checked-subtract  wrapping-subtract  saturating-subtract  overflowing-subtract
+checked-multiply  wrapping-multiply  saturating-multiply  overflowing-multiply
+checked-negate    wrapping-negate    saturating-negate    overflowing-negate
+checked-divide    wrapping-divide    saturating-divide    overflowing-divide
+checked-remainder wrapping-remainder saturating-remainder overflowing-remainder
+```
+
+`checked-*` returns `T|none`; `wrapping-*` computes modulo `2^N`; `saturating-*` clamps to the nearest bound; and `overflowing-*` returns an object with `value T` and `overflowed bool`. Signed wrapping operations interpret the resulting `N` bits as two's complement. For signed `MIN / -1`, wrapping division returns `MIN`, saturating division returns `MAX`, and checked division returns `none`; the overflowing form returns `MIN` with `overflowed = true`. Division by zero still throws `.division-by-zero` in all four families because it is not overflow. Shift-count behaviour requires its own explicit operation contract and never inherits host-language debug/release behaviour.
+
+The profiler and debugger identify the selected overflow mode in lowered Rust. An explicitly selected panic-on-overflow operation, if supplied by a package, is a panic and follows the target panic policy; it is not an ordinary core arithmetic mode.
+
+### 17.7 Integer conversions
+
+Cross-type integer conversion is explicit. The canonical throwing form remains:
+
+```text
+converted = value.coerce; int64
+```
+
+It returns the exact destination value when representable and otherwise throws `.integer-conversion-overflow`, a numeric error distinct from `.arithmetic-overflow`. It never silently truncates, wraps, saturates, changes signedness interpretation, or promotes the destination.
+
+Every integer source exposes:
+
+```text
+value.checked-coerce; T
+value.wrapping-coerce; T
+value.saturating-coerce; T
+```
+
+`checked-coerce` returns `T|none`. `wrapping-coerce` reduces the mathematical value modulo `2^N` and interprets the resulting bits using the destination signedness. `saturating-coerce` clamps to the destination bounds. Therefore `-1.wrapping-coerce; uint8` is `255`, `255.wrapping-coerce; int8` is `-1`, and `300.saturating-coerce; uint8` is `255`.
+
+Conversion from any fixed-width integer to `int` is exact and cannot overflow, though it remains explicit under the no-implicit-cross-type rule. Conversion among fixed-width types follows the same checked, wrapping, or saturating contract; widening is not a privileged implicit coercion. Compile-time literal initialization remains governed by §11.2.
+
+Wrapping and saturation have no arithmetic meaning for unbounded `int` itself because it has no maximum width. They are defined only for an explicitly fixed-width destination or fixed-width arithmetic receiver.
 
 ---
 
@@ -2344,6 +2473,8 @@ class secure-request extends request
 Multiple class inheritance is not part of the core language.
 
 The compiler may lower inheritance through generated composition, enums, trait objects, or static specialisation. Source semantics must not depend on Rust having class inheritance.
+
+Assigning a subclass instance to a superclass-typed binding preserves the complete dynamic object and its subclass state. Subsequent value assignment copies that complete dynamic value under the ordinary COW contract; Strata never slices to the statically named superclass fields. A superclass annotation constrains the visible interface and accepted dynamic classes, not storage layout. Targets unable to represent the permitted dynamic class set without an unavailable capability reject the boundary at compile time rather than changing this rule.
 
 ### 18.3 Interfaces
 
@@ -2383,6 +2514,8 @@ class record uses timestamped
 ```
 
 Trait conflicts must be resolved explicitly. No silent “last one wins” rule is permitted.
+
+These mechanisms occupy distinct layers of one object-contract model. A **protocol** is a structural semantic operation understood by the language or libraries; any object may satisfy it without a declaration. An **interface** is a named type object collecting required protocols and method signatures for annotations and dynamic dispatch. A **trait** is reusable field/method implementation copied into a class with explicit conflict resolution; using a trait can satisfy protocols or interfaces but is not itself subtyping. **Class inheritance** extends one concrete class, preserving its state and substitutability. The iteration protocol is therefore implementable by any user class directly or through a trait, and an interface may name that requirement when a typed boundary needs it.
 
 ### 18.5 Protected visibility
 
@@ -2435,6 +2568,8 @@ Functions and methods should expose inferred or declared effects through reflect
 - crosses FFI.
 
 Strict packages may require selected effects to be declared.
+
+`throws`, `async`, and other effects are part of callable type compatibility. An implementation may have fewer effects than its interface contract, never more. A dynamic callable with unknown effect metadata is treated as may-throw, may-allocate, and otherwise unknown for capability checking rather than optimistically inferred safe.
 
 This metadata supports optimisation, auditing, AI tooling, and target capability checks.
 
@@ -2504,6 +2639,11 @@ Every branch is nevertheless lexed, parsed, formatted, retained in source maps, 
 
 This is compile-time source selection, not an optimiser hint and not an ordinary `if`. Generated Rust must contain no runtime branch for a resolved `when build`, and diagnostics must identify the build predicate and configuration that selected the failing source.
 
+Build-time execution has two stages in the first implementation. The bootstrap compiler loads custom importers and declaration modifiers only as precompiled, versioned host extensions implementing the compiler protocol; ordinary Strata source is not recursively executed as an importer or modifier. `when build` evaluates a restricted constant-expression subset: literals, immutable manifest/target/capability descriptors, boolean/comparison operators, and calls to compiler-provided pure build-query objects. It cannot allocate mutable program objects, perform I/O, throw, access runtime declarations, or invoke arbitrary source functions.
+
+
+Stage order is: load and validate the manifest and lockfile; load declared host extensions; process compilation-unit imports in source order; assemble namespaces; evaluate build selections; then resolve and type-check selected declarations and apply modifiers to their typed descriptors. Extension inputs and outputs are serialisable import/modifier plans included in cache keys. A future self-hosted compile-time Strata subset would be a separate specified feature, not an accidental consequence of runtime language semantics.
+
 ---
 
 ## 21. Async and concurrency
@@ -2524,6 +2664,10 @@ response = await request.send;
 ```
 
 `await` is control-flow syntax because suspension affects lifetime, cancellation, and diagnostics.
+
+`await` is valid only in an `async` function or async closure. Calling an async function from synchronous code is legal and returns its task/future object; only `await` drives it to a result. An ordinary closure containing `await` is inferred async, and its invocation therefore returns a task. Callable type compatibility distinguishes synchronous from async callables.
+
+Values live across suspension are captures of the generated task. They follow ordinary value, `ref`, move, provenance, thread-transfer, and cancellation rules. A borrow may cross suspension only when its lender is proven to outlive the task and the selected executor's movement/thread requirements are satisfied; otherwise the compiler diagnoses the capture at the `await`. An async implementation may have fewer throwing effects than declared, but cannot implement a synchronous callable contract.
 
 ### 21.3 Runtime independence
 
@@ -2595,6 +2739,8 @@ Capabilities include:
 - wall clock;
 - entropy;
 - floating point;
+- Unicode grapheme segmentation data;
+- exact arbitrary-precision integer storage;
 - atomics of particular widths.
 
 ### 22.2 Capability diagnostics
@@ -2637,12 +2783,17 @@ A binding that may hold unrelated runtime types may lower to:
 - a tagged stack value;
 - a boxed dynamic object if an allocator exists;
 - a compile error if no permitted representation exists.
+Representation analysis is performed within a package compilation unit and consumes dependency semantic summaries, not dependency source bodies. Exported package boundaries have representation-independent source contracts. A dynamic exported binding or callable whose possible concrete types are not closed by that contract uses the standard erased dynamic representation and therefore requires its declared capabilities, commonly an allocator; it is never specialised from unknown future consumers.
+
+Packages may distribute source plus summaries or profile-specific compiled artefacts. A consumer may specialise only private code or an explicitly generic/generated concrete boundary without changing the dependency's public ABI. Cache keys include the target profile, dependency summaries, and closed type sets, preserving deterministic incremental and separate compilation.
 
 ### 22.4 `no_std`
 
 A `no-std` build uses a minimal support crate and target-provided capabilities.
 
 Features that can be compiled away remain available. Features that require unavailable runtime support are rejected at source level.
+
+The target capability model records whether arbitrary-precision `int` promotion and its required allocation are available. Lacking that capability does not change `int` into a bounded or wrapping type: the compiler must prove that every reachable value remains within a target-supported representation or reject the program with a capability diagnostic. Engineers selecting guaranteed bounded, allocation-free arithmetic use an explicit fixed-width integer type.
 
 ### 22.5 Layout and ABI
 
@@ -2824,7 +2975,7 @@ A native wrapper may expose its API as language objects.
 
 Direct crate access is also permitted through generated adapters when the Rust API can be represented safely.
 
-Rust generics, traits, lifetimes, and errors are translated into the language object/type model where possible. APIs that cannot be represented cleanly require a handwritten or generated Rust wrapper.
+Rust generics may be translated only into concrete generated instantiations or erased interface/object boundaries under §11.8; Rust traits, lifetimes, and errors map into the language model where their contracts remain representable. APIs that cannot be represented cleanly require a handwritten or generated Rust wrapper.
 
 ### 23.8 System and C libraries
 
@@ -3097,7 +3248,7 @@ ipv4/ipv6   -> __strata_ipv4_x2f_ipv6
 
 No two distinct source spellings may produce the same encoded spelling. Scope/module identity is represented separately and deterministically where Rust requires further disambiguation; it must never repair a lossy spelling conversion with an arbitrary suffix.
 
-The debugger and `lang rust-name` tooling expose both directions of the mapping. Inline Rust uses the generated Rust names, with editor tooling able to complete and display the originating source names.
+The debugger and `strata rust-name` tooling expose both directions of the mapping. Inline Rust uses the generated Rust names, with editor tooling able to complete and display the originating source names.
 
 A later interpolation syntax may permit direct source-name references, but it is not required for the first implementation.
 
@@ -3132,7 +3283,7 @@ There is no C-style FFI boundary merely because one function was handwritten.
 Tooling should support:
 
 ```text
-lang eject-rust /image codec resize
+strata eject-rust /image codec resize
 ```
 
 This copies a generated implementation into a maintained native Rust module, adds the appropriate bridge metadata, and replaces source generation for that object.
@@ -3278,7 +3429,7 @@ Reflection must distinguish:
 - generated Rust type;
 - physical storage representation.
 
-A source `int` remains an `int` whether realised as `i64`, a tagged enum member, or a boxed dynamic value.
+A source `int` remains an `int` whether realised as an unboxed `i64`, a specialised `i128`, the adaptive wrapper's wide tier, or arbitrary-precision limb storage. Reflection reports `int`; only explicit compilation/profiling reflection may expose the current physical tier.
 
 ---
 
@@ -3417,7 +3568,7 @@ This is more valuable than merely producing a flame graph.
 A build may request:
 
 ```text
-lang explain /image codec resize
+strata explain /image codec resize
 ```
 
 and receive:
@@ -3542,14 +3693,16 @@ The compiler chooses the narrowest representation preserving source semantics.
 
 Examples:
 
-**Known scalar**
+**Known and potentially widening integers**
 
 ```text
 x = 42
 x = x + 1
 ```
 
-may lower directly to `i64`.
+may lower directly to `i64` where range analysis proves the fast representation sufficient. Where runtime widening is possible, generated code uses an `i64` hot path with a cold exact-promotion path into the `i128` tier and then arbitrary-precision storage. It must not model promotion as a source throw or re-evaluate operands after detecting representation overflow.
+
+The erased `int` representation keeps the small case compact and boxes or otherwise out-of-lines wider payloads rather than imposing an inline `i128` size on every value. Arithmetic helpers normalise completed results back through `i128` to `i64` whenever exact bounds permit. Equality, ordering, and hashing operate on the mathematical value across all tiers and must produce identical answers for equal values reached through different representations.
 
 **Known finite alternatives**
 
@@ -3849,9 +4002,9 @@ Translation must not discard the original compiler information.
 Commands and flags should include:
 
 ```text
-lang check --rust-errors
-lang explain-error error-id
-lang rust /namespace function
+strata check --rust-errors
+strata explain-error error-id
+strata rust /namespace function
 ```
 
 An experienced engineer or AI agent can inspect the raw Rust evidence.
@@ -3885,10 +4038,10 @@ A failed high-level translation is not a failed build diagnostic; the raw Rust e
 The normal workflow is:
 
 ```text
-lang run
-lang test
-lang dev
-lang check
+strata run
+strata test
+strata dev
+strata check
 ```
 
 These commands transparently:
@@ -3904,7 +4057,7 @@ Compilation is real, but ordinary development should not require manually operat
 
 ### 30.2 Compiler daemon
 
-`lang dev` may run a resident compiler service retaining:
+`strata dev` may run a resident compiler service retaining:
 
 - parsed syntax trees;
 - resolved namespace graphs;
@@ -3928,7 +4081,7 @@ Hot code replacement is optional and must not be faked. Stateful reload requires
 Production uses an explicit build:
 
 ```text
-lang build --release
+strata build --release
 ```
 
 The deployed artefact is normally:
@@ -3998,20 +4151,20 @@ The compiler must never reuse generated Rust after an importer, target capabilit
 A serious first release needs:
 
 ```text
-lang fmt
-lang check
-lang build
-lang run
-lang test
-lang dev
-lang rust
-lang rust-name
-lang explain
-lang explain-error
-lang debug
-lang trace
-lang profile
-lang package
+strata fmt
+strata check
+strata build
+strata run
+strata test
+strata dev
+strata rust
+strata rust-name
+strata explain
+strata explain-error
+strata debug
+strata trace
+strata profile
+strata package
 ```
 
 ### 31.2 Formatter
@@ -4022,12 +4175,13 @@ It must preserve and visually regularise:
 
 ```text
 print.concat
-print .concat
+print; .concat
 foo+bar
 foo + bar
+count - 1
 ```
 
-It must canonicalise every parsed infix expression to one space around its operator and must never insert spaces inside an identifier. One-sided operator spacing is rejected rather than guessed. Formatting `x=foo+bar` produces `x = foo+bar`, never `x = foo + bar`.
+It must canonicalise every parsed infix expression to one space around its operator and must never insert spaces inside an identifier. One-sided operator spacing is rejected rather than guessed. Formatting `x=foo+bar` produces `x = foo+bar`; `x=count-1` is rejected and may be fixed explicitly to `x = count - 1`.
 
 The formatter must reject or loudly expose ambiguous/non-canonical spacing.
 
@@ -4117,11 +4271,11 @@ This belongs naturally in `AGENTS.md`.
 Every important command must offer structured output:
 
 ```text
-lang check --json
-lang lower --json
-lang explain --json
-lang profile --json
-lang trace --json
+strata check --json
+strata lower --json
+strata explain --json
+strata profile --json
+strata trace --json
 ```
 
 Records should include:
@@ -4179,25 +4333,21 @@ A suggested path should point to:
 
 Diagnostics should state semantic consequences, not merely parser tokens.
 
-For the critical dot distinction:
+For invalid dot adjacency:
 
 ```text
-error: .concat was passed as an inherent object argument to print
+error: whitespace does not invoke print
 
 did you mean:
   print.concat
 to select print's concat member?
+
+or:
+  print; (.concat; value)
+to invoke .concat and pass its result to print?
 ```
 
-Conversely:
-
-```text
-error: print.concat selects a member on print
-
-did you mean:
-  print .concat
-to construct/call a concat object and pass it to print?
-```
+Diagnostics must never suggest adjacency as a call form.
 
 ---
 
@@ -4259,15 +4409,18 @@ Foreign packages execute with the authority of their host runtime; a Strata obje
 
 ## 34. Provisional grammar sketch
 
-This is explanatory grammar, not yet a parser-generator file.
+This is normative EBNF for the covered core forms. Names in capitals are layout tokens emitted by the lexer. Lexical terminals such as `letter`, `digit`, `literal`, `namespace-component`, and the opaque foreign/Rust/text bodies are defined by their dedicated sections. Semantic restrictions and layout notes remain outside the machine-readable fence.
 
 ```text
-identifier
-  = identifier-unit
-    { identifier-joiner-run identifier-unit }
-
 identifier-unit
   = letter { letter | digit }
+
+post-joiner-identifier-unit
+  = { letter | digit } letter { letter | digit }
+
+identifier
+  = identifier-unit
+    { identifier-joiner-run post-joiner-identifier-unit }
 
 identifier-joiner-run
   = identifier-joiner { identifier-joiner }
@@ -4303,14 +4456,14 @@ dependency-declaration
   | "use" ( "rust" | "system" ) package-name
   | "use" "runtime" runtime-name
 
-foreign-source-block
-  = runtime-name indented-foreign-body
-
 package-name
   = identifier { namespace-component }
 
 runtime-name
   = identifier
+
+foreign-source-block
+  = runtime-name indented-foreign-body
 
 from-import
   = "from" namespace-path "import"
@@ -4319,33 +4472,45 @@ from-import
 object-import
   = object-name [ "as" object-name ]
 
-The semantic resolver checks the first component of a `from` path against declared runtime names before native namespace resolution. Thus `from python numpy import .array` is syntactically an ordinary `from-import`, but resolves through the adapter introduced by `use runtime python`. A runtime name at statement position begins an opaque, indentation-delimited `foreign-source-block`; its adapter owns the nested grammar and source map.
+importer-selection
+  = [ "global" ] "import" "with" object-name
+
+visibility
+  = "public" | "private" | "protected"
 
 declaration-modifier
-  = identifier
+  = object-name
 
 binding
   = { declaration-modifier }
-    [ visibility ] [ "global" | "constant" ]
-    identifier type-expression [ "=" expression ]
-  | identifier "=" expression
+    [ visibility ] ( "global" | "constant" )
+    identifier [ type-expression ] [ "=" expression ]
+  | { declaration-modifier } visibility
+    identifier [ type-expression ] [ "=" expression ]
+  | identifier type-expression [ "=" expression ]
 
 class-declaration
   = { declaration-modifier }
     [ visibility ] [ "linear" ] "class" identifier
     [ "extends" type-expression ]
     [ "implements" type-expression { "," type-expression } ]
+    indented-body
 
 function-declaration
   = { declaration-modifier }
-    [ visibility ] [ "static" | "async" | "mutating" ]
+    [ visibility ] { function-qualifier }
     "function" [ identifier [ type-expression ] ]
     [ ";" parameter-list ]
     indented-function-body
 
+function-qualifier
+  = "static" | "async" | "mutating" | "throws"
+
+parameter-list
+  = parameter { "," parameter }
+
 parameter
-  = identifier [ type-expression ] [ "=" expression ]
-    [ "..." ]
+  = identifier [ type-expression ] [ "=" expression ] [ "..." ]
 
 type-expression
   = union-type
@@ -4378,7 +4543,103 @@ function-type
 function-parameter-types
   = type-expression { "," type-expression }
 
-The parser emits every `constructor-argument` as one unified syntax-node kind because identifiers and other forms may resolve as types or compile-time values. Constructor signatures classify those nodes during semantic analysis. Function types associate to the right; grouping overrides that association.
+compilation-unit
+  = statement-list
+
+statement-list
+  = { statement NEWLINE }
+
+indented-body
+  = NEWLINE [ INDENT statement-list DEDENT ]
+
+statement
+  = namespace-declaration
+  | dependency-declaration
+  | from-import
+  | importer-selection
+  | binding
+  | class-declaration
+  | function-declaration
+  | assignment-statement
+  | expression
+  | if-statement
+  | while-statement
+  | for-statement
+  | try-statement
+  | throw-statement
+  | return-statement
+  | break-statement
+  | continue-statement
+  | yield-statement
+  | match-statement
+  | unsafe-statement
+  | rust-statement
+  | label-statement
+  | goto-statement
+  | build-selection
+  | foreign-source-block
+
+assignment-statement
+  = assignment-target "=" expression
+
+assignment-target
+  = primary-expression
+    { "." identifier | "[" expression "]" }
+
+if-statement
+  = "if" expression indented-body
+    { "else" "if" expression indented-body }
+    [ "else" indented-body ]
+
+while-statement
+  = "while" expression indented-body
+
+for-statement
+  = "for" for-target "in" expression indented-body
+  | "for" for-clause ";" expression ";" for-clause indented-body
+
+for-target
+  = identifier { "," identifier }
+
+for-clause
+  = assignment-statement
+  | expression
+
+try-statement
+  = "try" indented-body
+    ( catch-clause { catch-clause } [ "finally" indented-body ]
+    | "finally" indented-body )
+
+catch-clause
+  = "catch" call-free-expression [ "as" identifier ] indented-body
+
+throw-statement
+  = "throw" expression
+
+return-statement
+  = "return" [ expression ]
+
+break-statement
+  = "break"
+
+continue-statement
+  = "continue"
+
+yield-statement
+  = "yield" expression
+
+match-statement
+  = "match" expression NEWLINE
+    [ INDENT { match-arm } [ "else" indented-body ] DEDENT ]
+
+match-arm
+  = "case" call-free-expression [ "as" identifier ] indented-body
+
+unsafe-statement
+  = "unsafe" indented-body
+
+rust-statement
+  = [ "unsafe" ] "rust" indented-rust-body
 
 label-statement
   = "label" identifier
@@ -4391,23 +4652,72 @@ build-selection
     { "else" "when" "build" ";" expression indented-body }
     [ "else" indented-body ]
 
-member-expression
-  = expression "." identifier
+expression
+  = logical-or-expression
 
-object-expression
-  = object-name [ call-clause ]
+logical-or-expression
+  = logical-and-expression { "or" logical-and-expression }
+
+logical-and-expression
+  = identity-expression { "and" identity-expression }
+
+identity-expression
+  = comparison-expression
+    [ "is" comparison-expression
+    | "is" "a" type-expression ]
+
+comparison-expression
+  = bitwise-or-expression
+    [ ( "==" | "!=" | "<" | "<=" | ">" | ">=" )
+      bitwise-or-expression ]
+
+bitwise-or-expression
+  = bitwise-xor-expression { "|" bitwise-xor-expression }
+
+bitwise-xor-expression
+  = bitwise-and-expression { "^" bitwise-and-expression }
+
+bitwise-and-expression
+  = shift-expression { "&" shift-expression }
+
+shift-expression
+  = additive-expression { ( "<<" | ">>" ) additive-expression }
+
+additive-expression
+  = multiplicative-expression { ( "+" | "-" ) multiplicative-expression }
+
+multiplicative-expression
+  = prefix-expression { ( "*" | "/" | "%" ) prefix-expression }
+
+prefix-expression
+  = ( "not" | "-" | "~" ) prefix-expression
+  | ( "ref" | "move" | "await" ) postfix-expression
+  | postfix-expression
+
+postfix-expression
+  = primary-expression
+    { "." identifier | "[" expression "]" | "++" | "--" }
+    [ call-clause ]
+
+primary-expression
+  = identifier
+  | object-name
+  | literal
+  | tail-string
+  | block-string
+  | "(" expression ")"
 
 call-clause
   = ";" [ argument-list ]
-
-inherent-object-call
-  = expression whitespace object-expression
 
 argument-list
   = argument { "," argument }
 
 argument
-  = [ identifier "=" ] expression
+  = [ identifier "=" ] call-free-expression
+
+call-free-expression
+  = expression-with-the-call-clause-production-disabled
 
 tail-string
   = ">" { source-character } physical-line-end
@@ -4416,25 +4726,25 @@ block-string
   = ">>" physical-line-end indented-text-body
 ```
 
-Parser precedence must ensure:
+A maximal compact token matching `identifier-unit identifier-joiner-run digit { digit }` is a lexical error rather than multiple tokens. This rejection applies only when the digits-only unit follows a joiner; an ordinary `identifier-unit` may end in digits.
 
-```text
-print.concat
-```
+`assignment-target` is syntactically a primary followed only by member or index operations. Semantic analysis accepts a mutable bare binding, or a member/index path whose final operation implements assignable storage. It rejects literals, object-form symbols, calls, postfix updates, temporary values without assignable storage, and any path forbidden by ownership, borrow, visibility, or COW-pinning rules. Every receiver and index is evaluated exactly once.
 
-is a member expression.
+A bare `identifier = expression` is the ordinary assignment form: it initializes a new binding when declaration is permitted and no binding resolves, otherwise it rebinds the resolved mutable binding. Visibility, declaration modifiers, `global`, `constant`, and an uninitialised declaration always use `binding`, so `private cache = .map;` is structurally unambiguous.
 
-```text
-print .concat
-```
+Each function qualifier may appear at most once, and incompatible combinations are rejected semantically. The recursive operator production permits conventional combinations such as `not -value`, while `ref`, `move`, and `await` consume a postfix operand and therefore reject accidental forms such as `ref ref value` and `move move value`. Unary `+` is not a core operation.
 
-is an inherent object call.
+The `is a` alternative is selected only when `a` is followed by a complete `type-expression`; otherwise the comparison alternative treats `a` as an ordinary identifier. `call-free-expression` is the expression grammar instantiated with the optional `call-clause` on `postfix-expression` disabled. This parameterisation avoids duplicating every precedence production; parser-generator sources must expand it mechanically. A parenthesised `expression` re-enables calls, which is why nested invocation requires grouping.
 
-```text
->native executable
-```
+The semantic resolver checks the first component of a `from` path against declared runtime names before native namespace resolution. Thus `from python numpy import .array` is syntactically an ordinary `from-import`, but resolves through the adapter introduced by `use runtime python`. A runtime name at statement position begins an opaque, indentation-delimited `foreign-source-block`; its adapter owns the nested grammar and source map.
 
-is a tail string when `>` appears in expression-start position. An exact `>>` followed by a newline opens an indented block string. Neither form is admitted as a non-final subexpression because its lexical boundary consumes the remainder of the line or the following text block.
+The parser emits every `constructor-argument` as one unified syntax-node kind because identifiers and other forms may resolve as types or compile-time values. Constructor signatures classify those nodes during semantic analysis. Function types associate to the right; grouping overrides that association.
+
+Postfix/member operations bind most tightly, followed from high to low by prefix operators, multiplicative, additive, shifts, bitwise AND, XOR, OR, comparisons, identity/type membership, logical AND, and logical OR. Binary arithmetic, shift, bitwise, `and`, and `or` operators associate left. Comparisons are non-associative: `a < b < c` is invalid and must be written as `a < b and b < c`. Prefix operators associate right. A postfix call clause applies to the complete postfix expression immediately to its left.
+
+Operands and call arguments evaluate strictly left to right. Member receivers evaluate before member selection; an assignment target's receiver and indices evaluate once, left to right, before the assigned value; `and` and `or` short-circuit; all other listed binary operators evaluate both operands. Default argument expressions evaluate at the call site after supplied arguments have been evaluated, in parameter order. The compiler may reorder only when it proves that source-observable values, effects, throws, mutation, destruction, and reference/COW separation are unchanged.
+
+`print.concat` is a member expression. `print .concat` is invalid because adjacency is not invocation. `>native executable` is a tail string when `>` appears in expression-start position. An exact `>>` followed by a newline opens an indented block string. Neither text form is admitted as a non-final ungrouped subexpression.
 
 ### 34.1 Indentation grammar
 
@@ -4450,15 +4760,19 @@ like other indentation-sensitive languages.
 
 Unlike Python, a grammar production that opens a possible block may legally receive no `INDENT`, producing an empty body.
 
+Compound clauses (`else`, `catch`, `finally`, `case`) align with the construct that owns them. A `return` without an expression ends at `NEWLINE`; `throw` and `yield` require expressions. `break` and `continue` take no value in version one. `try` requires at least one `catch` or `finally`; `catch` clauses precede the optional `finally`. Labels and `goto` remain function-local and are checked against the ownership and cleanup rules in §14.7.
+
+`match` is reserved by this grammar but remains outside the minimum compiler milestone under §14.8; an implementation that accepts it must implement this complete statement shape rather than private syntax. Rust and foreign-source bodies are opaque, indentation-delimited token regions whose owning adapter preserves nested source maps.
+
 ### 34.2 Call expressions
 
-At the top level of a call clause, `-` retains its ordinary subtraction meaning:
+A call clause owns the remainder of its containing logical expression. Its arguments cannot contain an ungrouped call clause; nested calls are grouped:
 
 ```text
-call; a - b
+call; a - b, (convert; value)
 ```
 
-This requires no call-specific precedence rule or separate option-argument grammar.
+The semicolons separating a three-clause `for` are owned by that statement, so calls within its clauses are likewise grouped.
 
 ---
 
@@ -4481,11 +4795,11 @@ Only `my-app` and descendants see this `print` unless it is promoted globally.
 ### 35.2 Program-global output override
 
 ```text
-from /my-output import .print
-global print = .print
+from mylib tools import .myprint
+global print = .myprint
 ```
 
-The prelude’s original `print` has no sacred claim on the binding.
+Ordinary global lookup of `print` now resolves to `mylib tools`’ function. The core implementation has no sacred claim on the binding and remains available through `from /core output import .print`.
 
 ### 35.3 Custom importer
 
@@ -4493,7 +4807,7 @@ The prelude’s original `print` has no sacred claim on the binding.
 namespace plugins
 
 from /build importers import .sandboxed-import
-import = .sandboxed-import
+import with .sandboxed-import
 
 from third-party plugin import .plugin
 ```
@@ -4623,7 +4937,32 @@ Possible Rust:
 let mut count: i64 = 42;
 ```
 
-### 36.2 Dynamic finite union
+### 36.2 Potentially widening `int`
+
+Source:
+
+```text
+value = 9223372036854775807
+value++
+```
+
+Possible conceptual Rust:
+
+```rust
+let mut value = Int::Small(i64::MAX);
+value = match value {
+    Int::Small(current) => match current.checked_add(1) {
+        Some(result) => Int::Small(result),
+        None => Int::from_i128(i128::from(current) + 1),
+    },
+    other => other.add_small(1)?,
+};
+```
+
+The `i64` overflow branch is ordinary representation promotion, not a source throw. `from_i128` normalises when possible, `add_small` may widen transactionally to limb storage, and `?` represents only declared effects such as allocation failure. A compiler may prove a narrower representation or use a different runtime layout while preserving this behaviour.
+
+
+### 36.3 Dynamic finite union
 
 Source:
 
@@ -4643,7 +4982,7 @@ enum ValueAtNode123 {
 }
 ```
 
-### 36.3 Text method passed to print
+### 36.4 Text method passed to print
 
 Source:
 
@@ -4665,7 +5004,7 @@ print.call(message)?;
 
 The real compiler may inline the concatenation or stream directly when source-observable behaviour permits.
 
-### 36.4 Value assignment with COW
+### 36.5 Value assignment with COW
 
 Source:
 
@@ -4681,7 +5020,7 @@ let mut b = CowValue::share(&a);
 
 The profiler still reports one semantic assignment and zero physical copies until separation.
 
-### 36.5 Explicit reference
+### 36.6 Explicit reference
 
 Source:
 
@@ -4729,136 +5068,9 @@ Standard APIs should follow the same object conventions as user packages. Compil
 
 ---
 
-## 38. Implementation plan
+## 38. Implementation sequencing
 
-### 38.1 Milestone zero: executable language corpus
-
-Before a full compiler, create a conformance-oriented corpus containing:
-
-- accepted source;
-- rejected source;
-- expected parse shape;
-- expected semantic desugaring;
-- expected generated Rust fragments;
-- expected source diagnostics.
-
-The first corpus must heavily cover:
-
-```text
-print.concat
-print .concat
-```
-
-namespace tiers, root/parent anchors, all three text literal forms, and `= / ref / move`.
-
-### 38.2 Milestone one: minimal source-to-Rust compiler
-
-Implement:
-
-- indentation lexer;
-- parser;
-- namespaces;
-- object-form imports using a fixed bootstrap importer;
-- ordinary bindings;
-- scalar literals;
-- quoted, tail, and indented block strings;
-- functions;
-- default calls;
-- member calls;
-- inherent dot-object calls;
-- `if`, both `for` forms, `while`, and `return`;
-- generated Rust workspace;
-- `lang check`, `run`, `build`, and `rust`;
-- basic source maps.
-
-The target is a nontrivial command-line program, not merely hello world.
-
-### 38.3 Milestone two: object and type semantics
-
-Add:
-
-- classes and `this`;
-- constructors;
-- typed bindings and signatures;
-- coercion;
-- interfaces;
-- value assignment/COW;
-- ref, weak ref, move;
-- deterministic drop;
-- try/catch/finally/throw;
-- standard collections.
-
-### 38.4 Milestone three: diagnostic ownership
-
-Add:
-
-- structured `rustc` collection;
-- source projection;
-- high-value diagnostic translations;
-- raw Rust fallback;
-- compiler explanation output;
-- stable semantic node identities.
-
-This milestone should arrive before a broad package ecosystem; otherwise early users learn to distrust the abstraction boundary.
-
-### 38.5 Milestone four: packages and interop
-
-Add:
-
-- native package manifest/registry format;
-- lockfile;
-- generated Cargo dependencies;
-- `use rust`;
-- `use system`;
-- C ABI binding flow;
-- maintained Rust modules;
-- inline Rust;
-- `use runtime python` through `libpython3`;
-- Python imports, proxies, scalar conversion, and exception translation;
-- foreign-runtime dependency locking and boundary tracing;
-- package capability sandbox.
-
-### 38.6 Milestone five: reflection and observability
-
-Add:
-
-- semantic reflection;
-- compilation reflection;
-- runtime Rust-source lookup;
-- source debugger;
-- trace IDs;
-- allocation/copy/COW/ref instrumentation;
-- source profiler;
-- production sidecars.
-
-### 38.7 Milestone six: async and hosted services
-
-Add:
-
-- async/await;
-- structured tasks;
-- later hosted runtime adapters;
-- cancellation tracing;
-- server-oriented standard packages.
-
-### 38.8 Milestone seven: `no_std`, embedded, and kernel profiles
-
-Add:
-
-- capability profiles;
-- allocator-free support runtime;
-- layout/ABI contracts;
-- volatile/atomic wrappers;
-- target-specific panic/error handling;
-- kernel/firmware examples;
-- no-reflection builds;
-- low-level conformance corpus.
-
-### 38.9 Milestone eight: self-hosting decision
-
-Only after the semantics and generated Rust contract stabilise should the project decide whether self-hosting is useful.
-
-Self-hosting is not a badge required for legitimacy. A mixed or Rust compiler may remain the best engineering answer.
+The normative language design does not duplicate the compiler's operational roadmap. Implementation milestones, ordering, deliverables, and validation commands live in [the compiler plan](compiler-plan.md). This specification constrains that plan through the semantics and invariants stated here; changing milestone order does not change the language contract.
 
 ---
 
@@ -4866,23 +5078,25 @@ Self-hosting is not a badge required for legitimacy. A mixed or Rust compiler ma
 
 The first serious prototype should prove all of these:
 
-1. `print.concat` and `print .concat` parse differently and format stably.
+Unless a snippet explicitly tests unresolved lookup, the conformance harness supplies the imports named by that snippet's fixture. Prose examples outside the harness must either show their imports or state the standard namespace from which omitted object symbols come; object-form names are never implicitly added to the prelude.
+
+1. `print.concat` and `.concat` parse as member and object-form expressions, while `print .concat` is rejected.
 2. `namespace my-output formatters` and `from /my-output formatters` resolve symmetrically.
 3. `/` anchors root and is never treated as a namespace separator.
 4. `ipv4/ipv6` is one identifier and one namespace/package component, while `ipv4 / ipv6` is division.
-5. `a+b`, `a + b`, `a+ b`, and `a +b` respectively tokenise as an identifier, an addition, an undeclared-postfix error, and an addition; formatting preserves attachment distinctions.
+5. `a+b`, `a + b`, `a+ b`, and `a +b` respectively tokenise as an identifier, an addition, an undeclared-postfix error, and an addition; `count-1` is a lexical error suggesting `count - 1`, while `sha256` remains an identifier.
 6. `foo+bar`, `foobar`, and `fooplusbar` resolve independently and map injectively to distinct valid Rust identifiers.
 7. `.. foo` resolves one tier upward.
 8. importing `.print` does not bind `print`.
 9. `print = .print` binds namespace-locally.
 10. `global print = .print` replaces the program-global binding.
-11. a custom `import` object changes subsequent import resolution.
+11. `import with .custom-import` changes subsequent import resolution in its namespace, `global import with .custom-import` selects the program fallback, and an ordinary binding named `import` changes neither.
 12. `#`, `//`, and `/* ... */` comments lex and format without changing indentation structure.
 13. an unterminated block comment fails at its opening delimiter, and an unused string is never treated as a comment.
 14. quoted, tail, and indented block strings preserve their specified content deterministically.
 15. typed scalars lower to native Rust primitives.
 16. dynamic finite alternatives lower without a universal heap object.
-17. explicit coercion succeeds or throws cleanly.
+17. explicit coercion succeeds or throws cleanly; integer checked, wrapping, and saturating conversions obey their destination-width contracts.
 18. value assignment prevents mutation leakage.
 19. COW avoids a physical copy until mutation.
 20. `ref` preserves shared identity.
@@ -4902,7 +5116,7 @@ The first serious prototype should prove all of these:
 34. labels are function-local; `goto` cannot enter a deeper lexical scope or cross initialisation/lifetime transitions unsafely, and every accepted jump lowers to sound Rust with identical cleanup order.
 35. `when build` selects namespace declarations and function statements deterministically, excludes inactive branches from the current build, and records every selection input in the build cache key.
 36. `ref T`, `borrowed-ref of T`, `user-ref of T`, `raw-address of T`, `array-ref of T`, `c-pointer of T`, and `function from ... to ...` enforce distinct identity, lifetime, address-space, provenance, extent, and ABI contracts without implicit conversion between them.
-37. In declaration-modifier position, `weak` resolves `.weak` exclusively through object-form lookup; an ordinary `weak` binding neither shadows it nor becomes a modifier, and an unavailable `.weak` is a compile-time error.
+37. In declaration-modifier position, `.weak` resolves through object-form lookup; a bare `weak` binding is never a modifier, and an unavailable `.weak` is a compile-time error.
 38. `constant` declarations parse in every binding position and `const` is rejected as a declaration word.
 39. `array of vm-struct|none, nr-cached-stacks` parses as one constructor application whose signature classifies its first argument as a type and its second as a compile-time integer.
 40. `function from int, c-pointer of opaque to int` associates to the right; nested callable parameters format with grouping whenever the ungrouped form would be difficult to scan.
@@ -4910,6 +5124,32 @@ The first serious prototype should prove all of these:
 42. a borrow derived through member access or collection iteration retains the origin borrow's anonymous provenance and cannot escape or widen its inferred lifetime.
 43. reflection reports source name, generated Rust name, and native symbol independently, and `native-name; mmdrop, "__mmdrop"` changes only the last.
 44. lexical ownership and acyclic strong references destroy deterministically, while a provable strong cycle is rejected and an uncollectable runtime cycle is diagnosed or documented as a leak rather than promised deterministic reclamation.
+45. object-form imports obey lexical and namespace scope, nearer imports shadow farther ones, same-scope collisions are rejected, aliases retain both objects, and ordinary bindings never satisfy object-form lookup.
+46. plain top-level assignment remains namespace-local even in the root namespace; creating or replacing a program-global binding without `global` is rejected.
+47. the default prelude contains exactly `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`; disabling it removes those defaults while explicit `/core` imports still work.
+48. a call owns its remaining logical expression, nested calls require grouping, zero-argument calls require `;`, and three-clause `for` semicolons cannot be consumed as call delimiters.
+49. source type parameters are rejected; strict code uses concrete types, unions, interfaces, or generated concrete declarations rather than silently becoming dynamic.
+50. `c is a` parses as identity against the binding `a`, `c is a widget` parses as type membership, ordinary identity-less values compare false even to themselves, explicit refs alias one identity, and linear resources preserve identity across moves.
+51. an interior `ref` separates COW storage, remains attached to its original logical owner, pins the referenced path, and rejects removal, replacement, escape, or lifetime widening while live.
+52. exported may-throw functions expose `throws`, non-throwing callable contracts reject may-throw implementations, fixed-width checked arithmetic throws a catchable `.arithmetic-overflow`, `int` representation promotion does not throw, and explicit wrapping operations do not.
+53. assigning a subclass value to a base-typed binding preserves the complete dynamic value and dispatch; implementations that would slice are rejected.
+54. protocols express structural capabilities, interfaces define typed dispatch boundaries, traits reuse implementation without becoming types, and single inheritance preserves value and dynamic-type semantics.
+55. only declared precompiled host extensions execute as importers or modifiers; `when build` accepts only its restricted deterministic query subset, records inputs and plans in cache keys, and never recursively executes ordinary Strata source.
+56. an `async function` has an async callable type, `await` is rejected outside async context, sync and async callables are incompatible without an explicit adapter, and no borrow crosses suspension unless its contract proves that lifetime.
+57. default `string.length` requires grapheme segmentation capability; a target lacking it diagnoses the operation instead of substituting scalar or byte length, while explicit scalar/byte views remain available.
+58. representation specialisation may inspect only a package compilation unit and declared dependency metadata; downstream packages consume the published representation contract rather than changing upstream layout.
+59. precedence, associativity, comparison non-associativity, short-circuiting, receiver/index evaluation, assignment-target evaluation, argument order, and default-argument order match §34 exactly under both interpreted tooling and generated Rust.
+60. `private cache = .map;`, `protected state = none`, bare rebinding, member assignment, and index assignment parse; literals, calls, postfix updates, non-assignable temporaries, and ownership-invalid paths are rejected as assignment targets.
+61. every statement form in §34 parses with empty and non-empty bodies where allowed; `else`, `catch`, `finally`, and `case` bind only to their owning constructs, and `return`, loop control, throw, yield, labels, and jumps preserve required cleanup.
+62. unary `-`, `~`, and `not` compose according to precedence; unary `+`, `ref ref value`, and `move move value` are rejected.
+63. unconstrained integer literals beyond `int64` and `int128` range remain `int`; runtime addition, subtraction, and negation promote exactly from the compact tier through `i128` to arbitrary precision without a source-visible overflow.
+64. completed `int` operations normalise back to the smallest exact tier, including an `i128`-tier value crossing into `int64` range and a big value producing a small result; equality and hashing remain identical across every tier.
+65. multiplying two small `int` values uses an exact `i128` intermediate, wider multiplication produces the exact arbitrary-precision result, and multiplication by `0`, `1`, or `-1` preserves promotion and normalisation edge cases.
+66. signed `/`, `%`, and `div-rem` obey the Euclidean quotient/remainder invariant for every sign combination; division by zero throws `.division-by-zero`, `int` division promotes for a representation `MIN / -1`, and fixed-width `MIN / -1` follows its selected overflow mode.
+67. every signed and unsigned fixed width through 128 bits keeps its declared type under arithmetic and implements throwing ordinary, checked, wrapping, saturating, and overflowing operation contracts without build-mode-dependent behaviour.
+68. `coerce`, `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, and fixed-width-to-`int` conversion cannot overflow.
+69. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `.negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
+70. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
 
 ---
 
@@ -4977,7 +5217,7 @@ The default release policy—embedded, sidecar, or stripped—must balance inspe
 
 ### 40.8 Import evaluation order
 
-Source-order importer replacement is understandable and bootstrappable.
+Source-order `import with` selection is understandable and bootstrappable.
 
 Large projects may prefer manifest/declarative importer composition. Both can coexist if precedence is rigidly specified.
 
@@ -4985,7 +5225,7 @@ Large projects may prefer manifest/declarative importer composition. Both can co
 
 ## 41. Core invariants
 
-The following should be treated as the design’s constitutional layer:
+The following are the design’s constitutional layer. They govern the entire document and override conflicting illustrative prose, examples, lowering sketches, or implementation plans:
 
 1. Everything is an object semantically.
 2. Runtime representation is free to be non-object-shaped when behaviour remains identical.
@@ -5002,10 +5242,10 @@ The following should be treated as the design’s constitutional layer:
 13. Namespace tiers are whitespace-separated.
 14. `/` only anchors root; it is not a separator.
 15. Operator-bearing identifiers and spaced infix expressions are lexically distinct and formatter-protected.
-16. `foo.bar` and `foo .bar` are semantically different and formatter-protected.
+16. `foo.bar`, `.bar`, and `foo; .bar` are member lookup, object lookup, and explicit argument passing; whitespace adjacency never invokes.
 17. The global namespace is small by default and engineer-controlled.
-18. `print`, `import`, and similar facilities have no sacred claim to their names.
-19. Breaking an overridden fundamental object is the engineer’s responsibility.
+18. Prelude facilities such as `print` have no sacred claim to their ordinary names; replacing one is the engineer's responsibility.
+19. Compile-time constructs such as import selection use dedicated structural slots and never depend on same-spelled ordinary bindings.
 20. Control flow is conventional unless novelty buys something concrete.
 21. Empty blocks require no ceremonial statement.
 22. Public/dynamic is the permissive default; private/protected/strict are available where wanted.
@@ -5026,16 +5266,56 @@ The following should be treated as the design’s constitutional layer:
 37. Labels and `goto` are function-local, lifetime-checked low-level control flow; no accepted jump may compromise deterministic cleanup or sound Rust lowering.
 38. `when build` is deterministic compile-time source selection over declared build inputs, never hidden runtime branching or untracked configuration.
 39. A safe object reference, a bounded borrow, an untrusted userspace address, a raw machine address, an ABI-erased pointer, a contiguous view, and a callable ABI address are distinct contracts; adapters may refine but never silently weaken them.
-40. Bare declaration modifiers are exclusive contextual lookups of imported object-form symbols; they never consult or create ordinary bindings.
+40. Declaration modifiers are explicit object-form lookups; bare identifiers never become modifiers or consult the ordinary binding view.
 41. Package-defined type constructors classify a common constructor-argument syntax as type or compile-time value without extending the parser grammar.
 42. `void` means no produced value and never acts as erased storage; `opaque` names unavailable representation, whose reference contract must still identify ownership, lifetime, address space, and operations.
 43. Every derived borrow retains compiler-assigned provenance and may preserve or narrow, but never widen, the origin lifetime.
 44. Source names, generated Rust names, and native ABI/link symbols are independent reflected identities.
 45. Deterministic destruction is guaranteed by lexical ownership and acyclic final strong-reference release, not by arbitrary strong-cycle reachability.
+46. `int` denotes an exact arbitrary-precision signed value with compact adaptive representation; representation overflow promotes and completed results normalise, while explicitly fixed-width integers alone make width overflow and conversion policy source-visible.
 
 ---
 
-## 42. Closing proposition
+## 42. Deferred language additions
+
+This section records directions that the current design should leave room for but does not make part of the version-one language contract. Entries here are neither reserved syntax nor permission for implementations to introduce incompatible private variants. Each requires a later specification change, grammar and tooling work, lowering rules, diagnostics, reflection behaviour, and conformance tests.
+
+### 42.1 Core constructs supplied as objects
+
+The object model may eventually extend beyond replaceable facilities such as `print`: named language constructs could be selected from `/core` through one uniform compile-time construct protocol. The family must be designed together rather than adding an isolated hook for `function`. Candidates include declarations and control-flow constructs such as `function`, `class`, `if`, `for`, `while`, `try`, `throw`, `async`, `await`, and `return`.
+
+The intended architectural split is:
+
+```text
+fixed lexical and layout substrate
+  -> structurally parsed construct
+  -> scoped construct implementation selected from /core or a package
+  -> validated typed semantic IR
+  -> ordinary lowering
+```
+
+Tokenisation, comments, indentation, literals, grouping, separators, namespace anchors, ownership and safety invariants, and the mechanism that selects construct implementations remain constitutional compiler structure. A construct implementation may validate or constrain a parsed construct, select compiler-supported ABI or lowering behaviour, attach reflected metadata, and produce source-mapped declarations through declared extension points. It must not reinterpret arbitrary source text, mutate the grammar opportunistically, hide effects, bypass safety or capability checks, or emit unsourced code.
+
+Construct selection must use a dedicated scope and explicit syntax; it must not depend on an ordinary binding that happens to be named `function` or `if`. The eventual design must specify lexical, namespace, package, and program-global replacement; interactions among related constructs such as `if`/`else` and `try`/`catch`; compatibility with editor parsing before dependency resolution; hygiene; reproducibility; compiler-protocol versioning; and how source declares the language profile it expects.
+
+Declaration modifiers are the version-one local customization mechanism. A future construct binding would select the default semantics for a whole scope, while a modifier would customize one declaration. Until the common construct protocol is specified, version one keeps named core constructs structurally built in, and implementations must not expose an ad hoc replaceable `function` or any equivalent one-off hook.
+
+### 42.2 Other deferred candidates
+
+The following already-motivated features may be specified later when implementation experience justifies them:
+
+- source-declared generics, including constraints, inference, dispatch, reflection, and monomorphisation or erasure rules;
+- compact map literals consistent with the punctuation and computed-key model;
+- stateful hot-code replacement with explicit object migration semantics;
+- arbitrary C++ ABI integration beyond C-compatible shims and Rust bridges;
+- multimethod or generic-function dispatch supplied as a library or language feature without making overload resolution implicit;
+- additional foreign-runtime adapters governed by the same explicit boundary contracts as Python.
+
+This list is intentionally non-exhaustive. Adding an item here protects a design direction from accidental closure; it does not give that feature priority over the version-one compiler plan.
+
+---
+
+## 43. Closing proposition
 
 The language is not justified merely by prettier syntax.
 
