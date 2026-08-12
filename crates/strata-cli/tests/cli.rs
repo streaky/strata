@@ -51,3 +51,26 @@ fn all_commands_share_the_hello_pipeline() {
         fs::read(hello().parent().unwrap().join("stdout.txt")).unwrap()
     );
 }
+
+#[test]
+fn help_succeeds_and_extra_arguments_are_rejected() {
+    let binary = env!("CARGO_BIN_EXE_strata");
+    let help = Command::new(binary).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("commands:")
+    );
+
+    let extra = Command::new(binary)
+        .args(["check", hello().to_str().unwrap(), "unexpected"])
+        .output()
+        .unwrap();
+    assert_eq!(extra.status.code(), Some(2));
+    assert!(
+        String::from_utf8(extra.stderr)
+            .unwrap()
+            .starts_with("usage:")
+    );
+}

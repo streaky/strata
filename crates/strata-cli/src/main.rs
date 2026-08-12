@@ -49,7 +49,19 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         println!("strata {}", strata_compiler::VERSION);
         return Ok(ExitCode::SUCCESS);
     }
+    if command == "--help" || command == "-h" {
+        println!("{}", usage());
+        return Ok(ExitCode::SUCCESS);
+    }
     if !matches!(command, "check" | "rust" | "build" | "run") {
+        return Err(CliFailure::usage());
+    }
+    let has_valid_arity = if command == "run" {
+        arguments.len() == 2 || (arguments.len() >= 3 && arguments[2] == "--")
+    } else {
+        arguments.len() == 2
+    };
+    if !has_valid_arity {
         return Err(CliFailure::usage());
     }
     let source_path = arguments
@@ -176,5 +188,8 @@ fn ensure_rust_toolchain() -> Result<(), CliFailure> {
 }
 
 fn usage() -> String {
-    "usage: strata <check|rust|build|run> <source.strata> [-- program arguments]".to_owned()
+    "usage: strata <check|rust|build|run> <source.strata> [-- program arguments]\n\
+     commands:\n  check  validate and compile generated Rust\n  rust   print generated Rust\n  \
+     build  compile a native executable\n  run    compile and execute the program"
+        .to_owned()
 }
