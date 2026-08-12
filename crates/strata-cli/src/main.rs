@@ -43,6 +43,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
         print!("{}", compilation.rust);
         return Ok(ExitCode::SUCCESS);
     }
+    ensure_rust_toolchain()?;
     let crate_dir = generated_crate_path(&source_path, &compilation.rust)?;
     write_generated_crate(&crate_dir, &compilation.rust)?;
     let cargo_command = if command == "check" { "check" } else { "build" };
@@ -95,6 +96,19 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), String> {
     fs::write(directory.join("src/main.rs"), rust)
         .map_err(|error| format!("cannot write generated Rust: {error}"))?;
     Ok(())
+}
+fn ensure_rust_toolchain() -> Result<(), String> {
+    let status = Command::new("cargo")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!("error[S9001]: Cargo is required to compile generated Rust: {error}")
+        })?;
+    if status.status.success() {
+        Ok(())
+    } else {
+        Err("error[S9001]: Cargo prerequisite check failed".to_owned())
+    }
 }
 
 fn usage() -> String {

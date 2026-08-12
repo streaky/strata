@@ -11,6 +11,23 @@ pub struct Program {
 }
 
 #[derive(Clone, Debug)]
+struct SyntaxProgram {
+    namespace: String,
+    output_path: String,
+    print_binding: String,
+    message: String,
+}
+
+struct LexedSource<'source> {
+    logical_lines: Vec<(usize, &'source str)>,
+}
+
+struct RustIr<'program> {
+    namespace: &'program str,
+    message: &'program str,
+}
+
+#[derive(Clone, Debug)]
 pub struct Compilation {
     pub source: SourceFile,
     pub program: Program,
@@ -24,8 +41,11 @@ pub struct Compilation {
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Vec<Diagnostic>> {
     let source = SourceFile::new(0, path.into(), text);
-    let program = parse(&source)?;
-    let rust = lower(&program, &source);
+    let tokens = lex(&source);
+    let syntax = parse(&source, &tokens)?;
+    let program = resolve(syntax);
+    let ir = lower(&program);
+    let rust = emit_rust(&ir, &source);
     Ok(Compilation {
         source,
         program,
@@ -33,13 +53,22 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Ve
     })
 }
 
+fn lex(source: &SourceFile) -> LexedSource<'_> {
+    let logical_lines = source
+        .text()
+        .split_inclusive('\n')
+        .scan(0, |offset, raw| {
+            let start = *offset;
+            *offset += raw.len();
+            Some((start, raw.trim_end_matches(['\n', '\r'])))
+        })
+        .collect();
+    LexedSource { logical_lines }
+}
+
 #[allow(clippy::too_many_lines)]
-fn parse(source: &SourceFile) -> Result<Program, Vec<Diagnostic>> {
-    let mut lines = source.text().split_inclusive('\n').scan(0, |offset, raw| {
-        let start = *offset;
-        *offset += raw.len();
-        Some((start, raw.trim_end_matches(['\n', '\r'])))
-    });
+fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram, Vec<Diagnostic>> {
+    let mut lines = tokens.logical_lines.iter().copied();
     let mut errors = Vec::new();
     let mut namespace = None;
     let mut output_path = None;
@@ -169,7 +198,7 @@ fn parse(source: &SourceFile) -> Result<Program, Vec<Diagnostic>> {
     }
 
     if errors.is_empty() {
-        Ok(Program {
+        Ok(SyntaxProgram {
             namespace: namespace.unwrap(),
             output_path: output_path.unwrap(),
             print_binding: print_binding.unwrap(),
@@ -214,13 +243,29 @@ fn unescape(
     result
 }
 
-fn lower(program: &Program, source: &SourceFile) -> String {
+fn resolve(syntax: SyntaxProgram) -> Program {
+    Program {
+        namespace: syntax.namespace,
+        output_path: syntax.output_path,
+        print_binding: syntax.print_binding,
+        message: syntax.message,
+    }
+}
+
+fn lower(program: &Program) -> RustIr<'_> {
+    RustIr {
+        namespace: &program.namespace,
+        message: &program.message,
+    }
+}
+
+fn emit_rust(ir: &RustIr<'_>, source: &SourceFile) -> String {
     format!(
         "// Generated deterministically by Strata {}.\n// Source: {}\n// Namespace: {}\nfn main() {{\n    println!(\"{{}}\", {:?});\n}}\n",
         crate::VERSION,
         display_path(source.path()),
-        program.namespace,
-        program.message
+        ir.namespace,
+        ir.message
     )
 }
 
