@@ -22,7 +22,10 @@ fn every_manifest_drives_a_conformance_case() {
             ("run", "accept") => {
                 let expected = fs::read_to_string(case.join("lower.rs")).unwrap();
                 let compilation = strata_compiler::compile(&source_path, source).unwrap();
-                assert_eq!(compilation.rust, expected, "{}", case.display());
+                let normalized = compilation
+                    .rust
+                    .replace(strata_compiler::VERSION, "<version>");
+                assert_eq!(normalized, expected, "{}", case.display());
             }
             ("check", "reject") => {
                 let code = field(&manifest, "code").unwrap();

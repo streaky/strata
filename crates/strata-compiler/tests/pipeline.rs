@@ -40,6 +40,16 @@ fn tail_string_preserves_every_remaining_character() {
 }
 
 #[test]
+fn tail_string_can_be_empty() {
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >",
+    );
+    let compilation = strata_compiler::compile("empty-tail.strata", source).unwrap();
+    assert!(compilation.rust.contains("println!(\"{}\", \"\");"));
+}
+
+#[test]
 fn rejects_empty_block_string() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",

@@ -13,9 +13,17 @@ fn all_commands_share_the_hello_pipeline() {
         .args(["rust", hello().to_str().unwrap()])
         .output()
         .unwrap();
+    let rust_again = Command::new(binary)
+        .args(["rust", hello().to_str().unwrap()])
+        .output()
+        .unwrap();
     assert!(rust.status.success());
+    assert!(rust_again.status.success());
+    assert_eq!(rust.stdout, rust_again.stdout);
     assert_eq!(
-        String::from_utf8(rust.stdout).unwrap(),
+        String::from_utf8(rust.stdout)
+            .unwrap()
+            .replace(strata_compiler::VERSION, "<version>"),
         fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap()
     );
 
