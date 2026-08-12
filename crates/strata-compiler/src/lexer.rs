@@ -496,11 +496,12 @@ fn lex_line(
                 }
                 push_token(source, tokens, kind, base + start, base + index, attached);
             }
-            other => {
-                let width = line[start..].chars().next().map_or(1, char::len_utf8);
+            _ => {
+                let character = line[start..].chars().next().expect("index is in bounds");
+                let width = character.len_utf8();
                 diagnostics.push(Diagnostic::error(
                     "L0001",
-                    format!("invalid source character `{}`", char::from(other)),
+                    format!("invalid source character `{character}`"),
                     Span::new(source.id(), base + start, base + start + width),
                 ));
                 index += width;
