@@ -1,6 +1,15 @@
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind, Trivia, TriviaKind};
 use crate::{Diagnostic, SourceFile, Span};
 
+/// Tokenizes one UTF-8 Strata source file.
+///
+/// # Errors
+///
+/// Returns every lexical diagnostic found while scanning the source.
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level lexer state transitions remain visible"
+)]
 pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     let text = source.text();
     let mut tokens = Vec::new();
@@ -143,6 +152,10 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single scanner loop makes byte advancement auditable"
+)]
 fn lex_line(
     source: &SourceFile,
     line: &str,
@@ -263,22 +276,29 @@ fn lex_line(
             }
             byte if byte.is_ascii_digit() => {
                 index += 1;
-                while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_') {
+                while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_')
+                {
                     index += 1;
                 }
                 if bytes.get(index) == Some(&b'.')
                     && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
                 {
                     index += 1;
-                    while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_') {
+                    while index < bytes.len()
+                        && (bytes[index].is_ascii_digit() || bytes[index] == b'_')
+                    {
                         index += 1;
                     }
                 } else if index == start + 1
                     && bytes[start] == b'0'
-                    && bytes.get(index).is_some_and(|byte| matches!(byte, b'x' | b'X'))
+                    && bytes
+                        .get(index)
+                        .is_some_and(|byte| matches!(byte, b'x' | b'X'))
                 {
                     index += 1;
-                    while index < bytes.len() && (bytes[index].is_ascii_hexdigit() || bytes[index] == b'_') {
+                    while index < bytes.len()
+                        && (bytes[index].is_ascii_hexdigit() || bytes[index] == b'_')
+                    {
                         index += 1;
                     }
                 }
@@ -445,13 +465,7 @@ fn lex_line(
                     }
                     index += 1;
                 }
-                if !terminated {
-                    diagnostics.push(Diagnostic::error(
-                        "S0002",
-                        "unterminated string literal",
-                        Span::new(source.id(), base + start, base + index),
-                    ));
-                } else {
+                if terminated {
                     push_token(
                         source,
                         tokens,
@@ -460,6 +474,12 @@ fn lex_line(
                         base + index,
                         attachment(line, start, index),
                     );
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        "L0007",
+                        "unterminated string literal",
+                        Span::new(source.id(), base + start, base + index),
+                    ));
                 }
             }
             b'>' if expression_start(tokens) => {
@@ -467,7 +487,7 @@ fn lex_line(
                     index += 2;
                     if index != bytes.len() {
                         diagnostics.push(Diagnostic::error(
-                            "S0004",
+                            "L0008",
                             "block string marker `>>` must be the final content on its line",
                             Span::new(source.id(), base + start, base + line.len()),
                         ));
@@ -482,27 +502,26 @@ fn lex_line(
                         attachment(line, start, index),
                     );
                     break;
-                } else {
-                    index = bytes.len();
-                    push_token(
-                        source,
-                        tokens,
-                        TokenKind::TailString,
-                        base + start,
-                        base + index,
-                        attachment(line, start, index),
-                    );
-                    break;
                 }
+                index = bytes.len();
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::TailString,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+                break;
             }
-            byte if is_joiner(byte) || matches!(byte, b'!' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') => {
+            byte if is_joiner(byte)
+                || matches!(byte, b'!' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') =>
+            {
                 index += 1;
                 if index < bytes.len()
-                    && bytes[index] == byte
-                    && matches!(byte, b'+' | b'-' | b'<' | b'>')
+                    && ((bytes[index] == byte && matches!(byte, b'+' | b'-' | b'<' | b'>'))
+                        || bytes[index] == b'=')
                 {
-                    index += 1;
-                } else if index < bytes.len() && bytes[index] == b'=' {
                     index += 1;
                 }
                 let text = &line[start..index];
@@ -547,14 +566,14 @@ fn check_indent(
 ) {
     if indent.contains(&b' ') && indent.contains(&b'\t') {
         diagnostics.push(Diagnostic::error(
-            "S0001",
+            "L0003",
             "mixed tabs and spaces in indentation",
             Span::new(source.id(), offset, offset + indent.len()),
         ));
     } else if let Some(first) = indent.first().copied() {
         match style {
             Some(selected) if *selected != first => diagnostics.push(Diagnostic::error(
-                "S0001",
+                "L0003",
                 "indentation style changes within the file",
                 Span::new(source.id(), offset, offset + indent.len()),
             )),
@@ -662,5 +681,5 @@ fn attachment(line: &str, start: usize, end: usize) -> Attachment {
 
 fn extend_token(source: &SourceFile, token: &mut Token, end: usize) {
     token.span = Span::new(source.id(), token.span.start, end);
-    token.text = source.text()[token.span.start..end].to_owned();
+    source.text()[token.span.start..end].clone_into(&mut token.text);
 }
