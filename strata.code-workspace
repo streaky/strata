@@ -1,0 +1,26 @@
+{
+    "folders": [
+        {
+            "name": "Strata",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "files.associations": {
+            "*.strata": "strata"
+        }
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Develop Strata syntax highlighter",
+                "type": "extensionHost",
+                "request": "launch",
+                "args": [
+                    "--extensionDevelopmentPath=${workspaceFolder:Strata}/editors/vscode"
+                ]
+            }
+        ]
+    }
+}

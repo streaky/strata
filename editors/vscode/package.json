@@ -1,0 +1,36 @@
+{
+  "name": "strata-language",
+  "displayName": "Strata Language",
+  "description": "Syntax highlighting and basic editor support for Strata",
+  "version": "0.0.1",
+  "publisher": "strata",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "strata",
+        "aliases": [
+          "Strata",
+          "strata"
+        ],
+        "extensions": [
+          ".strata"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "strata",
+        "scopeName": "source.strata",
+        "path": "./syntaxes/strata.tmLanguage.json"
+      }
+    ]
+  }
+}

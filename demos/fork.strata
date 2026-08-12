@@ -1,0 +1,3216 @@
+namespace linux kernel fork
+
+use system linux-kernel
+from /linux kernel import .per-cpu, .cacheline-aligned, .weak, .inline, .static, .syscall, .latent-entropy, .init
+
+/*
+ * Native Strata stress-test translation of Linux kernel/fork.c.
+ *
+ * The system package supplies the kernel ABI, types, constants, linker
+ * attributes, configuration features, and architecture hooks. C identifiers
+ * are exposed as injective kebab-case adapter names.
+ *
+ * This translation deliberately uses `when build; feature` for kernel
+ * configuration, `label`/`goto` for exact failure-unwind order, and narrow
+ * `unsafe` blocks around raw layout, pointer, and ABI operations. It also
+ * pressure-tests core `ref` identity separately from package-owned borrowed,
+ * userspace, raw-address, array-view, callable-ABI, and scoped-guard types.
+ */
+
+// fork.c lines 1-451
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ *  linux/kernel/fork.c
+ *
+ *  Copyright (C) 1991, 1992  Linus Torvalds
+ */
+
+/*
+ *  'fork.c' contains the help-routines for the 'fork' system call
+ * (see also entry.S and others).
+ * Fork is rather simple, once you get the hang of it, but the memory
+ * management can be a bitch. See 'mm/memory.c': 'copy_page_range()'
+ */
+
+// For dup_mmap().
+
+constant create-trace-points boolean = true
+
+/*
+ * Minimum number of threads to boot the kernel
+ */
+constant min-threads int = 20
+
+/*
+ * Maximum number of threads
+ */
+constant max-thread-id-space int = futex-tid-mask
+
+/*
+ * Protected counters by write_lock_irq(&tasklist_lock)
+ */
+global total-forks unsigned-long = 0 // Handle normal Linux uptimes.
+global nr-threads int = 0            // The idle threads do not count..
+
+private global max-threads int = 0   // tunable limit on nr_threads
+
+private function named-array-index array-entry of const-string; index int, spelling const-string
+    return .array-entry; index=index, value=spelling
+
+private constant resident-page-types array of const-string =
+    .array;
+        named-array-index; mm-filepages, "MM_FILEPAGES"
+        named-array-index; mm-anonpages, "MM_ANONPAGES"
+        named-array-index; mm-swapents, "MM_SWAPENTS"
+        named-array-index; mm-shmempages, "MM_SHMEMPAGES"
+
+per-cpu global process-counts unsigned-long = 0
+
+cacheline-aligned global tasklist-lock rwlock = define-rwlock;
+
+when build; config-prove-rcu
+    function lockdep-tasklist-lock-is-held int
+        return lockdep-is-held; ref tasklist-lock
+
+    export-symbol-gpl; lockdep-tasklist-lock-is-held
+
+function nr-processes int
+    cpu int
+    total int = 0
+
+    for cpu in for-each-possible-cpu;
+        total = total + per-cpu; process-counts, cpu
+
+    return total
+
+weak function arch-release-task-struct void; tsk task-struct
+    return
+
+private global task-struct-cachep kmem-cache|none = none
+
+private inline function alloc-task-struct-node task-struct|none; node int
+    unsafe
+        return kmem-cache-alloc-node; task-struct-cachep, gfp-kernel, node
+
+private inline function free-task-struct void; tsk task-struct
+    unsafe
+        kmem-cache-free; task-struct-cachep, tsk
+
+when build; config-vmap-stack
+    /*
+     * vmalloc() is a bit slow, and calling vfree() enough times will force a TLB
+     * flush.  Try to minimize the number of calls by caching stacks.
+     */
+    constant nr-cached-stacks int = 2
+
+    private per-cpu global cached-stacks array of vm-struct|none, nr-cached-stacks =
+        .array;
+            none
+            none
+
+    /*
+     * Allocated stacks are cached and later reused by new threads, so memcg
+     * accounting is performed by the code assigning/releasing stacks to tasks.
+     * We need a zeroed memory without __GFP_ACCOUNT.
+     */
+    constant gfp-vmap-stack gfp-flags =
+        gfp-kernel | gfp-zero | gfp-skip-kasan
+
+    class vm-stack
+        field rcu rcu-head
+        field stack-vm-area vm-struct
+
+    private function alloc-thread-stack-node-from-cache vm-struct|none; tsk task-struct, node int
+        vm-area vm-struct|none
+        i unsigned-int
+
+        /*
+         * If the node has memory, we are guaranteed the stacks are backed by local pages.
+         * Otherwise the pages are arbitrary.
+         *
+         * Note that depending on cpuset it is possible we will get migrated to a different
+         * node immediately after allocating here, so this does *not* guarantee locality for
+         * arbitrary callers.
+         */
+        preempt-scope = scoped-guard; preempt
+        try
+            if node != numa-no-node and numa-node-id; != node
+                return none
+
+            for i = 0; i < nr-cached-stacks; i = i + 1
+                vm-area = this-cpu-xchg; cached-stacks[i], none
+                if vm-area
+                    return vm-area
+        finally
+            preempt-scope.release;
+
+        return none
+
+    private function try-release-thread-stack-to-cache boolean; vm-area vm-struct
+        i unsigned-int
+        nid int
+
+        /*
+         * Don't cache stacks if any of the pages don't match the local domain, unless
+         * there is no local memory to begin with.
+         *
+         * Note that lack of local memory does not automatically mean it makes no difference
+         * performance-wise which other domain backs the stack. In this case we are merely
+         * trying to avoid constantly going to vmalloc.
+         */
+        preempt-scope = scoped-guard; preempt
+        try
+            nid = numa-node-id;
+            if node-state; nid, n-memory
+                for i = 0; i < vm-area.nr-pages; i = i + 1
+                    page page = vm-area.pages[i]
+                    if page-to-nid; page != nid
+                        return false
+
+            for i = 0; i < nr-cached-stacks; i = i + 1
+                tmp vm-struct|none = none
+
+                if this-cpu-try-cmpxchg; cached-stacks[i], ref tmp, vm-area
+                    return true
+        finally
+            preempt-scope.release;
+
+        return false
+
+    private function thread-stack-free-rcu void; rh rcu-head
+        vm-stack vm-stack
+        unsafe
+            vm-stack = container-of; rh, vm-stack, rcu
+
+        vm-area vm-struct = vm-stack.stack-vm-area
+
+        if try-release-thread-stack-to-cache; vm-stack.stack-vm-area
+            return
+
+        unsafe
+            vfree; vm-area.addr
+
+    private function thread-stack-delayed-free void; tsk task-struct
+        vm-stack vm-stack
+        unsafe
+            vm-stack = tsk.stack
+
+        vm-stack.stack-vm-area = tsk.stack-vm-area
+        call-rcu; ref vm-stack.rcu, thread-stack-free-rcu
+
+    private function free-vm-stack-cache int; cpu unsigned-int
+        cached-vm-stack-areas array-ref of vm-struct|none
+        unsafe
+            cached-vm-stack-areas = per-cpu-ptr; cached-stacks, cpu
+
+        i int
+
+        for i = 0; i < nr-cached-stacks; i = i + 1
+            vm-area vm-struct|none = cached-vm-stack-areas[i]
+
+            if not vm-area
+                continue
+
+            unsafe
+                vfree; vm-area.addr
+            cached-vm-stack-areas[i] = none
+
+        return 0
+
+    private function memcg-charge-kernel-stack int; vm-area vm-struct
+        i int
+        ret int
+        nr-charged int = 0
+
+        bug-on; vm-area.nr-pages != thread-size / page-size
+
+        for i = 0; i < thread-size / page-size; i = i + 1
+            ret = memcg-kmem-charge-page; vm-area.pages[i], gfp-kernel, 0
+            if ret
+                goto err
+            nr-charged = nr-charged + 1
+
+        return 0
+
+        label err
+        for i = 0; i < nr-charged; i = i + 1
+            memcg-kmem-uncharge-page; vm-area.pages[i], 0
+        return ret
+
+    private function alloc-thread-stack-node int; tsk task-struct, node int
+        vm-area vm-struct|none
+        stack raw-address of void|none
+
+        vm-area = alloc-thread-stack-node-from-cache; tsk, node
+        if vm-area
+            if memcg-charge-kernel-stack; vm-area
+                unsafe
+                    vfree; vm-area.addr
+                return -enomem
+
+            // Reset stack metadata.
+            if not kasan-hw-tags-enabled;
+                unsafe
+                    kasan-unpoison-range; vm-area.addr, thread-size
+
+            unsafe
+                stack = kasan-reset-tag; vm-area.addr
+
+            // Clear stale pointers from reused stack.
+            unsafe
+                clear-pages; vm-area.addr, vm-area.nr-pages
+
+            tsk.stack-vm-area = vm-area
+            tsk.stack = stack
+            return 0
+
+        return-address raw-address of void
+        unsafe
+            return-address = builtin-return-address; 0
+            stack = vmalloc-node;
+                thread-size,
+                thread-align,
+                gfp-vmap-stack,
+                node,
+                return-address
+
+        if not stack
+            return -enomem
+
+        unsafe
+            vm-area = find-vm-area; stack
+
+        if memcg-charge-kernel-stack; vm-area
+            unsafe
+                vfree; stack
+            return -enomem
+
+        /*
+         * We can't call find_vm_area() in interrupt context, and
+         * free_thread_stack() can be called in interrupt context,
+         * so cache the vm_struct.
+         */
+        tsk.stack-vm-area = vm-area
+        unsafe
+            stack = kasan-reset-tag; stack
+        tsk.stack = stack
+        return 0
+
+    private function free-thread-stack void; tsk task-struct
+        if not try-release-thread-stack-to-cache; tsk.stack-vm-area
+            thread-stack-delayed-free; tsk
+
+        tsk.stack = none
+        tsk.stack-vm-area = none
+
+else
+    /*
+     * Allocate pages if THREAD_SIZE is >= PAGE_SIZE, otherwise use a
+     * kmemcache based allocator.
+     */
+    when build; thread-size >= page-size
+        private function thread-stack-free-rcu void; rh rcu-head
+            page page
+            unsafe
+                page = virt-to-page; rh
+                free-pages; page, thread-size-order
+
+        private function thread-stack-delayed-free void; tsk task-struct
+            rh rcu-head
+            unsafe
+                rh = tsk.stack
+
+            call-rcu; rh, thread-stack-free-rcu
+
+        private function alloc-thread-stack-node int; tsk task-struct, node int
+            page page|none =
+                alloc-pages-node; node, threadinfo-gfp, thread-size-order
+
+            if likely; page
+                stack-address raw-address of void
+                unsafe
+                    stack-address = page-address; page
+                    tsk.stack = kasan-reset-tag; stack-address
+                return 0
+
+            return -enomem
+
+        private function free-thread-stack void; tsk task-struct
+            thread-stack-delayed-free; tsk
+            tsk.stack = none
+
+    else
+        private global thread-stack-cache kmem-cache|none = none
+
+        private function thread-stack-free-rcu void; rh rcu-head
+            unsafe
+                kmem-cache-free; thread-stack-cache, rh
+
+        private function thread-stack-delayed-free void; tsk task-struct
+            rh rcu-head
+            unsafe
+                rh = tsk.stack
+
+            call-rcu; rh, thread-stack-free-rcu
+
+        private function alloc-thread-stack-node int; tsk task-struct, node int
+            stack raw-address of unsigned-long|none
+
+            unsafe
+                stack = kmem-cache-alloc-node;
+                    thread-stack-cache,
+                    threadinfo-gfp,
+                    node
+                stack = kasan-reset-tag; stack
+
+            tsk.stack = stack
+
+            if stack
+                return 0
+            else
+                return -enomem
+
+// fork.c lines 452-900
+
+function free-thread-stack void; tsk ref task-struct
+    thread-stack-delayed-free; tsk
+    tsk.stack = none
+internal-linkage; free-thread-stack
+
+function thread-stack-cache-init void
+    thread-stack-cache = kmem-cache-create-usercopy; "thread_stack", thread-size, thread-size, 0, 0, thread-size, none
+    bug-on; thread-stack-cache == none
+
+// End of THREAD_SIZE >= PAGE_SIZE conditional.
+// End of CONFIG_VMAP_STACK conditional.
+
+// SLAB cache for signal_struct structures (tsk->signal)
+signal-cachep ref kmem-cache = none
+internal-linkage; signal-cachep
+
+// SLAB cache for sighand_struct structures (tsk->sighand)
+sighand-cachep ref kmem-cache = none
+
+// SLAB cache for files_struct structures (tsk->files)
+files-cachep ref kmem-cache = none
+
+// SLAB cache for fs_struct structures (tsk->fs)
+fs-cachep ref kmem-cache = none
+
+// SLAB cache for mm_struct structures (tsk->mm)
+mm-cachep ref kmem-cache = none
+internal-linkage; mm-cachep
+
+function account-kernel-stack void; tsk ref task-struct, account int
+    if is-enabled; config-vmap-stack
+        vm-area ref vm-struct = task-stack-vm-area; tsk
+        i int
+
+        for i = 0; i < thread-size / page-size; i = i + 1
+            mod-lruvec-page-state; vm-area.pages[i], nr-kernel-stack-kb, account * (page-size / 1024)
+    else
+        stack raw-address of opaque = task-stack-page; tsk
+
+        // All stack pages are in the same node.
+        mod-lruvec-kmem-state; stack, nr-kernel-stack-kb, account * (thread-size / 1024)
+internal-linkage; account-kernel-stack
+
+function exit-task-stack-account void; tsk ref task-struct
+    account-kernel-stack; tsk, -1
+
+    if is-enabled; config-vmap-stack
+        vm-area ref vm-struct
+        i int
+
+        vm-area = task-stack-vm-area; tsk
+        for i = 0; i < thread-size / page-size; i = i + 1
+            memcg-kmem-uncharge-page; vm-area.pages[i], 0
+
+function release-task-stack void; tsk ref task-struct
+    if warn-on; (read-once; tsk.state) != task-dead
+        return // Better to leak the stack than to free prematurely
+
+    free-thread-stack; tsk
+internal-linkage; release-task-stack
+
+when build; thread-info-in-task
+    function put-task-stack void; tsk ref task-struct
+        if refcount-dec-and-test; ref tsk.stack-refcount
+            release-task-stack; tsk
+
+function free-task void; tsk ref task-struct
+    when build; seccomp
+        warn-on-once; tsk.seccomp.filter
+
+    release-user-cpus-ptr; tsk
+    scs-release; tsk
+
+    when build; thread-info-in-task
+        // If the task had a separate stack allocation, it should be gone
+        // by now.
+        warn-on-once; (refcount-read; ref tsk.stack-refcount) != 0
+    else
+        // The task is finally done with both the stack and thread_info,
+        // so free both.
+        release-task-stack; tsk
+
+    rt-mutex-debug-task-free; tsk
+    ftrace-graph-exit-task; tsk
+    arch-release-task-struct; tsk
+    if (tsk.flags & pf-kthread) != 0
+        free-kthread-struct; tsk
+    bpf-task-storage-free; tsk
+    put-task-exec-state; (rcu-access-pointer; tsk.exec-state)
+    free-task-struct; tsk
+export-symbol; free-task
+
+function dup-mm-exe-file void; mm ref mm-struct, oldmm ref mm-struct
+    exe-file ref file
+
+    exe-file = get-mm-exe-file; oldmm
+    rcu-init-pointer; ref mm.exe-file, exe-file
+    // We depend on the oldmm having properly denied write access to the
+    // exe_file already.
+    if exe-file != none and (exe-file-deny-write-access; exe-file) != 0
+        pr-warn-once; "exe_file_deny_write_access() failed in %s\n", func
+
+when build; mmu
+    function mm-alloc-pgd int; mm ref mm-struct
+        mm.pgd = pgd-alloc; mm
+        if unlikely; mm.pgd == none
+            return -enomem
+        return 0
+    internal-linkage; mm-alloc-pgd
+    inline; mm-alloc-pgd
+
+    function mm-free-pgd void; mm ref mm-struct
+        pgd-free; mm, mm.pgd
+    internal-linkage; mm-free-pgd
+    inline; mm-free-pgd
+else
+    function mm-alloc-pgd int; mm ref mm-struct
+        return 0
+    internal-linkage; mm-alloc-pgd
+    inline; mm-alloc-pgd
+
+    function mm-free-pgd void; mm ref mm-struct
+        none
+    internal-linkage; mm-free-pgd
+    inline; mm-free-pgd
+
+when build; mm-id
+    mm-ida ida = define-ida;
+    internal-linkage; mm-ida
+
+    function mm-alloc-id int; mm ref mm-struct
+        ret int
+
+        ret = ida-alloc-range; ref mm-ida, mm-id-min, mm-id-max, gfp-kernel
+        if ret < 0
+            return ret
+        mm.mm-id = ret
+        return 0
+    internal-linkage; mm-alloc-id
+    inline; mm-alloc-id
+
+    function mm-free-id void; mm ref mm-struct
+        constant id mm-id = mm.mm-id
+
+        mm.mm-id = mm-id-dummy
+        if id == mm-id-dummy
+            return
+        if warn-on-once; id < mm-id-min or id > mm-id-max
+            return
+        ida-free; ref mm-ida, id
+    internal-linkage; mm-free-id
+    inline; mm-free-id
+else
+    function mm-alloc-id int; mm ref mm-struct
+        return 0
+    internal-linkage; mm-alloc-id
+    inline; mm-alloc-id
+
+    function mm-free-id void; mm ref mm-struct
+        none
+    internal-linkage; mm-free-id
+    inline; mm-free-id
+
+function check-mm void; mm ref mm-struct
+    i int
+
+    build-bug-on-msg; (array-size; resident-page-types) != nr-mm-counters, "Please make sure 'struct resident_page_types[]' is updated as well"
+
+    for i = 0; i < nr-mm-counters; i = i + 1
+        x long = percpu-counter-sum; ref mm.rss-stat[i]
+
+        if unlikely; x != 0
+            pr-alert; "BUG: Bad rss-counter state mm:%p type:%s val:%ld Comm:%s Pid:%d\n", mm, resident-page-types[i], x, current.comm, (task-pid-nr; current)
+
+    if (mm-pgtables-bytes; mm) != 0
+        pr-alert; "BUG: non-zero pgtables_bytes on freeing mm: %ld\n", (mm-pgtables-bytes; mm)
+
+    when build; transparent-hugepage
+        when build; split-pmd-ptlocks
+            none
+        else
+            vm-bug-on-mm; mm.pmd-huge-pte, mm
+internal-linkage; check-mm
+
+function allocate-mm ref mm-struct
+    return kmem-cache-alloc; mm-cachep, gfp-kernel
+internal-linkage; allocate-mm
+inline; allocate-mm
+
+function free-mm void; mm ref mm-struct
+    kmem-cache-free; mm-cachep, mm
+internal-linkage; free-mm
+inline; free-mm
+
+function do-check-lazy-tlb void; arg borrowed-ref of opaque
+    mm borrowed-ref of mm-struct
+    unsafe
+        mm = cast-reference; mm-struct, arg
+
+    warn-on-once; current.active-mm == mm
+internal-linkage; do-check-lazy-tlb
+
+function do-shoot-lazy-tlb void; arg borrowed-ref of opaque
+    mm borrowed-ref of mm-struct
+    unsafe
+        mm = cast-reference; mm-struct, arg
+
+    if current.active-mm == mm
+        warn-on-once; current.mm != none
+        current.active-mm = ref init-mm
+        switch-mm; mm, ref init-mm, current
+internal-linkage; do-shoot-lazy-tlb
+
+function cleanup-lazy-tlbs void; mm ref mm-struct
+    if not (is-enabled; config-mmu-lazy-tlb-shootdown)
+        // In this case, lazy tlb mms are refounted and would not reach
+        // __mmdrop until all CPUs have switched away and mmdrop()ed.
+        return
+
+    // Lazy mm shootdown does not refcount "lazy tlb mm" usage, rather it
+    // requires lazy mm users to switch to another mm when the refcount
+    // drops to zero, before the mm is freed. This requires IPIs here to
+    // switch kernel threads to init_mm.
+    //
+    // archs that use IPIs to flush TLBs can piggy-back that lazy tlb mm
+    // switch with the final userspace teardown TLB flush which leaves the
+    // mm lazy on this CPU but no others, reducing the need for additional
+    // IPIs here. There are cases where a final IPI is still required here,
+    // such as the final mmdrop being performed on a different CPU than the
+    // one exiting, or kernel threads using the mm when userspace exits.
+    //
+    // IPI overheads have not found to be expensive, but they could be
+    // reduced in a number of possible ways, for example (roughly
+    // increasing order of complexity):
+    // - The last lazy reference created by exit_mm() could instead switch
+    //   to init_mm, however it's probable this will run on the same CPU
+    //   immediately afterwards, so this may not reduce IPIs much.
+    // - A batch of mms requiring IPIs could be gathered and freed at once.
+    // - CPUs store active_mm where it can be remotely checked without a
+    //   lock, to filter out false-positives in the cpumask.
+    // - After mm_users or mm_count reaches zero, switching away from the
+    //   mm could clear mm_cpumask to reduce some IPIs, perhaps together
+    //   with some batching or delaying of the final IPIs.
+    // - A delayed freeing and RCU-like quiescing sequence based on mm
+    //   switching to avoid IPIs completely.
+    unsafe
+        on-each-cpu-mask; (mm-cpumask; mm), do-shoot-lazy-tlb, (erase-reference-type; mm), 1
+    if is-enabled; config-debug-vm-shoot-lazies
+        unsafe
+            on-each-cpu; do-check-lazy-tlb, (erase-reference-type; mm), 1
+internal-linkage; cleanup-lazy-tlbs
+
+// Called when the last reference to the mm
+// is dropped: either by a lazy thread or by
+// mmput. Free the page directory and the mm.
+function mmdrop void; mm ref mm-struct
+    bug-on; mm == ref init-mm
+    warn-on-once; mm == current.mm
+
+    // Ensure no CPUs are using this as their lazy tlb mm
+    cleanup-lazy-tlbs; mm
+
+    warn-on-once; mm == current.active-mm
+    mm-destroy-sched; mm
+    mm-free-pgd; mm
+    mm-free-id; mm
+    destroy-context; mm
+    mmu-notifier-subscriptions-destroy; mm
+    check-mm; mm
+    mm-pasid-drop; mm
+    mm-destroy-cid; mm
+    percpu-counter-destroy-many; mm.rss-stat, nr-mm-counters
+
+    free-mm; mm
+export-symbol-gpl; mmdrop
+
+function mmdrop-async-fn void; work ref work-struct
+    mm ref mm-struct
+
+    unsafe
+        mm = container-of; work, mm-struct, async-put-work
+    mmdrop; mm
+internal-linkage; mmdrop-async-fn
+
+function mmdrop-async void; mm ref mm-struct
+    if unlikely; (atomic-dec-and-test; ref mm.mm-count)
+        init-work; ref mm.async-put-work, mmdrop-async-fn
+        schedule-work; ref mm.async-put-work
+internal-linkage; mmdrop-async
+
+function free-signal-struct void; sig ref signal-struct
+    taskstats-tgid-free; sig
+    sched-autogroup-exit; sig
+    // __mmdrop is not safe to call from softirq context on x86 due to
+    // pgd_dtor so postpone it to the async context
+    if sig.oom-mm != none
+        mmdrop-async; sig.oom-mm
+    kmem-cache-free; signal-cachep, sig
+internal-linkage; free-signal-struct
+inline; free-signal-struct
+
+function put-signal-struct void; sig ref signal-struct
+    if refcount-dec-and-test; ref sig.sigcnt
+        free-signal-struct; sig
+internal-linkage; put-signal-struct
+inline; put-signal-struct
+
+function put-task-struct void; tsk ref task-struct
+    warn-on; not tsk.exit-state
+    warn-on; (refcount-read; ref tsk.usage) != 0
+    warn-on; tsk == current
+
+    unwind-task-free; tsk
+    io-uring-free; tsk
+    cgroup-task-free; tsk
+    task-numa-free; tsk, true
+    security-task-free; tsk
+    exit-creds; tsk
+    delayacct-tsk-free; tsk
+    put-signal-struct; tsk.signal
+    sched-core-free; tsk
+    free-task; tsk
+export-symbol-gpl; put-task-struct
+
+function put-task-struct-rcu-cb void; rhp ref rcu-head
+    task ref task-struct
+
+    unsafe
+        task = container-of; rhp, task-struct, rcu
+
+    put-task-struct; task
+export-symbol-gpl; put-task-struct-rcu-cb
+
+function arch-task-cache-init void
+    none
+init; arch-task-cache-init
+weak; arch-task-cache-init
+
+// set_max_threads
+function set-max-threads void; max-threads-suggested unsigned-int
+    threads u64
+    nr-pages unsigned-long = memblock-estimated-nr-free-pages;
+
+    // The number of threads shall be limited such that the thread
+    // structures may only consume a small part of the available memory.
+    if (fls64; nr-pages) + (fls64; page-size) > 64
+        threads = max-thread-id-space
+    else
+        threads = div64-u64; (convert; u64, nr-pages) * (convert; u64, page-size), (convert; u64, thread-size) * (convert; unsigned-long, 8)
+
+    if threads > max-threads-suggested
+        threads = max-threads-suggested
+
+    max-threads = clamp-t; u64, threads, min-threads, max-thread-id-space
+internal-linkage; set-max-threads
+init; set-max-threads
+
+when build; arch-wants-dynamic-task-struct
+    // Initialized by the architecture:
+    arch-task-struct-size int = 0
+    read-mostly; arch-task-struct-size
+
+function task-struct-whitelist void; offset ref unsigned-long, size ref unsigned-long
+    // Fetch thread_struct whitelist for the architecture.
+    arch-thread-struct-whitelist; offset, size
+
+    // Handle zero-sized whitelist or empty thread_struct, otherwise
+    // adjust offset to position of thread_struct in task_struct.
+    if unlikely; size == 0
+        offset = 0
+    else
+        unsafe
+            offset = offset + (offset-of; task-struct, thread)
+internal-linkage; task-struct-whitelist
+init; task-struct-whitelist
+
+function fork-init void
+    i int
+
+    when build; arch-min-taskalign
+        none
+    else
+        arch-min-taskalign int = 0
+
+    align int = max-t; int, l1-cache-bytes, arch-min-taskalign
+    useroffset unsigned-long
+    usersize unsigned-long
+
+    // create a slab on which task_structs can be allocated
+    task-struct-whitelist; ref useroffset, ref usersize
+    task-struct-cachep = kmem-cache-create-usercopy; "task_struct", arch-task-struct-size, align, slab-panic | slab-account, useroffset, usersize, none
+
+    // do the arch specific task caches init
+    arch-task-cache-init;
+
+    set-max-threads; max-thread-id-space
+
+    init-task.signal.rlim[rlimit-nproc].rlim-cur = max-threads / 2
+    init-task.signal.rlim[rlimit-nproc].rlim-max = max-threads / 2
+    init-task.signal.rlim[rlimit-sigpending] = init-task.signal.rlim[rlimit-nproc]
+
+    for i = 0; i < ucount-counts; i = i + 1
+        init-user-ns.ucount-max[i] = max-threads / 2
+
+    set-userns-rlimit-max; ref init-user-ns, ucount-rlimit-nproc, rlim-infinity
+    set-userns-rlimit-max; ref init-user-ns, ucount-rlimit-msgqueue, rlim-infinity
+    set-userns-rlimit-max; ref init-user-ns, ucount-rlimit-sigpending, rlim-infinity
+    set-userns-rlimit-max; ref init-user-ns, ucount-rlimit-memlock, rlim-infinity
+
+    when build; vmap-stack
+        cpuhp-setup-state; cpuhp-bp-prepare-dyn, "fork:vm_stack_cache", none, free-vm-stack-cache
+
+    scs-init;
+
+    lockdep-init-task; ref init-task
+    uprobes-init;
+init; fork-init
+
+function arch-dup-task-struct int; dst ref task-struct, src ref task-struct
+weak; arch-dup-task-struct
+
+// fork.c lines 901-1351
+unsafe
+    dst = src
+return 0
+
+function set-task-stack-end-magic void; tsk ref task-struct
+    stackend ref unsigned-long
+
+    stackend = end-of-stack; tsk
+    unsafe
+        stackend = stack-end-magic // for overflow detection
+
+static function dup-task-struct ref task-struct; orig ref task-struct, node int
+    tsk ref task-struct
+    err int
+
+    if node == numa-no-node
+        node = tsk-fork-get-node; orig
+    tsk = alloc-task-struct-node; node
+    if not tsk
+        return none
+
+    err = arch-dup-task-struct; tsk, orig
+    if err
+        goto free-tsk
+
+    err = alloc-thread-stack-node; tsk, node
+    if err
+        goto free-tsk
+
+    when build; thread-info-in-task
+        refcount-set; ref tsk.stack-refcount, 1
+
+    account-kernel-stack; tsk, 1
+
+    err = scs-prepare; tsk, node
+    if err
+        goto free-stack
+
+    when build; seccomp
+        /*
+         * We must handle setting up seccomp filters once we're under
+         * the sighand lock in case orig has changed between now and
+         * then. Until then, filter must be NULL to avoid messing up
+         * the usage counts on the error path calling free_task.
+         */
+        tsk.seccomp.filter = none
+
+    rcu-init-pointer; ref tsk.exec-state, none
+
+    setup-thread-stack; tsk, orig
+    clear-user-return-notifier; tsk
+    clear-tsk-need-resched; tsk
+    set-task-stack-end-magic; tsk
+    clear-syscall-work-syscall-user-dispatch; tsk
+
+    when build; stackprotector
+        tsk.stack-canary = get-random-canary;
+
+    if orig.cpus-ptr == ref orig.cpus-mask
+        tsk.cpus-ptr = ref tsk.cpus-mask
+    dup-user-cpus-ptr; tsk, orig, node
+
+    /*
+     * One for the user space visible state that goes away when reaped.
+     * One for the scheduler.
+     */
+    refcount-set; ref tsk.rcu-users, 2
+    /* One for the rcu users */
+    refcount-set; ref tsk.usage, 1
+
+    when build; blk-dev-io-trace
+        tsk.btrace-seq = 0
+
+    tsk.splice-pipe = none
+    tsk.task-frag.page = none
+    tsk.wake-q.next = none
+    tsk.worker-private = none
+
+    kcov-task-init; tsk
+    kmsan-task-create; tsk
+    kmap-local-fork; tsk
+
+    when build; fault-injection
+        tsk.fail-nth = 0
+
+    when build; blk-cgroup
+        tsk.throttle-disk = none
+        tsk.use-memdelay = 0
+
+    when build; arch-has-cpu-pasid
+        tsk.pasid-activated = 0
+
+    when build; memcg
+        tsk.active-memcg = none
+
+    when build; x86-bus-lock-detect
+        tsk.reported-split-lock = 0
+
+    when build; sched-mm-cid
+        tsk.mm-cid.cid = mm-cid-unset
+        tsk.mm-cid.active = 0
+        init-hlist-node; ref tsk.mm-cid.node
+
+    when build; bpf-syscall
+        rcu-init-pointer; ref tsk.bpf-storage, none
+        tsk.bpf-ctx = none
+
+    return tsk
+
+    label free-stack
+    exit-task-stack-account; tsk
+    free-thread-stack; tsk
+
+    label free-tsk
+    free-task-struct; tsk
+    return none
+
+cacheline-aligned-in-smp mmlist-lock spinlock = define-spinlock;
+
+static coredump-filter unsigned-long = mmf-dump-filter-default
+
+static init function coredump-filter-setup int; s ref char
+    if kstrtoul; s, 0, ref coredump-filter
+        return 0
+    coredump-filter = coredump-filter << mmf-dump-filter-shift
+    coredump-filter = coredump-filter & mmf-dump-filter-mask
+    return 1
+
+setup; "coredump_filter=", coredump-filter-setup
+
+static function mm-init-aio void; mm ref mm-struct
+    when build; aio
+        spin-lock-init; ref mm.ioctx-lock
+        mm.ioctx-table = none
+
+static always-inline function mm-clear-owner void; mm ref mm-struct, p ref task-struct
+    when build; memcg
+        if mm.owner == p
+            write-once; ref mm.owner, none
+
+static function mm-init-owner void; mm ref mm-struct, p ref task-struct
+    when build; memcg
+        mm.owner = p
+
+static function mm-init-uprobes-state void; mm ref mm-struct
+    when build; uprobes
+        mm.uprobes-state.xol-area = none
+        arch-uprobe-init-state; mm
+
+static function mmap-init-lock void; mm ref mm-struct
+    init-rwsem; ref mm.mmap-lock
+    mm-lock-seqcount-init; mm
+
+    when build; per-vma-lock
+        rcuwait-init; ref mm.vma-writer-wait
+
+static function mm-init ref mm-struct; mm ref mm-struct, p ref task-struct
+    mt-init-flags; ref mm.mm-mt, mm-mt-flags
+    mt-set-external-lock; ref mm.mm-mt, ref mm.mmap-lock
+    atomic-set; ref mm.mm-users, 1
+    atomic-set; ref mm.mm-count, 1
+    seqcount-init; ref mm.write-protect-seq
+    mmap-init-lock; mm
+    init-list-head; ref mm.mmlist
+    mm-pgtables-bytes-init; mm
+    mm.map-count = 0
+    mm.locked-vm = 0
+    atomic64-set; ref mm.pinned-vm, 0
+
+    unsafe
+        memset; ref mm.rss-stat, 0, (size-of; mm.rss-stat)
+
+    spin-lock-init; ref mm.page-table-lock
+    spin-lock-init; ref mm.arg-lock
+    mm-init-cpumask; mm
+    mm-init-aio; mm
+    mm-init-owner; mm, p
+    mm-pasid-init; mm
+    rcu-init-pointer; ref mm.exe-file, none
+    mmu-notifier-subscriptions-init; mm
+    init-tlb-flush-pending; mm
+
+    when build; transparent-hugepage
+        when build; split-pmd-ptlocks
+        else
+            mm.pmd-huge-pte = none
+
+    mm-init-uprobes-state; mm
+    hugetlb-count-init; mm
+    futex-mm-init; mm
+
+    mm-flags-clear-all; mm
+    if current.mm
+        flags unsigned-long = mm-flags-get-word; current.mm
+
+        mm-flags-overwrite-word; mm, (mmf-init-legacy-flags; flags)
+        mm.def-flags = current.mm.def-flags & vm-init-def-mask
+    else
+        mm-flags-overwrite-word; mm, coredump-filter
+        mm.def-flags = 0
+
+    if mm-alloc-pgd; mm
+        goto fail-mm-init
+
+    if mm-alloc-id; mm
+        goto fail-noid
+
+    if init-new-context; p, mm
+        goto fail-nocontext
+
+    if mm-alloc-cid; mm, p
+        goto fail-cid
+
+    if mm-alloc-sched; mm
+        goto fail-sched
+
+    if percpu-counter-init-many; mm.rss-stat, 0, gfp-kernel-account, nr-mm-counters
+        goto fail-pcpu
+
+    lru-gen-init-mm; mm
+    return mm
+
+    label fail-pcpu
+    mm-destroy-sched; mm
+
+    label fail-sched
+    mm-destroy-cid; mm
+
+    label fail-cid
+    destroy-context; mm
+
+    label fail-nocontext
+    mm-free-id; mm
+
+    label fail-noid
+    mm-free-pgd; mm
+
+    label fail-mm-init
+    free-mm; mm
+    return none
+
+/*
+ * Allocate and initialize an mm_struct.
+ */
+function mm-alloc ref mm-struct
+    mm ref mm-struct
+
+    mm = allocate-mm;
+    if not mm
+        return none
+
+    unsafe
+        memset; mm, 0, (size-of; mm)
+
+    return mm-init; mm, current
+
+export-symbol-if-kunit; mm-alloc
+
+static inline function mmput-internal void; mm ref mm-struct
+    vm-bug-on; (atomic-read; ref mm.mm-users)
+
+    uprobe-clear-state; mm
+    exit-aio; mm
+    ksm-exit; mm
+    khugepaged-exit; mm // must run before exit_mmap
+    exit-mmap; mm
+    mm-put-huge-zero-folio; mm
+    set-mm-exe-file; mm, none
+
+    if not (list-empty; ref mm.mmlist)
+        spin-lock; ref mmlist-lock
+        list-del; ref mm.mmlist
+        spin-unlock; ref mmlist-lock
+
+    if mm.binfmt
+        module-put; mm.binfmt.module
+
+    lru-gen-del-mm; mm
+    futex-hash-free; mm
+    mmdrop; mm
+
+/*
+ * Decrement the use count and release all resources for an mm.
+ */
+function mmput void; mm ref mm-struct
+    might-sleep;
+
+    if atomic-dec-and-test; ref mm.mm-users
+        mmput-internal; mm
+
+export-symbol-gpl; mmput
+
+when build; mmu or futex-private-hash
+    static function mmput-async-fn void; work ref work-struct
+        mm ref mm-struct
+
+        unsafe
+            mm = container-of; work, mm-struct, async-put-work
+
+        mmput-internal; mm
+
+    function mmput-async void; mm ref mm-struct
+        if atomic-dec-and-test; ref mm.mm-users
+            init-work; ref mm.async-put-work, mmput-async-fn
+            schedule-work; ref mm.async-put-work
+
+    export-symbol-gpl; mmput-async
+
+/**
+ * set_mm_exe_file - change a reference to the mm's executable file
+ * @mm: The mm to change.
+ * @new_exe_file: The new file to use.
+ *
+ * This changes mm's executable file (shown as symlink /proc/[pid]/exe).
+ *
+ * Main users are mmput() and sys_execve(). Callers prevent concurrent
+ * invocations: in mmput() nobody alive left, in execve it happens before
+ * the new mm is made visible to anyone.
+ *
+ * Can only fail if new_exe_file != NULL.
+ */
+function set-mm-exe-file int; mm ref mm-struct, new-exe-file ref file
+    old-exe-file ref file
+
+    /*
+     * It is safe to dereference the exe_file without RCU as
+     * this function is only called if nobody else can access
+     * this mm -- see comment above for justification.
+     */
+    unsafe
+        old-exe-file = rcu-dereference-raw; mm.exe-file
+
+    if new-exe-file
+        /*
+         * We expect the caller (i.e., sys_execve) to already denied
+         * write access, so this is unlikely to fail.
+         */
+        if unlikely; (exe-file-deny-write-access; new-exe-file)
+            return -eacces
+        get-file; new-exe-file
+
+    rcu-assign-pointer; ref mm.exe-file, new-exe-file
+
+    if old-exe-file
+        exe-file-allow-write-access; old-exe-file
+        fput; old-exe-file
+
+    return 0
+
+/**
+ * replace_mm_exe_file - replace a reference to the mm's executable file
+ * @mm: The mm to change.
+ * @new_exe_file: The new file to use.
+ *
+ * This changes mm's executable file (shown as symlink /proc/[pid]/exe).
+ *
+ * Main user is sys_prctl(PR_SET_MM_MAP/EXE_FILE).
+ */
+function replace-mm-exe-file int; mm ref mm-struct, new-exe-file ref file
+    vma ref vm-area-struct
+    old-exe-file ref file
+    ret int = 0
+
+    /* Forbid mm->exe_file change if old file still mapped. */
+    old-exe-file = get-mm-exe-file; mm
+    if old-exe-file
+        vmi vma-iterator = vma-iterator; mm, 0
+        mmap-read-lock; mm
+
+        for vma in vmi
+            if not vma.vm-file
+                continue
+
+            if path-equal; ref vma.vm-file.f-path, ref old-exe-file.f-path
+                ret = -ebusy
+                break
+
+        mmap-read-unlock; mm
+        fput; old-exe-file
+
+        if ret
+            return ret
+
+    ret = exe-file-deny-write-access; new-exe-file
+    if ret
+        return -eacces
+
+    get-file; new-exe-file
+
+    /* set the new file */
+    mmap-write-lock; mm
+
+    unsafe
+        old-exe-file = rcu-dereference-raw; mm.exe-file
+
+    rcu-assign-pointer; ref mm.exe-file, new-exe-file
+    mmap-write-unlock; mm
+
+    if old-exe-file
+        exe-file-allow-write-access; old-exe-file
+        fput; old-exe-file
+
+    return 0
+
+/**
+ * get_mm_exe_file - acquire a reference to the mm's executable file
+ * @mm: The mm of interest.
+ *
+ * Returns %NULL if mm has no associated executable file.
+ * User must release file via fput().
+ */
+function get-mm-exe-file ref file; mm ref mm-struct
+    exe-file ref file
+
+    rcu-read-lock;
+    exe-file = get-file-rcu; ref mm.exe-file
+    rcu-read-unlock;
+    return exe-file
+
+/**
+ * get_task_exe_file - acquire a reference to the task's executable file
+ * @task: The task.
+ *
+ * Returns %NULL if task's mm (if any) has no associated executable file or
+ * this is a kernel thread with borrowed mm (see the comment above get_task_mm).
+ * User must release file via fput().
+ */
+
+// fork.c lines 1352-1808
+
+function get-task-exe-file file; task task-struct
+    exe-file file = none
+    mm mm-struct
+
+    if (task.flags & pf-kthread) != 0
+        return none
+
+    task-lock; task
+    mm = task.mm
+    if mm != none
+        exe-file = get-mm-exe-file; mm
+    task-unlock; task
+    return exe-file
+
+/**
+ * get_task_mm - acquire a reference to the task's mm
+ * @task: The task.
+ *
+ * Returns %NULL if the task has no mm.  Checks PF_KTHREAD (meaning
+ * this kernel workthread has transiently adopted a user mm with kthread_use_mm,
+ * to do its AIO) is not set and if so returns a reference to it, after
+ * bumping up the use count.  User must release the mm via mmput()
+ * after use.  Typically used by /proc and ptrace.
+ */
+function get-task-mm mm-struct; task task-struct
+    mm mm-struct
+
+    if (task.flags & pf-kthread) != 0
+        return none
+
+    task-lock; task
+    mm = task.mm
+    if mm != none
+        mmget; mm
+    task-unlock; task
+    return mm
+
+export-symbol-gpl; get-task-mm
+
+private function may-access-mm bool; mm mm-struct, task task-struct, mode unsigned-int
+    if mm == current.mm
+        return true
+    if ptrace-may-access; task, mode
+        return true
+    if (mode & ptrace-mode-read) != 0 and (perfmon-capable;)
+        return true
+    return false
+
+function mm-access mm-struct; task task-struct, mode unsigned-int
+    mm mm-struct
+    err int
+
+    err = down-read-killable; ref task.signal.exec-update-lock
+    if err != 0
+        unsafe
+            return err-ptr; err
+
+    mm = get-task-mm; task
+    if mm == none
+        unsafe
+            mm = err-ptr; -esrch
+    else if not (may-access-mm; mm, task, mode)
+        mmput; mm
+        unsafe
+            mm = err-ptr; -eacces
+    up-read; ref task.signal.exec-update-lock
+
+    return mm
+
+private function complete-vfork-done void; tsk task-struct
+    vfork completion
+
+    task-lock; tsk
+    vfork = tsk.vfork-done
+    if likely; vfork != none
+        tsk.vfork-done = none
+        complete; vfork
+    task-unlock; tsk
+
+private function wait-for-vfork-done int; child task-struct, vfork completion
+    state unsigned-int = task-killable | task-freezable
+    killed int
+
+    cgroup-enter-frozen;
+    killed = wait-for-completion-state; vfork, state
+    cgroup-leave-frozen; false
+
+    if killed != 0
+        task-lock; child
+        child.vfork-done = none
+        task-unlock; child
+
+    put-task-struct; child
+    return killed
+
+/* Please note the differences between mmput and mm_release.
+ * mmput is called whenever we stop holding onto a mm_struct,
+ * error success whatever.
+ *
+ * mm_release is called after a mm_struct has been removed
+ * from the current process.
+ *
+ * This difference is important for error handling, when we
+ * only half set up a mm_struct for a new process and need to restore
+ * the old one.  Because we mmput the new mm_struct before
+ * restoring the old one. . .
+ * Eric Biederman 10 January 1998
+ */
+private function mm-release void; tsk task-struct, mm mm-struct
+    uprobe-free-utask; tsk
+
+    /* Get rid of any cached register state */
+    deactivate-mm; tsk, mm
+
+    /*
+     * Signal userspace if we're not exiting with a core dump
+     * because we want to leave the value intact for debugging
+     * purposes.
+     */
+    if tsk.clear-child-tid != none
+        if (atomic-read; ref mm.mm-users) > 1
+            /*
+             * We don't check the error code - if userspace has
+             * not set up a proper pointer then tough luck.
+             */
+            unsafe
+                put-user; 0, tsk.clear-child-tid
+                do-futex; tsk.clear-child-tid, futex-wake, 1, none, none, 0, 0
+        tsk.clear-child-tid = none
+
+    /*
+     * All done, finally we can wake up parent and return this mm to him.
+     * Also kthread_stop() uses this completion for synchronization.
+     */
+    if tsk.vfork-done != none
+        complete-vfork-done; tsk
+
+function exit-mm-release void; tsk task-struct, mm mm-struct
+    futex-exit-release; tsk
+    mm-release; tsk, mm
+
+function exec-mm-release void; tsk task-struct, mm mm-struct
+    futex-exec-release; tsk
+    mm-release; tsk, mm
+
+/**
+ * dup_mm() - duplicates an existing mm structure
+ * @tsk: the task_struct with which the new mm will be associated.
+ * @oldmm: the mm to duplicate.
+ *
+ * Allocates a new mm structure and duplicates the provided @oldmm structure
+ * content into it.
+ *
+ * Return: the duplicated mm or NULL on failure.
+ */
+private function dup-mm mm-struct; tsk task-struct, oldmm mm-struct
+    mm mm-struct
+    err int
+
+    mm = allocate-mm;
+    if mm == none
+        goto fail-nomem
+
+    unsafe
+        memcpy; mm, oldmm, (size-of; mm)
+
+    if not (mm-init; mm, tsk)
+        goto fail-nomem
+
+    uprobe-start-dup-mmap;
+    err = dup-mmap; mm, oldmm
+    if err != 0
+        goto free-pt
+    uprobe-end-dup-mmap;
+
+    mm.hiwater-rss = get-mm-rss; mm
+    mm.hiwater-vm = mm.total-vm
+
+    if mm.binfmt != none and not (try-module-get; mm.binfmt.module)
+        goto free-pt
+
+    return mm
+
+    label free-pt
+    /* don't put binfmt in mmput, we haven't got module yet */
+    mm.binfmt = none
+    mm-init-owner; mm, none
+    mmput; mm
+    if err != 0
+        uprobe-end-dup-mmap;
+
+    label fail-nomem
+    return none
+
+private function copy-mm int; clone-flags u64, tsk task-struct
+    mm mm-struct
+    oldmm mm-struct
+
+    tsk.min-flt = tsk.maj-flt = 0
+    tsk.nvcsw = tsk.nivcsw = 0
+    when build; detect-hung-task
+        tsk.last-switch-count = tsk.nvcsw + tsk.nivcsw
+        tsk.last-switch-time = 0
+
+    tsk.mm = none
+    tsk.active-mm = none
+
+    /*
+     * Are we cloning a kernel thread?
+     *
+     * We need to steal a active VM for that..
+     */
+    oldmm = current.mm
+    if oldmm == none
+        return 0
+
+    if (clone-flags & clone-vm) != 0
+        mmget; oldmm
+        mm = oldmm
+    else
+        mm = dup-mm; tsk, current.mm
+        if mm == none
+            return -enomem
+
+    tsk.mm = mm
+    tsk.active-mm = mm
+    return 0
+
+private function copy-exec-state int; clone-flags u64, tsk task-struct
+    exec-state task-exec-state
+
+    /* CLONE_VM siblings refcount-share the parent's exec_state. */
+    if (clone-flags & clone-vm) != 0
+        exec-state = rcu-dereference-protected; current.exec-state, true
+        refcount-inc; ref exec-state.count
+        rcu-assign-pointer; ref tsk.exec-state, exec-state
+        return 0
+
+    /* Everyone else inherits a fresh copy. */
+    return task-exec-state-copy; tsk
+
+private function copy-fs int; clone-flags u64, tsk task-struct
+    fs fs-struct = current.fs
+
+    if (clone-flags & clone-fs) != 0
+        /* tsk->fs is already what we want */
+        read-seqlock-excl; ref fs.seq
+        /* "users" and "in_exec" locked for check_unsafe_exec() */
+        if fs.in-exec != 0
+            read-sequnlock-excl; ref fs.seq
+            return -eagain
+        fs.users = fs.users + 1
+        read-sequnlock-excl; ref fs.seq
+        return 0
+
+    tsk.fs = copy-fs-struct; fs
+    if tsk.fs == none
+        return -enomem
+    return 0
+
+private function copy-files int; clone-flags u64, tsk task-struct, no-files int
+    oldf files-struct
+    newf files-struct
+
+    /*
+     * A background process may not have any files ...
+     */
+    oldf = current.files
+    if oldf == none
+        return 0
+
+    if no-files != 0
+        tsk.files = none
+        return 0
+
+    if (clone-flags & clone-files) != 0
+        atomic-inc; ref oldf.count
+        return 0
+
+    newf = dup-fd; oldf, none
+    if is-err; newf
+        unsafe
+            return ptr-err; newf
+
+    tsk.files = newf
+    return 0
+
+private function copy-sighand int; clone-flags u64, tsk task-struct
+    sig sighand-struct
+
+    if (clone-flags & clone-sighand) != 0
+        refcount-inc; ref current.sighand.count
+        return 0
+
+    sig = kmem-cache-alloc; sighand-cachep, gfp-kernel
+    rcu-init-pointer; ref tsk.sighand, sig
+    if sig == none
+        return -enomem
+
+    refcount-set; ref sig.count, 1
+    spin-lock-irq; ref current.sighand.siglock
+    unsafe
+        memcpy; sig.action, current.sighand.action, (size-of; sig.action)
+    spin-unlock-irq; ref current.sighand.siglock
+
+    /* Reset all signal handler not set to SIG_IGN to SIG_DFL. */
+    if (clone-flags & clone-clear-sighand) != 0
+        flush-signal-handlers; tsk, 0
+
+    return 0
+
+function cleanup-sighand void; sighand sighand-struct
+    if refcount-dec-and-test; ref sighand.count
+        signalfd-cleanup; sighand
+        /*
+         * sighand_cachep is SLAB_TYPESAFE_BY_RCU so we can free it
+         * without an RCU grace period, see __lock_task_sighand().
+         */
+        kmem-cache-free; sighand-cachep, sighand
+
+/*
+ * Initialize POSIX timer handling for a thread group.
+ */
+private function posix-cpu-timers-init-group void; sig signal-struct
+    pct posix-cputimers = ref sig.posix-cputimers
+    cpu-limit unsigned-long
+
+    cpu-limit = read-once; sig.rlim[rlimit-cpu].rlim-cur
+    posix-cputimers-group-init; pct, cpu-limit
+
+private function copy-signal int; clone-flags u64, tsk task-struct
+    sig signal-struct
+
+    if (clone-flags & clone-thread) != 0
+        return 0
+
+    sig = kmem-cache-zalloc; signal-cachep, gfp-kernel
+    tsk.signal = sig
+    if sig == none
+        return -enomem
+
+    sig.nr-threads = 1
+    sig.quick-threads = 1
+    atomic-set; ref sig.live, 1
+    refcount-set; ref sig.sigcnt, 1
+
+    /* list_add(thread_node, thread_head) without INIT_LIST_HEAD() */
+    sig.thread-head = list-head-init; ref tsk.thread-node
+    tsk.thread-node = list-head-init; ref sig.thread-head
+
+    init-waitqueue-head; ref sig.wait-chldexit
+    sig.curr-target = tsk
+    init-sigpending; ref sig.shared-pending
+    init-hlist-head; ref sig.multiprocess
+    seqlock-init; ref sig.stats-lock
+    prev-cputime-init; ref sig.prev-cputime
+
+    when build; posix-timers
+        init-hlist-head; ref sig.posix-timers
+        init-hlist-head; ref sig.ignored-posix-timers
+        hrtimer-setup; ref sig.real-timer, it-real-fn, clock-monotonic, hrtimer-mode-rel
+
+    task-lock; current.group-leader
+    unsafe
+        memcpy; sig.rlim, current.signal.rlim, (size-of; sig.rlim)
+    task-unlock; current.group-leader
+
+    posix-cpu-timers-init-group; sig
+
+    tty-audit-fork; sig
+    sched-autogroup-fork; sig
+
+    when build; cgroups
+        init-rwsem; ref sig.cgroup-threadgroup-rwsem
+
+    sig.oom-score-adj = current.signal.oom-score-adj
+    sig.oom-score-adj-min = current.signal.oom-score-adj-min
+
+    mutex-init; ref sig.cred-guard-mutex
+    init-rwsem; ref sig.exec-update-lock
+
+    return 0
+
+private function copy-seccomp void; p task-struct
+    when build; seccomp
+        /*
+         * Must be called with sighand->lock held, which is common to
+         * all threads in the group. Holding cred_guard_mutex is not
+         * needed because this new task is not yet running and cannot
+         * be racing exec.
+         */
+        assert-spin-locked; ref current.sighand.siglock
+
+        /* Ref-count the new filter user, and assign it. */
+        get-seccomp-filter; current
+        p.seccomp = current.seccomp
+
+        /*
+         * Explicitly enable no_new_privs here in case it got set
+         * between the task_struct being duplicated and holding the
+         * sighand lock. The seccomp state and nnp must be in sync.
+         */
+        if task-no-new-privs; current
+            task-set-no-new-privs; p
+
+        /*
+         * If the parent gained a seccomp mode after copying thread
+         * flags and between before we held the sighand lock, we have
+         * to manually enable the seccomp thread flag here.
+         */
+        if p.seccomp.mode != seccomp-mode-disabled
+            set-task-syscall-work; p, seccomp
+
+// fork.c lines 1809-1998
+
+syscall function set-tid-address int; tidptr user-ref of int
+    current.clear-child-tid = tidptr
+
+    return task-pid-vnr; current
+
+static function rt-mutex-init-task void; p ref task-struct
+    raw-spin-lock-init; ref p.pi-lock
+    when build; rt-mutexes
+        p.pi-waiters = rb-root-cached
+        p.pi-top-task = none
+        p.pi-blocked-on = none
+
+static inline function init-task-pid-links void; task ref task-struct
+    type pid-type
+
+    for type = pidtype-pid; type < pidtype-max; type += 1
+        init-hlist-node; ref task.pid-links[type]
+
+static inline function init-task-pid void; task ref task-struct, type pid-type, pid ref pid
+    if type == pidtype-pid
+        task.thread-pid = pid
+    else
+        task.signal.pids[type] = pid
+
+static inline function rcu-copy-process void; p ref task-struct
+    when build; preempt-rcu
+        p.rcu-read-lock-nesting = 0
+        p.rcu-read-unlock-special.s = 0
+        p.rcu-blocked-node = none
+        init-list-head; ref p.rcu-node-entry
+
+    when build; tasks-rcu
+        p.rcu-tasks-holdout = false
+        init-list-head; ref p.rcu-tasks-holdout-list
+        p.rcu-tasks-idle-cpu = -1
+        init-list-head; ref p.rcu-tasks-exit-list
+
+    when build; tasks-trace-rcu
+        p.trc-reader-nesting = 0
+
+/// pidfd-prepare - allocate a new pidfd-file and reserve a pidfd
+/// @pid:      the pid for which to create a pidfd
+/// @flags:    flags of the new @pidfd
+/// @ret-file: return the new pidfs file
+///
+/// Allocate a new file that stashes @pid and reserve a new pidfd number in the
+/// caller's file descriptor table. The pidfd is reserved but not installed yet.
+///
+/// The helper verifies that @pid is still in use. Without pidfd-thread, the
+/// task identified by @pid must be a thread-group leader.
+///
+/// If this function returns successfully, the caller is responsible either to
+/// call fd-install, passing the returned pidfd and pidfd file as arguments, to
+/// install the pidfd into its file descriptor table, or to use put-unused-fd
+/// and fput on the returned pidfd and pidfd file respectively.
+///
+/// This function is useful when a pidfd must already be reserved but there
+/// might still be points of failure afterwards and the caller wants to ensure
+/// that no pidfd is leaked into its file descriptor table.
+///
+/// Return: On success, a reserved pidfd is returned from the function and a new
+///         pidfd file is returned in the last argument to the function. On
+///         error, a negative error code is returned from the function and the
+///         last argument remains unchanged.
+function pidfd-prepare int; pid ref pid, flags unsigned-int, ret-file ref ref file
+    pidfs-file ref file
+
+    // pidfd-stale is only allowed to be passed if the caller knows
+    // that @pid is already registered in pidfs and thus
+    // pidfd-info-exit information is guaranteed to be available.
+    if (flags & pidfd-stale) == 0
+        // While holding the pidfd waitqueue lock, removing the
+        // task linkage for the thread-group leader pid
+        // (pidtype-tgid) is not possible. Thus, if there is still
+        // task linkage for pidtype-pid, not having thread-group
+        // leader linkage for the pid means it was not a
+        // thread-group leader in the first place.
+        spin-lock-irq; ref pid.wait-pidfd.lock
+        try
+            // Task has already been reaped.
+            if not pid-has-task; pid, pidtype-pid
+                return -esrch
+
+            // If this pid is not used as a thread-group leader but
+            // the caller requested to create a thread-group leader
+            // pidfd, report enoent.
+            if (flags & pidfd-thread) == 0 and not pid-has-task; pid, pidtype-tgid
+                return -enoent
+        finally
+            spin-unlock-irq; ref pid.wait-pidfd.lock
+
+    pidfd int = get-unused-fd; o-cloexec
+    try
+        if pidfd < 0
+            return pidfd
+
+        unsafe
+            pidfs-file = pidfs-alloc-file; pid, flags | o-rdwr
+            if is-err; pidfs-file
+                return ptr-err; pidfs-file
+
+        ret-file = pidfs-file
+        return take-fd; ref pidfd
+    finally
+        if pidfd >= 0
+            put-unused-fd; pidfd
+
+static function delayed-free-task-rcu void; rhp ref rcu-head
+    tsk ref task-struct
+
+    unsafe
+        tsk = container-of; rhp, task-struct, rcu
+
+    free-task; tsk
+
+static always-inline function delayed-free-task void; tsk ref task-struct
+    if is-enabled; config-memcg
+        call-rcu; ref tsk.rcu, ref delayed-free-task-rcu
+    else
+        free-task; tsk
+
+static function copy-oom-score-adj void; clone-flags u64, tsk ref task-struct
+    // Skip if kernel thread.
+    if tsk.mm == none
+        return
+
+    // Skip if spawning a thread or using vfork.
+    if (clone-flags & (clone-vm | clone-thread | clone-vfork)) != clone-vm
+        return
+
+    // We need to synchronize with set-oom-adj.
+    mutex-lock; ref oom-adj-mutex
+    mm-flags-set; mmf-multiprocess, tsk.mm
+    // Update the values in case they were changed after copy-signal.
+    tsk.signal.oom-score-adj = current.signal.oom-score-adj
+    tsk.signal.oom-score-adj-min = current.signal.oom-score-adj-min
+    mutex-unlock; ref oom-adj-mutex
+
+when build; rv
+    static function rv-task-fork void; p ref task-struct
+        unsafe
+            memset; ref p.rv, 0, (size-of; p.rv)
+else
+    static inline function rv-task-fork void; p ref task-struct
+        return
+
+static function need-futex-hash-allocate-default bool; clone-flags u64
+    // Allocate a default futex hash for any sibling that will
+    // share the parent's mm, except vfork.
+    return (clone-flags & (clone-vm | clone-vfork)) == clone-vm
+
+// This creates a new process as a copy of the old one,
+// but does not actually start it yet.
+//
+// It copies the registers and all the appropriate
+// parts of the process environment, as specified by the clone
+// flags. The actual kick-off is left to the caller.
+latent-entropy function copy-process ref task-struct; pid ref pid, trace int, node int, args ref kernel-clone-args
+
+// fork.c lines 1999-2694
+    pidfd int = -1
+    retval int
+    p task-struct
+    delayed multiprocess-signals
+    pidfile file = none
+    constant clone-flags u64 = args.flags
+    nsp nsproxy = current.nsproxy
+
+    /*
+     * Don't allow sharing the root directory with processes in a different
+     * namespace
+     */
+    if (clone-flags & (clone-newns | clone-fs)) == (clone-newns | clone-fs)
+        return err-ptr; -einval
+
+    if (clone-flags & (clone-newuser | clone-fs)) == (clone-newuser | clone-fs)
+        return err-ptr; -einval
+
+    /*
+     * Thread groups must share signals as well, and detached threads
+     * can only be started up within the thread group.
+     */
+    if (clone-flags & clone-thread) and not (clone-flags & clone-sighand)
+        return err-ptr; -einval
+
+    /*
+     * Shared signal handlers imply shared VM. By way of the above,
+     * thread groups also imply shared VM. Blocking this case allows
+     * for various simplifications in other code.
+     */
+    if (clone-flags & clone-sighand) and not (clone-flags & clone-vm)
+        return err-ptr; -einval
+
+    /*
+     * Siblings of global init remain as zombies on exit since they are
+     * not reaped by their parent (swapper). To solve this and to avoid
+     * multi-rooted process trees, prevent global and container-inits
+     * from creating siblings.
+     */
+    if (clone-flags & clone-parent) and
+            (current.signal.flags & signal-unkillable)
+        return err-ptr; -einval
+
+    /*
+     * If the new process will be in a different pid or user namespace
+     * do not allow it to share a thread group with the forking task.
+     */
+    if clone-flags & clone-thread
+        if (clone-flags & (clone-newuser | clone-newpid)) or
+                ((task-active-pid-ns; current) != nsp.pid-ns-for-children)
+            return err-ptr; -einval
+
+    if clone-flags & clone-pidfd
+        /*
+         * - CLONE_DETACHED is blocked so that we can potentially
+         *   reuse it later for CLONE_PIDFD.
+         */
+        if clone-flags & clone-detached
+            return err-ptr; -einval
+
+    if clone-flags & clone-autoreap
+        if clone-flags & clone-thread
+            return err-ptr; -einval
+        if clone-flags & clone-parent
+            return err-ptr; -einval
+        if args.exit-signal
+            return err-ptr; -einval
+
+    if (clone-flags & clone-parent) and current.signal.autoreap
+        return err-ptr; -einval
+
+    if clone-flags & clone-nnp
+        if clone-flags & clone-thread
+            return err-ptr; -einval
+
+    if clone-flags & clone-pidfd-autokill
+        if not (clone-flags & clone-pidfd)
+            return err-ptr; -einval
+        if not (clone-flags & clone-autoreap)
+            return err-ptr; -einval
+        if clone-flags & clone-thread
+            return err-ptr; -einval
+        /*
+         * Without CLONE_NNP the child could escalate privileges
+         * after being spawned, so require CAP_SYS_ADMIN.
+         * With CLONE_NNP the child can't gain new privileges,
+         * so allow unprivileged usage.
+         */
+        if not (clone-flags & clone-nnp) and
+                not (ns-capable; (current-user-ns;), cap-sys-admin)
+            return err-ptr; -eperm
+
+    /*
+     * Force any signals received before this point to be delivered
+     * before the fork happens.  Collect up signals sent to multiple
+     * processes that happen during the fork and delay them so that
+     * they appear to happen after the fork.
+     */
+    sigemptyset; ref delayed.signal
+    init-hlist-node; ref delayed.node
+
+    spin-lock-irq; ref current.sighand.siglock
+    if not (clone-flags & clone-thread)
+        hlist-add-head; ref delayed.node, ref current.signal.multiprocess
+    recalc-sigpending;
+    spin-unlock-irq; ref current.sighand.siglock
+    retval = -erestartnointr
+    if task-sigpending; current
+        goto fork-out
+
+    retval = -enomem
+    p = dup-task-struct; current, node
+    if not p
+        goto fork-out
+    retval = copy-exec-state; clone-flags, p
+    if retval
+        goto bad-fork-free
+    p.flags = p.flags & ~pf-kthread
+    if args.kthread
+        p.flags = p.flags | pf-kthread
+    if args.user-worker
+        /*
+         * Mark us a user worker, and block any signal that isn't
+         * fatal or STOP
+         */
+        p.flags = p.flags | pf-user-worker
+        siginitsetinv; ref p.blocked, (sigmask; sigkill) | (sigmask; sigstop)
+    if args.io-thread
+        p.flags = p.flags | pf-io-worker
+
+    if args.name
+        strscpy-pad; p.comm, args.name, (size-of; p.comm)
+
+    if clone-flags & clone-child-settid
+        p.set-child-tid = args.child-tid
+    else
+        p.set-child-tid = none
+    /*
+     * TID is cleared in mm_release() when the task exits
+     */
+    if clone-flags & clone-child-cleartid
+        p.clear-child-tid = args.child-tid
+    else
+        p.clear-child-tid = none
+
+    ftrace-graph-init-task; p
+
+    rt-mutex-init-task; p
+    raw-spin-lock-init; ref p.blocked-lock
+
+    lockdep-assert-irqs-enabled;
+    when build; config-prove-locking
+        debug-locks-warn-on; not p.softirqs-enabled
+
+    retval = copy-creds; p, clone-flags
+    if retval < 0
+        goto bad-fork-free
+
+    retval = -eagain
+    if is-rlimit-overlimit; (task-ucounts; p), ucount-rlimit-nproc, (rlimit; rlimit-nproc)
+        if p.real-cred.user != init-user and
+                not (capable; cap-sys-resource) and
+                not (capable; cap-sys-admin)
+            goto bad-fork-cleanup-count
+    current.flags = current.flags & ~pf-nproc-exceeded
+
+    /*
+     * If multiple threads are within copy_process(), then this check
+     * triggers too late. This doesn't hurt, the check is only there
+     * to stop root fork bombs.
+     */
+    retval = -eagain
+    if data-race; nr-threads >= max-threads
+        goto bad-fork-cleanup-count
+
+    delayacct-tsk-init; p /* Must remain after dup_task_struct() */
+    p.flags = p.flags & ~(pf-superpriv | pf-wq-worker | pf-idle | pf-no-setaffinity)
+    p.flags = p.flags | pf-forknoexec
+    init-list-head; ref p.children
+    init-list-head; ref p.sibling
+    rcu-copy-process; p
+    p.vfork-done = none
+    spin-lock-init; ref p.alloc-lock
+
+    init-sigpending; ref p.pending
+
+    p.gtime = 0
+    p.stime = 0
+    p.utime = 0
+    when build; config-arch-has-scaled-cputime
+        p.stimescaled = 0
+        p.utimescaled = 0
+
+    prev-cputime-init; ref p.prev-cputime
+
+    when build; config-virt-cpu-accounting-gen
+        seqcount-init; ref p.vtime.seqcount
+        p.vtime.starttime = 0
+        p.vtime.state = vtime-inactive
+
+    when build; config-io-uring
+        p.io-uring = none
+        retval = io-uring-fork; p
+        if unlikely; retval
+            goto bad-fork-cleanup-delayacct
+        retval = -eagain
+
+    p.default-timer-slack-ns = current.timer-slack-ns
+
+    when build; config-psi
+        p.psi-flags = 0
+
+    task-io-accounting-init; ref p.ioac
+    acct-clear-integrals; p
+
+    posix-cputimers-init; ref p.posix-cputimers
+    tick-dep-init-task; p
+
+    p.io-context = none
+    audit-set-context; p, none
+    cgroup-fork; p
+    if args.kthread
+        if not (set-kthread-struct; p)
+            goto bad-fork-cleanup-delayacct
+
+    when build; config-numa
+        p.mempolicy = mpol-dup; p.mempolicy
+        if is-err; p.mempolicy
+            retval = ptr-err; p.mempolicy
+            p.mempolicy = none
+            goto bad-fork-cleanup-delayacct
+
+    when build; config-cpusets
+        p.cpuset-mem-spread-rotor = numa-no-node
+        seqcount-spinlock-init; ref p.mems-allowed-seq, ref p.alloc-lock
+
+    when build; config-trace-irqflags
+        unsafe
+            memset; ref p.irqtrace, 0, (size-of; p.irqtrace)
+        p.irqtrace.hardirq-disable-ip = this-ip
+        p.irqtrace.softirq-enable-ip = this-ip
+        p.softirqs-enabled = 1
+        p.softirq-context = 0
+
+    p.pagefault-disabled = 0
+
+    lockdep-init-task; p
+
+    p.blocked-on = none /* not blocked yet */
+    p.blocked-donor = none /* nobody is boosting p yet */
+
+    when build; config-bcache
+        p.sequential-io = 0
+        p.sequential-io-avg = 0
+
+    unwind-task-init; p
+
+    /* Perform scheduler related setup. Assign this task to a CPU. */
+    retval = sched-fork; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-policy
+
+    retval = perf-event-init-task; p, clone-flags
+    if retval
+        goto bad-fork-sched-cancel-fork
+    retval = audit-alloc; p
+    if retval
+        goto bad-fork-cleanup-perf
+    /* copy all the process information */
+    shm-init-task; p
+    retval = security-task-alloc; p, clone-flags
+    if retval
+        goto bad-fork-cleanup-audit
+    retval = copy-semundo; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-security
+    retval = copy-files; clone-flags, p, args.no-files
+    if retval
+        goto bad-fork-cleanup-semundo
+    retval = copy-fs; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-files
+    retval = copy-sighand; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-fs
+    retval = copy-signal; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-sighand
+    retval = copy-mm; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-signal
+    retval = copy-namespaces; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-mm
+    retval = copy-io; clone-flags, p
+    if retval
+        goto bad-fork-cleanup-namespaces
+    retval = copy-thread; p, args
+    if retval
+        goto bad-fork-cleanup-io
+
+    stackleak-task-init; p
+
+    if pid != ref init-struct-pid
+        pid = alloc-pid; p.nsproxy.pid-ns-for-children, args.set-tid, args.set-tid-size
+        if is-err; pid
+            retval = ptr-err; pid
+            goto bad-fork-cleanup-thread
+
+    /*
+     * This has to happen after we've potentially unshared the file
+     * descriptor table (so that the pidfd doesn't leak into the child
+     * if the fd table isn't shared).
+     */
+    if clone-flags & clone-pidfd
+        flags unsigned = pidfd-stale
+
+        if clone-flags & clone-thread
+            flags = flags | pidfd-thread
+        if clone-flags & clone-pidfd-autokill
+            flags = flags | pidfd-autokill
+
+        /*
+         * Note that no task has been attached to @pid yet indicate
+         * that via CLONE_PIDFD.
+         */
+        retval = pidfd-prepare; pid, flags, ref pidfile
+        if retval < 0
+            goto bad-fork-free-pid
+        pidfd = retval
+
+        unsafe
+            retval = put-user; pidfd, args.pidfd
+        if retval
+            goto bad-fork-put-pidfd
+
+    when build; config-block
+        p.plug = none
+        p.flags = p.flags & ~pf-block-ts
+
+    futex-init-task; p
+
+    /*
+     * sigaltstack should be cleared when sharing the same VM
+     */
+    if (clone-flags & (clone-vm | clone-vfork)) == clone-vm
+        sas-ss-reset; p
+
+    /*
+     * Syscall tracing and stepping should be turned off in the
+     * child regardless of CLONE_PTRACE.
+     */
+    user-disable-single-step; p
+    clear-task-syscall-work; p, syscall-trace
+    when build; config-generic-entry or tif-syscall-emu
+        clear-task-syscall-work; p, syscall-emu
+
+    clear-tsk-latency-tracing; p
+
+    /* ok, now we should be set up.. */
+    p.pid = pid-nr; pid
+    if clone-flags & clone-thread
+        p.group-leader = current.group-leader
+        p.tgid = current.tgid
+    else
+        p.group-leader = ref p
+        p.tgid = p.pid
+
+    p.nr-dirtied = 0
+    p.nr-dirtied-pause = 128 >> (page-shift - 10)
+    p.dirty-paused-when = 0
+
+    p.pdeath-signal = 0
+    p.task-works = none
+    clear-posix-cputimers-work; p
+
+    when build; config-kretprobes
+        p.kretprobe-instances.first = none
+
+    when build; config-rethook
+        p.rethooks.first = none
+
+    /*
+     * Ensure that the cgroup subsystem policies allow the new process to be
+     * forked. It should be noted that the new process's css_set can be changed
+     * between here and cgroup_post_fork() if an organisation operation is in
+     * progress.
+     */
+    retval = cgroup-can-fork; p, args
+    if retval
+        goto bad-fork-put-pidfd
+
+    /*
+     * Now that the cgroups are pinned, re-clone the parent cgroup and put
+     * the new task on the correct runqueue. All this *before* the task
+     * becomes visible.
+     *
+     * This isn't part of ->can_fork() because while the re-cloning is
+     * cgroup specific, it unconditionally needs to place the task on a
+     * runqueue.
+     */
+    retval = sched-cgroup-fork; p, args
+    if retval
+        goto bad-fork-cancel-cgroup
+
+    if need-futex-hash-allocate-default; clone-flags
+        retval = futex-hash-allocate-default;
+        if retval
+            goto bad-fork-cancel-cgroup
+        /*
+         * If we fail beyond this point we don't free the allocated
+         * futex hash map. We assume that another thread will be created
+         * and makes use of it. The hash map will be freed once the main
+         * thread terminates.
+         */
+
+    /*
+     * From this point on we must avoid any synchronous user-space
+     * communication until we take the tasklist-lock. In particular, we do
+     * not want user-space to be able to predict the process start-time by
+     * stalling fork(2) after we recorded the start_time but before it is
+     * visible to the system.
+     */
+
+    p.start-time = ktime-get-ns;
+    p.start-boottime = ktime-get-boottime-ns;
+
+    /*
+     * Make it visible to the rest of the system, but dont wake it up yet.
+     * Need tasklist lock for parent etc handling!
+     */
+    write-lock-irq; ref tasklist-lock
+
+    /* CLONE_PARENT re-uses the old parent */
+    if clone-flags & (clone-parent | clone-thread)
+        p.real-parent = current.real-parent
+        p.parent-exec-id = current.parent-exec-id
+        if clone-flags & clone-thread
+            p.exit-signal = -1
+        else
+            p.exit-signal = current.group-leader.exit-signal
+    else
+        p.real-parent = current
+        p.parent-exec-id = current.self-exec-id
+        p.exit-signal = args.exit-signal
+
+    klp-copy-process; p
+
+    sched-core-fork; p
+
+    spin-lock; ref current.sighand.siglock
+
+    rv-task-fork; p
+
+    rseq-fork; p, clone-flags
+
+    /*
+     * If zap_pid_ns_processes() was called after alloc_pid(), the new
+     * child missed SIGKILL.  If current is not in the same namespace,
+     * we can't rely on fatal_signal_pending() below.
+     */
+    if unlikely; not ((ns-of-pid; pid).pid-allocated & pidns-adding)
+        retval = -enomem
+        goto bad-fork-core-free
+
+    /* Let kill terminate clone/fork in the middle */
+    if fatal-signal-pending; current
+        retval = -eintr
+        goto bad-fork-core-free
+
+    /* No more failure paths after this point. */
+
+    /*
+     * Copy seccomp details explicitly here, in case they were changed
+     * before holding sighand lock.
+     */
+    copy-seccomp; p
+
+    if clone-flags & clone-nnp
+        task-set-no-new-privs; p
+
+    init-task-pid-links; p
+    if likely; p.pid
+        ptrace-init-task; p, (clone-flags & clone-ptrace) or trace
+
+        init-task-pid; p, pidtype-pid, pid
+        if thread-group-leader; p
+            init-task-pid; p, pidtype-tgid, pid
+            init-task-pid; p, pidtype-pgid, (task-pgrp; current)
+            init-task-pid; p, pidtype-sid, (task-session; current)
+
+            if is-child-reaper; pid
+                ns pid-namespace = ns-of-pid; pid
+
+                assert-exclusive-writer; ref ns.child-reaper
+                write-once; ref ns.child-reaper, p
+                p.signal.flags = p.signal.flags | signal-unkillable
+
+            p.signal.shared-pending.signal = delayed.signal
+            p.signal.tty = tty-kref-get; current.signal.tty
+            /*
+             * Inherit has_child_subreaper flag under the same
+             * tasklist_lock with adding child to the process tree
+             * for propagate_has_child_subreaper optimization.
+             */
+            p.signal.has-child-subreaper =
+                p.real-parent.signal.has-child-subreaper or
+                p.real-parent.signal.is-child-subreaper
+            if clone-flags & clone-autoreap
+                p.signal.autoreap = 1
+            list-add-tail; ref p.sibling, ref p.real-parent.children
+            list-add-tail-rcu; ref p.tasks, ref init-task.tasks
+            attach-pid; p, pidtype-tgid
+            attach-pid; p, pidtype-pgid
+            attach-pid; p, pidtype-sid
+            this-cpu-inc; ref process-counts
+        else
+            current.signal.nr-threads = current.signal.nr-threads + 1
+            current.signal.quick-threads = current.signal.quick-threads + 1
+            atomic-inc; ref current.signal.live
+            refcount-inc; ref current.signal.sigcnt
+            task-join-group-stop; p
+            list-add-tail-rcu; ref p.thread-node, ref p.signal.thread-head
+
+        attach-pid; p, pidtype-pid
+        nr-threads = nr-threads + 1
+
+    total-forks = total-forks + 1
+    hlist-del-init; ref delayed.node
+    spin-unlock; ref current.sighand.siglock
+    syscall-tracepoint-update; p
+    write-unlock-irq; ref tasklist-lock
+
+    if pidfile
+        fd-install; pidfd, pidfile
+
+    proc-fork-connector; p
+    /*
+     * sched_ext needs @p to be associated with its cgroup in its post_fork
+     * hook. cgroup_post_fork() should come before sched_post_fork().
+     */
+    cgroup-post-fork; p, args
+    sched-post-fork; p
+    perf-event-fork; p
+
+    trace-task-newtask; p, clone-flags
+    uprobe-copy-process; p, clone-flags
+    user-events-fork; p, clone-flags
+
+    copy-oom-score-adj; clone-flags, p
+
+    return p
+
+    label bad-fork-core-free
+    sched-core-free; p
+    spin-unlock; ref current.sighand.siglock
+    write-unlock-irq; ref tasklist-lock
+
+    label bad-fork-cancel-cgroup
+    cgroup-cancel-fork; p, args
+
+    label bad-fork-put-pidfd
+    if clone-flags & clone-pidfd
+        fput; pidfile
+        put-unused-fd; pidfd
+
+    label bad-fork-free-pid
+    if pid != ref init-struct-pid
+        free-pid; pid
+
+    label bad-fork-cleanup-thread
+    exit-thread; p
+
+    label bad-fork-cleanup-io
+    if p.io-context
+        exit-io-context; p
+
+    label bad-fork-cleanup-namespaces
+    exit-nsproxy-namespaces; p
+
+    label bad-fork-cleanup-mm
+    if p.mm
+        mm-clear-owner; p.mm, p
+        mmput; p.mm
+
+    label bad-fork-cleanup-signal
+    if not (clone-flags & clone-thread)
+        free-signal-struct; p.signal
+
+    label bad-fork-cleanup-sighand
+    cleanup-sighand; p.sighand
+
+    label bad-fork-cleanup-fs
+    exit-fs; p /* blocking */
+
+    label bad-fork-cleanup-files
+    exit-files; p /* blocking */
+
+    label bad-fork-cleanup-semundo
+    exit-sem; p
+
+    label bad-fork-cleanup-security
+    security-task-free; p
+
+    label bad-fork-cleanup-audit
+    audit-free; p
+
+    label bad-fork-cleanup-perf
+    perf-event-free-task; p
+
+    label bad-fork-sched-cancel-fork
+    sched-cancel-fork; p
+
+    label bad-fork-cleanup-policy
+    lockdep-free-task; p
+    when build; config-numa
+        mpol-put; p.mempolicy
+
+    label bad-fork-cleanup-delayacct
+    io-uring-free; p
+    delayacct-tsk-free; p
+
+    label bad-fork-cleanup-count
+    dec-rlimit-ucounts; (task-ucounts; p), ucount-rlimit-nproc, 1
+    exit-cred-namespaces; p
+    exit-creds; p
+
+    label bad-fork-free
+    write-once; ref p.state, task-dead
+    exit-task-stack-account; p
+    put-task-stack; p
+    delayed-free-task; p
+
+    label fork-out
+    spin-lock-irq; ref current.sighand.siglock
+    hlist-del-init; ref delayed.node
+    spin-unlock-irq; ref current.sighand.siglock
+    return err-ptr; retval
+
+@static
+@inline
+function init-idle-pids void; idle task-struct
+    type pid-type
+
+    for type = pidtype-pid; type < pidtype-max; type = type + 1
+        init-hlist-node; ref idle.pid-links[type] /* not really needed */
+        init-task-pid; idle, type, ref init-struct-pid
+
+@static
+function idle-dummy int; dummy opaque
+    /* This function is never called */
+    return 0
+
+@init
+function fork-idle task-struct; cpu int
+    task task-struct
+    args kernel-clone-args = .kernel-clone-args;
+        flags=clone-vm,
+        fn=ref idle-dummy,
+        fn-arg=none,
+        kthread=1,
+        idle=1
+
+    task = copy-process; ref init-struct-pid, 0, (cpu-to-node; cpu), ref args
+    if not (is-err; task)
+        init-idle-pids; task
+        init-idle; task, cpu
+
+    return task
+
+/*
+ * This is like kernel_clone(), but shaved down and tailored to just
+ * creating io_uring workers. It returns a created task, or an error pointer.
+ * The returned task is inactive, and the caller must fire it up through
+ * wake_up_new_task(p). All signals are blocked in the created task.
+ */
+function create-io-thread task-struct; fn (function int; value opaque), arg opaque, node int
+    flags unsigned-long =
+        clone-fs | clone-files | clone-sighand | clone-thread |
+        clone-io | clone-vm | clone-untraced
+    args kernel-clone-args = .kernel-clone-args;
+        flags=flags,
+        fn=fn,
+        fn-arg=arg,
+        io-thread=1,
+        user-worker=1
+
+    return copy-process; none, 0, node, ref args
+
+/*
+ *  Ok, this is the main fork-routine.
+ *
+ * It copies the process, and if successful kick-starts
+ * it and waits for it to finish using the VM if required.
+ */
+function kernel-clone pid-t; args kernel-clone-args
+
+// fork.c lines 2695-3142
+    clone-flags u64 = args.flags
+    vfork completion
+    pid ref pid
+    p ref task-struct
+    trace int = 0
+    nr pid-t
+
+    /*
+     * Creating an empty mount namespace implies creating a new mount
+     * namespace.  Set this before copy_process() so that the
+     * CLONE_NEWNS|CLONE_FS mutual exclusion check works correctly.
+     */
+    if clone-flags & clone-empty-mntns
+        clone-flags = clone-flags | clone-newns
+        args.flags = clone-flags
+
+    /*
+     * For legacy clone() calls, CLONE_PIDFD uses the parent_tid argument
+     * to return the pidfd. Hence, CLONE_PIDFD and CLONE_PARENT_SETTID are
+     * mutually exclusive. With clone3() CLONE_PIDFD has grown a separate
+     * field in struct clone_args and it still doesn't make sense to have
+     * them both point at the same memory location. Performing this check
+     * here has the advantage that we don't need to have a separate helper
+     * to check for legacy clone().
+     */
+    if (clone-flags & clone-pidfd) and
+       (clone-flags & clone-parent-settid) and
+       (args.pidfd == args.parent-tid)
+        return -einval
+
+    if not (valid-signal; args.exit-signal)
+        return -einval
+
+    /*
+     * Determine whether and which event to report to ptracer.  When
+     * called from kernel_thread or CLONE_UNTRACED is explicitly
+     * requested, no event is reported; otherwise, report if the event
+     * for the type of forking is enabled.
+     */
+    if not (clone-flags & clone-untraced)
+        if clone-flags & clone-vfork
+            trace = ptrace-event-vfork
+        else if args.exit-signal != sigchld
+            trace = ptrace-event-clone
+        else
+            trace = ptrace-event-fork
+
+        if likely; not (ptrace-event-enabled; current, trace)
+            trace = 0
+
+    p = copy-process; none, trace, numa-no-node, args
+    add-latent-entropy;
+
+    if is-err; p
+        return ptr-err; p
+
+    /*
+     * Do this prior waking up the new thread - the thread pointer
+     * might get invalid after that point, if the thread exits quickly.
+     */
+    trace-sched-process-fork; current, p
+
+    pid = get-task-pid; p, pidtype-pid
+    nr = pid-vnr; pid
+
+    if clone-flags & clone-parent-settid
+        unsafe
+            put-user; nr, args.parent-tid
+
+    if clone-flags & clone-vfork
+        p.vfork-done = ref vfork
+        init-completion; ref vfork
+        get-task-struct; p
+
+    if (is-enabled; config-lru-gen-walks-mmu) and not (clone-flags & clone-vm)
+        /* lock the task to synchronize with memcg migration */
+        task-lock; p
+        lru-gen-add-mm; p.mm
+        task-unlock; p
+
+    wake-up-new-task; p
+
+    /* forking complete and child started to run, tell ptracer */
+    if unlikely; trace
+        ptrace-event-pid; trace, pid
+
+    if clone-flags & clone-vfork
+        if not (wait-for-vfork-done; p, ref vfork)
+            ptrace-event-pid; ptrace-event-vfork-done, pid
+
+    put-pid; pid
+    return nr
+
+/*
+ * Create a kernel thread.
+ */
+function kernel-thread pid-t; fn function from c-pointer of opaque to int, arg c-pointer of opaque, name borrowed-ref of const-char, flags unsigned-long
+    args kernel-clone-args = .kernel-clone-args;
+        flags=((flags | clone-vm | clone-untraced) & ~csignal)
+        exit-signal=(flags & csignal)
+        fn=fn
+        fn-arg=arg
+        name=name
+        kthread=1
+
+    return kernel-clone; ref args
+
+/*
+ * Create a user mode thread.
+ */
+function user-mode-thread pid-t; fn function from c-pointer of opaque to int, arg c-pointer of opaque, flags unsigned-long
+    args kernel-clone-args = .kernel-clone-args;
+        flags=((flags | clone-vm | clone-untraced) & ~csignal)
+        exit-signal=(flags & csignal)
+        fn=fn
+        fn-arg=arg
+
+    return kernel-clone; ref args
+
+when build; arch-want-sys-fork
+    syscall function fork long;
+        when build; config-mmu
+            args kernel-clone-args = .kernel-clone-args;
+                exit-signal=sigchld
+
+            return kernel-clone; ref args
+        else
+            /* can not support in nommu mode */
+            return -einval
+
+when build; arch-want-sys-vfork
+    syscall function vfork long;
+        args kernel-clone-args = .kernel-clone-args;
+            flags=(clone-vfork | clone-vm)
+            exit-signal=sigchld
+
+        return kernel-clone; ref args
+
+when build; arch-want-sys-clone
+    when build; config-clone-backwards
+        syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, tls unsigned-long, child-tidptr user-ref of int
+            args kernel-clone-args = .kernel-clone-args;
+                flags=((lower-32-bits; clone-flags) & ~csignal)
+                pidfd=parent-tidptr
+                child-tid=child-tidptr
+                parent-tid=parent-tidptr
+                exit-signal=((lower-32-bits; clone-flags) & csignal)
+                stack=newsp
+                tls=tls
+
+            return kernel-clone; ref args
+    else
+        when build; config-clone-backwards2
+            syscall function clone long; newsp unsigned-long, clone-flags unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                args kernel-clone-args = .kernel-clone-args;
+                    flags=((lower-32-bits; clone-flags) & ~csignal)
+                    pidfd=parent-tidptr
+                    child-tid=child-tidptr
+                    parent-tid=parent-tidptr
+                    exit-signal=((lower-32-bits; clone-flags) & csignal)
+                    stack=newsp
+                    tls=tls
+
+                return kernel-clone; ref args
+        else
+            when build; config-clone-backwards3
+                syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, stack-size int, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                    args kernel-clone-args = .kernel-clone-args;
+                        flags=((lower-32-bits; clone-flags) & ~csignal)
+                        pidfd=parent-tidptr
+                        child-tid=child-tidptr
+                        parent-tid=parent-tidptr
+                        exit-signal=((lower-32-bits; clone-flags) & csignal)
+                        stack=newsp
+                        tls=tls
+
+                    return kernel-clone; ref args
+            else
+                syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                    args kernel-clone-args = .kernel-clone-args;
+                        flags=((lower-32-bits; clone-flags) & ~csignal)
+                        pidfd=parent-tidptr
+                        child-tid=child-tidptr
+                        parent-tid=parent-tidptr
+                        exit-signal=((lower-32-bits; clone-flags) & csignal)
+                        stack=newsp
+                        tls=tls
+
+                    return kernel-clone; ref args
+
+static noinline function copy-clone-args-from-user int; kargs kernel-clone-args, uargs user-ref of clone-args, usize size-t
+    err int
+    args clone-args
+    kset-tid ref pid-t = kargs.set-tid
+
+    unsafe
+        build-bug-on; (offsetofend; clone-args, tls) != clone-args-size-ver0
+        build-bug-on; (offsetofend; clone-args, set-tid-size) != clone-args-size-ver1
+        build-bug-on; (offsetofend; clone-args, cgroup) != clone-args-size-ver2
+        build-bug-on; (sizeof; clone-args) != clone-args-size-ver2
+
+    if unlikely; usize > page-size
+        return -e2big
+    if unlikely; usize < clone-args-size-ver0
+        return -einval
+
+    unsafe
+        err = copy-struct-from-user; ref args, sizeof; args, uargs, usize
+    if err
+        return err
+
+    if unlikely; args.set-tid-size > max-pid-ns-level
+        return -einval
+
+    if unlikely; not args.set-tid and args.set-tid-size > 0
+        return -einval
+
+    if unlikely; args.set-tid and args.set-tid-size == 0
+        return -einval
+
+    /*
+     * Verify that higher 32bits of exit_signal are unset
+     */
+    if unlikely; args.exit-signal & ~(u64; csignal)
+        return -einval
+
+    if (args.flags & clone-into-cgroup) and
+       (args.cgroup > int-max or usize < clone-args-size-ver2)
+        return -einval
+
+    unsafe
+        kargs = .kernel-clone-args;
+            flags=args.flags
+            pidfd=(u64-to-user-ptr; args.pidfd)
+            child-tid=(u64-to-user-ptr; args.child-tid)
+            parent-tid=(u64-to-user-ptr; args.parent-tid)
+            exit-signal=args.exit-signal
+            stack=args.stack
+            stack-size=args.stack-size
+            tls=args.tls
+            set-tid-size=args.set-tid-size
+            cgroup=args.cgroup
+
+    unsafe
+        if args.set-tid and
+           (copy-from-user; kset-tid,
+                            u64-to-user-ptr; args.set-tid,
+                            kargs.set-tid-size * (sizeof; pid-t))
+            return -efault
+
+    kargs.set-tid = kset-tid
+
+    return 0
+
+/**
+ * clone3_stack_valid - check and prepare stack
+ * @kargs: kernel clone args
+ *
+ * Verify that the stack arguments userspace gave us are sane.
+ * In addition, set the stack direction for userspace since it's easy for us to
+ * determine.
+ */
+static inline function clone3-stack-valid bool; kargs kernel-clone-args
+    if kargs.stack == 0
+        if kargs.stack-size > 0
+            return false
+    else
+        if kargs.stack-size == 0
+            return false
+
+        unsafe
+            if not (access-ok; reinterpret-user-reference; void, kargs.stack, kargs.stack-size)
+                return false
+
+        when build; config-stack-growsup
+            none
+        else
+            kargs.stack = kargs.stack + kargs.stack-size
+
+    return true
+
+static function clone3-args-valid bool; kargs kernel-clone-args
+    /* Verify that no unknown flags are passed along. */
+    if kargs.flags &
+       ~(clone-legacy-flags | clone-clear-sighand |
+         clone-into-cgroup | clone-autoreap | clone-nnp |
+         clone-pidfd-autokill | clone-empty-mntns)
+        return false
+
+    /*
+     * - make the CLONE_DETACHED bit reusable for clone3
+     * - make the CSIGNAL bits reusable for clone3
+     */
+    if kargs.flags & (clone-detached | (csignal & ~clone-newtime))
+        return false
+
+    if (kargs.flags & (clone-sighand | clone-clear-sighand)) ==
+       (clone-sighand | clone-clear-sighand)
+        return false
+
+    if (kargs.flags & (clone-thread | clone-parent)) and kargs.exit-signal
+        return false
+
+    if not (clone3-stack-valid; kargs)
+        return false
+
+    return true
+
+/**
+ * sys_clone3 - create a new process with specific properties
+ * @uargs: argument structure
+ * @size:  size of @uargs
+ *
+ * clone3() is the extensible successor to clone()/clone2().
+ * It takes a struct as argument that is versioned by its size.
+ *
+ * Return: On success, a positive PID for the child process.
+ *         On error, a negative errno number.
+ */
+syscall function clone3 long; uargs user-ref of clone-args, size size-t
+    err int
+
+    kargs kernel-clone-args
+    set-tid array of pid-t = .array; length=max-pid-ns-level
+
+    when build; arch-broken-sys-clone3
+        build-warning; "clone3() entry point is missing, please fix"
+        return -enosys
+
+    kargs.set-tid = ref set-tid
+
+    err = copy-clone-args-from-user; ref kargs, uargs, size
+    if err
+        return err
+
+    if not (clone3-args-valid; ref kargs)
+        return -einval
+
+    return kernel-clone; ref kargs
+
+function walk-process-tree void; top borrowed-ref of task-struct, visitor proc-visitor, data c-pointer of opaque
+    leader borrowed-ref of task-struct
+    parent borrowed-ref of task-struct
+    child borrowed-ref of task-struct
+    res int
+
+    read-lock; ref tasklist-lock
+    top = top.group-leader
+    leader = top
+
+    label down
+    for parent in (for-each-thread; leader)
+        for child in (list-for-each-entry; ref parent.children, sibling)
+            res = visitor; child, data
+            if res
+                if res < 0
+                    goto out
+                leader = child
+                goto down
+
+            label up
+            none
+
+    if leader != top
+        child = leader
+        parent = child.real-parent
+        leader = parent.group-leader
+        goto up
+
+    label out
+    read-unlock; ref tasklist-lock
+
+when build; arch-min-mmstruct-align
+    none
+else
+    arch-min-mmstruct-align unsigned-int = 0
+
+static function sighand-ctor void; data borrowed-ref of opaque
+    sighand borrowed-ref of sighand-struct
+
+    unsafe
+        sighand = reinterpret-reference; sighand-struct, data
+
+    spin-lock-init; ref sighand.siglock
+    init-waitqueue-head; ref sighand.signalfd-wqh
+
+init function mm-cache-init void;
+    mm-size unsigned-int
+
+    /*
+     * The mm_cpumask is located at the end of mm_struct, and is
+     * dynamically sized based on the maximum CPU number this system
+     * can have, taking hotplug into account (nr_cpu_ids).
+     */
+    unsafe
+        mm-size = (sizeof; mm-struct) + (cpumask-size;) + (mm-cid-size;)
+
+    unsafe
+        mm-cachep = kmem-cache-create-usercopy;
+            "mm_struct",
+            mm-size,
+            arch-min-mmstruct-align,
+            slab-hwcache-align | slab-panic | slab-account,
+            offsetof; mm-struct, saved-auxv,
+            sizeof-field; mm-struct, saved-auxv,
+            none
+
+init function proc-caches-init void;
+    unsafe
+        sighand-cachep = kmem-cache-create;
+            "sighand_cache",
+            sizeof; sighand-struct,
+            0,
+            slab-hwcache-align | slab-panic | slab-typesafe-by-rcu |
+            slab-account,
+            sighand-ctor
+
+        signal-cachep = kmem-cache-create;
+            "signal_cache",
+            sizeof; signal-struct,
+            0,
+            slab-hwcache-align | slab-panic | slab-account,
+            none
+
+    exec-state-init;
+
+    unsafe
+        files-cachep = kmem-cache-create;
+            "files_cache",
+            sizeof; files-struct,
+            0,
+            slab-hwcache-align | slab-panic | slab-account,
+            none
+
+        fs-cachep = kmem-cache-create;
+            "fs_cache",
+            sizeof; fs-struct,
+            0,
+            slab-hwcache-align | slab-panic | slab-account,
+            none
+
+    mmap-init;
+    nsproxy-cache-init;
+
+/*
+ * Check constraints on flags passed to the unshare system call.
+ */
+static function check-unshare-flags int; unshare-flags unsigned-long
+
+// fork.c lines 3143-3409
+    if (unshare-flags & ~(clone-thread | clone-fs | clone-sighand |
+            clone-vm | clone-files | clone-sysvsem |
+            clone-ns-all | unshare-empty-mntns)) != 0
+        return -einval
+
+    /*
+     * Not implemented, but pretend it works if there is nothing
+     * to unshare.  Note that unsharing the address space or the
+     * signal handlers also need to unshare the signal queues (aka
+     * CLONE_THREAD).
+     */
+    if (unshare-flags & (clone-thread | clone-sighand | clone-vm)) != 0
+        if not (thread-group-empty; current)
+            return -einval
+
+    if (unshare-flags & (clone-sighand | clone-vm)) != 0
+        if (refcount-read; ref current.sighand.count) > 1
+            return -einval
+
+    if (unshare-flags & clone-vm) != 0
+        if not (current-is-single-threaded;)
+            return -einval
+
+    return 0
+
+/*
+ * Unshare the filesystem structure if it is being shared
+ */
+static function unshare-fs int; unshare-flags unsigned-long, new-fsp ref ref fs-struct
+    fs ref fs-struct = current.fs
+
+    if (unshare-flags & clone-fs) == 0 or fs == none
+        return 0
+
+    /* don't need lock here; in the worst case we'll do useless copy */
+    if (unshare-flags & clone-newns) == 0 and fs.users == 1
+        return 0
+
+    new-fsp = (copy-fs-struct; fs)
+    if new-fsp == none
+        return -enomem
+
+    return 0
+
+/*
+ * Unshare file descriptor table if it is being shared
+ */
+static function unshare-fd int; unshare-flags unsigned-long, new-fdp ref ref files-struct
+    fd ref files-struct = current.files
+
+    if (unshare-flags & clone-files) != 0 and
+            (fd != none and (atomic-read; ref fd.count) > 1)
+        unsafe
+            fd = (dup-fd; fd, none)
+            if is-err; fd
+                return (ptr-err; fd)
+        new-fdp = fd
+
+    return 0
+
+/*
+ * unshare allows a process to 'unshare' part of the process
+ * context which was originally shared using clone.  copy_*
+ * functions used by kernel_clone() cannot be used here directly
+ * because they modify an inactive task_struct that is being
+ * constructed. Here we are modifying the current, active,
+ * task_struct.
+ */
+function ksys-unshare int; unshare-flags unsigned-long
+    fs ref fs-struct
+    new-fs ref fs-struct = none
+    new-fd ref files-struct = none
+    new-cred ref cred = none
+    new-nsproxy ref nsproxy = none
+    do-sysvsem int = 0
+    err int
+
+    /*
+     * If unsharing a user namespace must also unshare the thread group
+     * and unshare the filesystem root and working directories.
+     */
+    if (unshare-flags & clone-newuser) != 0
+        unshare-flags = unshare-flags | clone-thread | clone-fs
+
+    /*
+     * If unsharing vm, must also unshare signal handlers.
+     */
+    if (unshare-flags & clone-vm) != 0
+        unshare-flags = unshare-flags | clone-sighand
+
+    /*
+     * If unsharing a signal handlers, must also unshare the signal queues.
+     */
+    if (unshare-flags & clone-sighand) != 0
+        unshare-flags = unshare-flags | clone-thread
+
+    /*
+     * If unsharing namespace, must also unshare filesystem information.
+     */
+    if (unshare-flags & unshare-empty-mntns) != 0
+        unshare-flags = unshare-flags | clone-newns
+    if (unshare-flags & clone-newns) != 0
+        unshare-flags = unshare-flags | clone-fs
+
+    err = (check-unshare-flags; unshare-flags)
+    if err != 0
+        goto bad-unshare-out
+
+    /*
+     * CLONE_NEWIPC must also detach from the undolist: after switching
+     * to a new ipc namespace, the semaphore arrays from the old
+     * namespace are unreachable.
+     */
+    if (unshare-flags & (clone-newipc | clone-sysvsem)) != 0
+        do-sysvsem = 1
+
+    err = (unshare-fs; unshare-flags, ref new-fs)
+    if err != 0
+        goto bad-unshare-out
+
+    err = (unshare-fd; unshare-flags, ref new-fd)
+    if err != 0
+        goto bad-unshare-cleanup-fs
+
+    err = (unshare-userns; unshare-flags, ref new-cred)
+    if err != 0
+        goto bad-unshare-cleanup-fd
+
+    err = (unshare-nsproxy-namespaces;
+        unshare-flags, ref new-nsproxy, new-cred, new-fs)
+    if err != 0
+        goto bad-unshare-cleanup-cred
+
+    if new-cred != none
+        err = (set-cred-ucounts; new-cred)
+        if err != 0
+            goto bad-unshare-cleanup-nsproxy
+
+    if new-fs != none or new-fd != none or do-sysvsem != 0 or
+            new-cred != none or new-nsproxy != none
+        if do-sysvsem != 0
+            /*
+             * CLONE_SYSVSEM is equivalent to sys_exit().
+             */
+            exit-sem; current
+
+        if (unshare-flags & clone-newipc) != 0
+            /* Orphan segments in old ns (see sem above). */
+            exit-shm; current
+            shm-init-task; current
+
+        if new-nsproxy != none
+            switch-task-namespaces; current, move new-nsproxy
+            new-nsproxy = none
+
+        task-lock; current
+
+        if new-fs != none
+            fs = current.fs
+            read-seqlock-excl; ref fs.seq
+            current.fs = new-fs
+            fs.users = fs.users - 1
+            if fs.users != 0
+                new-fs = none
+            else
+                new-fs = fs
+            read-sequnlock-excl; ref fs.seq
+
+        if new-fd != none
+            swap; ref current.files, ref new-fd
+
+        task-unlock; current
+
+        if new-cred != none
+            /* Install the new user namespace */
+            commit-creds; move new-cred
+            new-cred = none
+
+    perf-event-namespaces; current
+
+    label bad-unshare-cleanup-nsproxy
+    if new-nsproxy != none
+        put-nsproxy; move new-nsproxy
+
+    label bad-unshare-cleanup-cred
+    if new-cred != none
+        put-cred; move new-cred
+
+    label bad-unshare-cleanup-fd
+    if new-fd != none
+        put-files-struct; move new-fd
+
+    label bad-unshare-cleanup-fs
+    if new-fs != none
+        free-fs-struct; move new-fs
+
+    label bad-unshare-out
+    return err
+
+syscall function unshare long; unshare-flags unsigned-long
+    return (ksys-unshare; unshare-flags)
+
+/*
+ *	Helper to unshare the files of the current task.
+ *	We don't want to expose copy_files internals to
+ *	the exec layer of the kernel.
+ */
+function unshare-files int;
+    task ref task-struct = current
+    old ref files-struct
+    copy ref files-struct = none
+    error int
+
+    error = (unshare-fd; clone-files, ref copy)
+    if error != 0 or copy == none
+        return error
+
+    old = task.files
+    task-lock; task
+    task.files = move copy
+    task-unlock; task
+    put-files-struct; move old
+    return 0
+
+static function sysctl-max-threads int; table borrowed-ref of ctl-table, write int, buffer user-ref of opaque, lenp borrowed-ref of size-t, ppos borrowed-ref of loff-t
+    t ctl-table
+    ret int
+    threads int = max-threads
+    min int = 1
+    max int = max-thread-id-space
+
+    t = table
+    t.data = ref threads
+    t.extra1 = ref min
+    t.extra2 = ref max
+
+    unsafe
+        ret = (proc-dointvec-minmax; ref t, write, buffer, lenp, ppos)
+    if ret != 0 or write == 0
+        return ret
+
+    max-threads = threads
+
+    return 0
+
+static constant fork-sysctl-table array of ctl-table =
+    .array;
+        .ctl-table;
+            procname = "threads-max"
+            data = none
+            maxlen = (size-of; int)
+            mode = 0o644
+            proc-handler = ref sysctl-max-threads
+
+static init function init-fork-sysctl int;
+    register-sysctl-init; "kernel", ref fork-sysctl-table
+    return 0
+
+subsys-initcall; ref init-fork-sysctl
+
+// Preserve C/link spellings independently of source and generated Rust names.
+native-name; cleanup-sighand, "__cleanup_sighand"
+native-name; delayed-free-task, "__delayed_free_task"
+native-name; mmdrop, "__mmdrop"
+native-name; mmput, "__mmput"
+native-name; put-task-struct, "__put_task_struct"
+native-name; put-task-struct-rcu-cb, "__put_task_struct_rcu_cb"
