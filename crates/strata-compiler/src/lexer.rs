@@ -48,6 +48,7 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
                     &mut diagnostics,
                 );
             }
+            let token_count = tokens.len();
             lex_line(
                 source,
                 line,
@@ -57,7 +58,10 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
                 &mut diagnostics,
                 &mut block_comment_start,
             );
-            if line.trim_end().ends_with(">>") {
+            if tokens[token_count..]
+                .iter()
+                .any(|token| token.kind == TokenKind::BlockString)
+            {
                 block_string_indent = Some(indent);
             }
         }
