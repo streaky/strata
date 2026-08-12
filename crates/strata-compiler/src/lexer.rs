@@ -1,5 +1,5 @@
-use crate::{Diagnostic, SourceFile, Span};
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind, Trivia, TriviaKind};
+use crate::{Diagnostic, SourceFile, Span};
 
 pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     let text = source.text();
@@ -32,23 +32,58 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
             || (trimmed.starts_with("/*") && !trimmed.contains("*/"));
         if !in_block_string {
             if !comment_only {
-                check_indent(source, offset, &line.as_bytes()[..indent], &mut indent_style, &mut diagnostics);
-                emit_indentation(source, offset, indent, &mut indent_stack, &mut tokens, &mut diagnostics);
+                check_indent(
+                    source,
+                    offset,
+                    &line.as_bytes()[..indent],
+                    &mut indent_style,
+                    &mut diagnostics,
+                );
+                emit_indentation(
+                    source,
+                    offset,
+                    indent,
+                    &mut indent_stack,
+                    &mut tokens,
+                    &mut diagnostics,
+                );
             }
-            lex_line(source, line, offset, &mut tokens, &mut trivia, &mut diagnostics, &mut block_comment_start);
+            lex_line(
+                source,
+                line,
+                offset,
+                &mut tokens,
+                &mut trivia,
+                &mut diagnostics,
+                &mut block_comment_start,
+            );
             if line.trim_end().ends_with(">>") {
                 block_string_indent = Some(indent);
             }
         }
         if raw.ends_with('\n') {
-            push_token(source, &mut tokens, TokenKind::Newline, offset + line.len(), offset + raw.len(), Attachment::Detached);
+            push_token(
+                source,
+                &mut tokens,
+                TokenKind::Newline,
+                offset + line.len(),
+                offset + raw.len(),
+                Attachment::Detached,
+            );
         }
         offset += raw.len();
     }
     if text.is_empty() {
         logical_lines.push((0, String::new()));
     } else if !text.ends_with('\n') {
-        push_token(source, &mut tokens, TokenKind::Newline, text.len(), text.len(), Attachment::Detached);
+        push_token(
+            source,
+            &mut tokens,
+            TokenKind::Newline,
+            text.len(),
+            text.len(),
+            Attachment::Detached,
+        );
     }
     if let Some(start) = block_comment_start {
         diagnostics.push(Diagnostic::error(
@@ -59,12 +94,30 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     }
     while indent_stack.len() > 1 {
         indent_stack.pop();
-        push_token(source, &mut tokens, TokenKind::Dedent, text.len(), text.len(), Attachment::Detached);
+        push_token(
+            source,
+            &mut tokens,
+            TokenKind::Dedent,
+            text.len(),
+            text.len(),
+            Attachment::Detached,
+        );
     }
-    push_token(source, &mut tokens, TokenKind::Eof, text.len(), text.len(), Attachment::Detached);
+    push_token(
+        source,
+        &mut tokens,
+        TokenKind::Eof,
+        text.len(),
+        text.len(),
+        Attachment::Detached,
+    );
 
     if diagnostics.is_empty() {
-        Ok(LexedSource { tokens, trivia, logical_lines })
+        Ok(LexedSource {
+            tokens,
+            trivia,
+            logical_lines,
+        })
     } else {
         Err(diagnostics)
     }
@@ -85,35 +138,65 @@ fn lex_line(
         if block_comment_start.is_some() {
             if let Some(relative_end) = line[index..].find("*/") {
                 let end = index + relative_end + 2;
-                trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + index, base + end), text: line[index..end].to_owned() });
+                trivia.push(Trivia {
+                    kind: TriviaKind::BlockComment,
+                    span: Span::new(source.id(), base + index, base + end),
+                    text: line[index..end].to_owned(),
+                });
                 *block_comment_start = None;
                 index = end;
                 continue;
             }
-            trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + index, base + line.len()), text: line[index..].to_owned() });
+            trivia.push(Trivia {
+                kind: TriviaKind::BlockComment,
+                span: Span::new(source.id(), base + index, base + line.len()),
+                text: line[index..].to_owned(),
+            });
             break;
         }
         let start = index;
         match bytes[index] {
             b' ' | b'\t' => {
                 index += 1;
-                while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') { index += 1; }
-                trivia.push(Trivia { kind: TriviaKind::Whitespace, span: Span::new(source.id(), base + start, base + index), text: line[start..index].to_owned() });
+                while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') {
+                    index += 1;
+                }
+                trivia.push(Trivia {
+                    kind: TriviaKind::Whitespace,
+                    span: Span::new(source.id(), base + start, base + index),
+                    text: line[start..index].to_owned(),
+                });
             }
             b'#' => {
-                trivia.push(Trivia { kind: TriviaKind::LineComment, span: Span::new(source.id(), base + start, base + bytes.len()), text: line[start..].to_owned() });
+                trivia.push(Trivia {
+                    kind: TriviaKind::LineComment,
+                    span: Span::new(source.id(), base + start, base + bytes.len()),
+                    text: line[start..].to_owned(),
+                });
                 break;
             }
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
-                trivia.push(Trivia { kind: TriviaKind::LineComment, span: Span::new(source.id(), base + start, base + bytes.len()), text: line[start..].to_owned() });
+                trivia.push(Trivia {
+                    kind: TriviaKind::LineComment,
+                    span: Span::new(source.id(), base + start, base + bytes.len()),
+                    text: line[start..].to_owned(),
+                });
                 break;
             }
             b'/' if bytes.get(index + 1) == Some(&b'*') => {
                 if let Some(relative_end) = line[index + 2..].find("*/") {
                     index += relative_end + 4;
-                    trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + start, base + index), text: line[start..index].to_owned() });
+                    trivia.push(Trivia {
+                        kind: TriviaKind::BlockComment,
+                        span: Span::new(source.id(), base + start, base + index),
+                        text: line[start..index].to_owned(),
+                    });
                 } else {
-                    trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + start, base + line.len()), text: line[start..].to_owned() });
+                    trivia.push(Trivia {
+                        kind: TriviaKind::BlockComment,
+                        span: Span::new(source.id(), base + start, base + line.len()),
+                        text: line[start..].to_owned(),
+                    });
                     *block_comment_start = Some(base + start);
                     break;
                 }
@@ -125,11 +208,17 @@ fn lex_line(
                         index += 1;
                         continue;
                     }
-                    if !is_joiner(bytes[index]) { break; }
+                    if !is_joiner(bytes[index]) {
+                        break;
+                    }
                     let joiner_start = index;
-                    while index < bytes.len() && is_joiner(bytes[index]) { index += 1; }
+                    while index < bytes.len() && is_joiner(bytes[index]) {
+                        index += 1;
+                    }
                     let unit_start = index;
-                    while index < bytes.len() && bytes[index].is_ascii_alphanumeric() { index += 1; }
+                    while index < bytes.len() && bytes[index].is_ascii_alphanumeric() {
+                        index += 1;
+                    }
                     if unit_start == index {
                         index = joiner_start;
                         break;
@@ -143,16 +232,62 @@ fn lex_line(
                         break;
                     }
                 }
-                push_token(source, tokens, TokenKind::Identifier, base + start, base + index, attachment(line, start, index));
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Identifier,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
             }
             byte if byte.is_ascii_digit() => {
                 index += 1;
-                while index < bytes.len() && bytes[index].is_ascii_digit() { index += 1; }
-                push_token(source, tokens, TokenKind::Number, base + start, base + index, attachment(line, start, index));
+                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                    index += 1;
+                }
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Number,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
             }
-            b'.' => { index += 1; push_token(source, tokens, TokenKind::Dot, base + start, base + index, attachment(line, start, index)); }
-            b';' => { index += 1; push_token(source, tokens, TokenKind::Semicolon, base + start, base + index, attachment(line, start, index)); }
-            b',' => { index += 1; push_token(source, tokens, TokenKind::Comma, base + start, base + index, attachment(line, start, index)); }
+            b'.' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Dot,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b';' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Semicolon,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b',' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Comma,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
             b'=' => {
                 index += 1;
                 let kind = if bytes.get(index) == Some(&b'=') {
@@ -161,16 +296,103 @@ fn lex_line(
                 } else {
                     TokenKind::Assign
                 };
-                push_token(source, tokens, kind, base + start, base + index, attachment(line, start, index));
+                push_token(
+                    source,
+                    tokens,
+                    kind,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
             }
-            b':' => { index += 1; push_token(source, tokens, TokenKind::Colon, base + start, base + index, attachment(line, start, index)); }
-            b'|' => { index += 1; push_token(source, tokens, TokenKind::Pipe, base + start, base + index, attachment(line, start, index)); }
-            b'(' => { index += 1; push_token(source, tokens, TokenKind::OpenParen, base + start, base + index, attachment(line, start, index)); }
-            b')' => { index += 1; push_token(source, tokens, TokenKind::CloseParen, base + start, base + index, attachment(line, start, index)); }
-            b'[' => { index += 1; push_token(source, tokens, TokenKind::OpenBracket, base + start, base + index, attachment(line, start, index)); }
-            b']' => { index += 1; push_token(source, tokens, TokenKind::CloseBracket, base + start, base + index, attachment(line, start, index)); }
-            b'{' => { index += 1; push_token(source, tokens, TokenKind::OpenBrace, base + start, base + index, attachment(line, start, index)); }
-            b'}' => { index += 1; push_token(source, tokens, TokenKind::CloseBrace, base + start, base + index, attachment(line, start, index)); }
+            b':' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Colon,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b'|' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::Pipe,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b'(' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::OpenParen,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b')' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::CloseParen,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b'[' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::OpenBracket,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b']' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::CloseBracket,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b'{' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::OpenBrace,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
+            b'}' => {
+                index += 1;
+                push_token(
+                    source,
+                    tokens,
+                    TokenKind::CloseBrace,
+                    base + start,
+                    base + index,
+                    attachment(line, start, index),
+                );
+            }
             b'\'' => {
                 index += 1;
                 let mut escaped = false;
@@ -180,13 +402,26 @@ fn lex_line(
                         break;
                     }
                     escaped = bytes[index] == b'\\' && !escaped;
-                    if bytes[index] != b'\\' { escaped = false; }
+                    if bytes[index] != b'\\' {
+                        escaped = false;
+                    }
                     index += 1;
                 }
                 if !line[start + 1..index].ends_with('\'') {
-                    diagnostics.push(Diagnostic::error("S0002", "unterminated string literal", Span::new(source.id(), base + start, base + index)));
+                    diagnostics.push(Diagnostic::error(
+                        "S0002",
+                        "unterminated string literal",
+                        Span::new(source.id(), base + start, base + index),
+                    ));
                 } else {
-                    push_token(source, tokens, TokenKind::String, base + start, base + index, attachment(line, start, index));
+                    push_token(
+                        source,
+                        tokens,
+                        TokenKind::String,
+                        base + start,
+                        base + index,
+                        attachment(line, start, index),
+                    );
                 }
             }
             b'>' if expression_start(line, start) => {
@@ -200,17 +435,34 @@ fn lex_line(
                         ));
                         break;
                     }
-                    push_token(source, tokens, TokenKind::BlockString, base + start, base + index, attachment(line, start, index));
+                    push_token(
+                        source,
+                        tokens,
+                        TokenKind::BlockString,
+                        base + start,
+                        base + index,
+                        attachment(line, start, index),
+                    );
                     break;
                 } else {
                     index = bytes.len();
-                    push_token(source, tokens, TokenKind::TailString, base + start, base + index, attachment(line, start, index));
+                    push_token(
+                        source,
+                        tokens,
+                        TokenKind::TailString,
+                        base + start,
+                        base + index,
+                        attachment(line, start, index),
+                    );
                     break;
                 }
             }
             byte if is_joiner(byte) || matches!(byte, b'!' | b'<' | b'>' | b'%') => {
                 index += 1;
-                if index < bytes.len() && bytes[index] == byte && matches!(byte, b'+' | b'-' | b'<' | b'>') {
+                if index < bytes.len()
+                    && bytes[index] == byte
+                    && matches!(byte, b'+' | b'-' | b'<' | b'>')
+                {
                     index += 1;
                 } else if index < bytes.len() && bytes[index] == b'=' {
                     index += 1;
@@ -236,7 +488,11 @@ fn lex_line(
             }
             other => {
                 let width = line[start..].chars().next().map_or(1, char::len_utf8);
-                diagnostics.push(Diagnostic::error("L0001", format!("invalid source character `{}`", char::from(other)), Span::new(source.id(), base + start, base + start + width)));
+                diagnostics.push(Diagnostic::error(
+                    "L0001",
+                    format!("invalid source character `{}`", char::from(other)),
+                    Span::new(source.id(), base + start, base + start + width),
+                ));
                 index += width;
             }
         }
@@ -251,10 +507,18 @@ fn check_indent(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if indent.contains(&b' ') && indent.contains(&b'\t') {
-        diagnostics.push(Diagnostic::error("S0001", "mixed tabs and spaces in indentation", Span::new(source.id(), offset, offset + indent.len())));
+        diagnostics.push(Diagnostic::error(
+            "S0001",
+            "mixed tabs and spaces in indentation",
+            Span::new(source.id(), offset, offset + indent.len()),
+        ));
     } else if let Some(first) = indent.first().copied() {
         match style {
-            Some(selected) if *selected != first => diagnostics.push(Diagnostic::error("S0001", "indentation style changes within the file", Span::new(source.id(), offset, offset + indent.len()))),
+            Some(selected) if *selected != first => diagnostics.push(Diagnostic::error(
+                "S0001",
+                "indentation style changes within the file",
+                Span::new(source.id(), offset, offset + indent.len()),
+            )),
             None => *style = Some(first),
             _ => {}
         }
@@ -272,14 +536,32 @@ fn emit_indentation(
     let current = *stack.last().expect("indentation stack is never empty");
     if indent > current {
         stack.push(indent);
-        push_token(source, tokens, TokenKind::Indent, offset, offset + indent, Attachment::Detached);
+        push_token(
+            source,
+            tokens,
+            TokenKind::Indent,
+            offset,
+            offset + indent,
+            Attachment::Detached,
+        );
     } else if indent < current {
         while stack.last().is_some_and(|level| *level > indent) {
             stack.pop();
-            push_token(source, tokens, TokenKind::Dedent, offset + indent, offset + indent, Attachment::Detached);
+            push_token(
+                source,
+                tokens,
+                TokenKind::Dedent,
+                offset + indent,
+                offset + indent,
+                Attachment::Detached,
+            );
         }
         if stack.last() != Some(&indent) {
-            diagnostics.push(Diagnostic::error("L0004", "inconsistent dedent", Span::new(source.id(), offset, offset + indent)));
+            diagnostics.push(Diagnostic::error(
+                "L0004",
+                "inconsistent dedent",
+                Span::new(source.id(), offset, offset + indent),
+            ));
         }
     }
 }
@@ -289,7 +571,9 @@ fn is_joiner(byte: u8) -> bool {
 }
 
 fn indentation_len(line: &str) -> usize {
-    line.bytes().take_while(|byte| matches!(byte, b' ' | b'\t')).count()
+    line.bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count()
 }
 
 fn expression_start(line: &str, index: usize) -> bool {
@@ -303,8 +587,20 @@ fn expression_start(line: &str, index: usize) -> bool {
         || before.ends_with('{')
 }
 
-fn push_token(source: &SourceFile, tokens: &mut Vec<Token>, kind: TokenKind, start: usize, end: usize, attachment: Attachment) {
-    tokens.push(Token { kind, span: Span::new(source.id(), start, end), text: source.text()[start..end].to_owned(), attachment });
+fn push_token(
+    source: &SourceFile,
+    tokens: &mut Vec<Token>,
+    kind: TokenKind,
+    start: usize,
+    end: usize,
+    attachment: Attachment,
+) {
+    tokens.push(Token {
+        kind,
+        span: Span::new(source.id(), start, end),
+        text: source.text()[start..end].to_owned(),
+        attachment,
+    });
 }
 
 fn attachment(line: &str, start: usize, end: usize) -> Attachment {

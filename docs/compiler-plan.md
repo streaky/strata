@@ -256,6 +256,13 @@ Indentation cases must cover consistently space-indented and consistently tab-in
 
 Exit criterion: lexer corpus covers every token class and malformed boundary; all diagnostics point to the originating bytes and remain correct for multibyte UTF-8.
 
+Implementation status (completed on the `indentation-lexer` capability branch):
+
+- the shared compiler pipeline now uses compiler-owned tokens, trivia, byte spans, and lexical diagnostics before the bootstrap parser;
+- the lexer emits structural newline and indentation transitions, retains whitespace and all three comment forms, and distinguishes contextual text markers from comparison and shift operators;
+- focused lexer contracts cover identifier joiners, attachment, punctuation, literals, comments, indentation, malformed boundaries, and byte-accurate diagnostics, including multibyte invalid identifier input;
+- the milestone-zero logical-line parser remains as a temporary consumer view over authoritative lexer output and is replaced by the lossless token parser in milestone 2.
+
 ### Milestone 2 — Lossless parser and formatter-ready tree
 
 Deliver:

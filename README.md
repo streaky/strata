@@ -21,7 +21,7 @@ Its guiding priorities are:
 
 Strata is in the design and early compiler stage. The language document describes the proposed full contract; the implemented subset is intentionally much smaller.
 
-The working `strata` CLI can check, lower, build, and run the milestone-zero hello program through generated Rust and Cargo. Development is growing that coherent subset through executable examples and conformance cases.
+The working `strata` CLI can check, lower, build, and run the initial hello program through generated Rust and Cargo. Its shared frontend now includes the milestone-one tokenizing, indentation-aware lexer; the accepted language subset remains intentionally narrow until the lossless parser milestone consumes that token stream.
 
 ## Learn more
 
