@@ -3,37 +3,73 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+struct CliFailure {
+    code: u8,
+    message: String,
+}
+
+impl CliFailure {
+    fn usage() -> Self {
+        Self {
+            code: 2,
+            message: usage(),
+        }
+    }
+
+    fn diagnostic(path: PathBuf, code: &'static str, message: String, exit_code: u8) -> Self {
+        let source = strata_compiler::SourceFile::new(0, path, String::new());
+        let diagnostic =
+            strata_compiler::Diagnostic::error(code, message, strata_compiler::Span::new(0, 0, 0));
+        Self {
+            code: exit_code,
+            message: diagnostic.render(&source),
+        }
+    }
+
+    fn backend(message: String) -> Self {
+        Self::diagnostic(PathBuf::from("<generated Rust>"), "S9002", message, 5)
+    }
+}
+
 fn main() -> ExitCode {
     match run(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
         Ok(code) => code,
-        Err(message) => {
-            eprintln!("{message}");
-            ExitCode::FAILURE
+        Err(failure) => {
+            eprint!("{}", failure.message);
+            ExitCode::from(failure.code)
         }
     }
 }
 
-fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
+fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
-        return Err(usage());
+        return Err(CliFailure::usage());
     };
     if command == "--version" || command == "-V" {
         println!("strata {}", strata_compiler::VERSION);
         return Ok(ExitCode::SUCCESS);
     }
     if !matches!(command, "check" | "rust" | "build" | "run") {
-        return Err(usage());
+        return Err(CliFailure::usage());
     }
-    let source_path = arguments.get(1).map(PathBuf::from).ok_or_else(usage)?;
-    let source_text = fs::read_to_string(&source_path)
-        .map_err(|error| format!("{}: error[S0000]: {error}", source_path.display()))?;
+    let source_path = arguments
+        .get(1)
+        .map(PathBuf::from)
+        .ok_or_else(CliFailure::usage)?;
+    let source_text = fs::read_to_string(&source_path).map_err(|error| {
+        CliFailure::diagnostic(source_path.clone(), "S0000", error.to_string(), 3)
+    })?;
     let compilation = match strata_compiler::compile(&source_path, source_text) {
         Ok(compilation) => compilation,
         Err(failure) => {
-            for diagnostic in &failure.diagnostics {
-                eprint!("{}", diagnostic.render(&failure.source));
-            }
-            return Ok(ExitCode::FAILURE);
+            return Err(CliFailure {
+                code: 3,
+                message: failure
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.render(&failure.source))
+                    .collect(),
+            });
         }
     };
     if command == "rust" {
@@ -48,9 +84,9 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
         .args([cargo_command, "--quiet", "--manifest-path"])
         .arg(crate_dir.join("Cargo.toml"))
         .status()
-        .map_err(|error| format!("failed to start Cargo: {error}"))?;
+        .map_err(|error| CliFailure::backend(format!("failed to start Cargo: {error}")))?;
     if !status.success() {
-        return Ok(ExitCode::FAILURE);
+        return Err(CliFailure::backend(format!("Cargo {cargo_command} failed")));
     }
     if command == "check" {
         return Ok(ExitCode::SUCCESS);
@@ -65,19 +101,27 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
     let status = Command::new(executable)
         .args(program_arguments)
         .status()
-        .map_err(|error| format!("failed to run generated program: {error}"))?;
+        .map_err(|error| {
+            CliFailure::backend(format!("failed to run generated program: {error}"))
+        })?;
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
     ))
 }
 
-fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, String> {
-    let source = source
-        .canonicalize()
-        .map_err(|error| format!("cannot locate source file {}: {error}", source.display()))?;
-    let root = source
-        .parent()
-        .ok_or_else(|| format!("source file {} has no parent directory", source.display()))?;
+fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, CliFailure> {
+    let source = source.canonicalize().map_err(|error| {
+        CliFailure::backend(format!(
+            "cannot locate source file {}: {error}",
+            source.display()
+        ))
+    })?;
+    let root = source.parent().ok_or_else(|| {
+        CliFailure::backend(format!(
+            "source file {} has no parent directory",
+            source.display()
+        ))
+    })?;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in rust.bytes() {
         hash ^= u64::from(byte);
@@ -86,16 +130,18 @@ fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, String> {
     Ok(root.join(".strata/build").join(format!("{hash:016x}")))
 }
 
-fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), String> {
+fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure> {
     fs::create_dir_all(directory.join("src"))
-        .map_err(|error| format!("cannot create generated crate: {error}"))?;
+        .map_err(|error| CliFailure::backend(format!("cannot create generated crate: {error}")))?;
     fs::write(
         directory.join("Cargo.toml"),
         "[package]\nname = \"strata_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
     )
-    .map_err(|error| format!("cannot write generated manifest: {error}"))?;
+    .map_err(|error| {
+        CliFailure::backend(format!("cannot write generated manifest: {error}"))
+    })?;
     write_if_changed(&directory.join("src/main.rs"), rust.as_bytes())
-        .map_err(|error| format!("cannot write generated Rust: {error}"))?;
+        .map_err(|error| CliFailure::backend(format!("cannot write generated Rust: {error}")))?;
     Ok(())
 }
 
@@ -105,17 +151,27 @@ fn write_if_changed(path: &Path, content: &[u8]) -> std::io::Result<()> {
     }
     fs::write(path, content)
 }
-fn ensure_rust_toolchain() -> Result<(), String> {
+fn ensure_rust_toolchain() -> Result<(), CliFailure> {
     let status = Command::new("cargo")
         .arg("--version")
         .output()
         .map_err(|error| {
-            format!("error[S9001]: Cargo is required to compile generated Rust: {error}")
+            CliFailure::diagnostic(
+                PathBuf::from("<toolchain>"),
+                "S9001",
+                format!("Cargo is required to compile generated Rust: {error}"),
+                4,
+            )
         })?;
     if status.status.success() {
         Ok(())
     } else {
-        Err("error[S9001]: Cargo prerequisite check failed".to_owned())
+        Err(CliFailure::diagnostic(
+            PathBuf::from("<toolchain>"),
+            "S9001",
+            "Cargo prerequisite check failed".to_owned(),
+            4,
+        ))
     }
 }
 
