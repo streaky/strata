@@ -25,11 +25,15 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
             None => false,
         };
         let trimmed = line[indent..].trim_start();
-        let comment_only = block_comment_start.is_some()
-            || trimmed.is_empty()
-            || trimmed.starts_with('#')
-            || trimmed.starts_with("//")
-            || (trimmed.starts_with("/*") && !trimmed.contains("*/"));
+        let comment_only = if block_comment_start.is_some() {
+            line.find("*/")
+                .is_none_or(|end| line[end + 2..].trim().is_empty())
+        } else {
+            trimmed.is_empty()
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("//")
+                || (trimmed.starts_with("/*") && !trimmed.contains("*/"))
+        };
         if !in_block_string {
             if !comment_only {
                 check_indent(
