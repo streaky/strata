@@ -27,14 +27,11 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, String> {
     let source_path = arguments.get(1).map(PathBuf::from).ok_or_else(usage)?;
     let source_text = fs::read_to_string(&source_path)
         .map_err(|error| format!("{}: error[S0000]: {error}", source_path.display()))?;
-    let diagnostic_source = source_text.clone();
     let compilation = match strata_compiler::compile(&source_path, source_text) {
         Ok(compilation) => compilation,
-        Err(diagnostics) => {
-            let source =
-                strata_compiler::SourceFile::new(0, source_path.clone(), diagnostic_source);
-            for diagnostic in diagnostics {
-                eprint!("{}", diagnostic.render(&source));
+        Err(failure) => {
+            for diagnostic in &failure.diagnostics {
+                eprint!("{}", diagnostic.render(&failure.source));
             }
             return Ok(ExitCode::FAILURE);
         }

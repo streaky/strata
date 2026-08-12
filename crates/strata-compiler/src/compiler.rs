@@ -34,15 +34,32 @@ pub struct Compilation {
     pub rust: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct CompilationFailure {
+    pub source: SourceFile,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl std::ops::Deref for CompilationFailure {
+    type Target = [Diagnostic];
+
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostics
+    }
+}
+
 /// Compiles one Strata source file through parsing, resolution, and Rust lowering.
 ///
 /// # Errors
 ///
 /// Returns every source-oriented diagnostic produced by the shared frontend.
-pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Vec<Diagnostic>> {
+pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
     let source = SourceFile::new(0, path.into(), text);
     let tokens = lex(&source);
-    let syntax = parse(&source, &tokens)?;
+    let syntax = parse(&source, &tokens).map_err(|diagnostics| CompilationFailure {
+        source: source.clone(),
+        diagnostics,
+    })?;
     let program = resolve(syntax);
     let ir = lower(&program);
     let rust = emit_rust(&ir, &source);
