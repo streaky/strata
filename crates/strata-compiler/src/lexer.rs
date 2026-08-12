@@ -192,9 +192,16 @@ fn lex_line(
             b'>' if expression_start(line, start) => {
                 if bytes.get(index + 1) == Some(&b'>') {
                     index += 2;
-                    let kind = if index == bytes.len() { TokenKind::BlockString } else { TokenKind::Operator };
-                    push_token(source, tokens, kind, base + start, base + index, attachment(line, start, index));
-                    if kind == TokenKind::BlockString { break; }
+                    if index != bytes.len() {
+                        diagnostics.push(Diagnostic::error(
+                            "S0004",
+                            "block string marker `>>` must be the final content on its line",
+                            Span::new(source.id(), base + start, base + line.len()),
+                        ));
+                        break;
+                    }
+                    push_token(source, tokens, TokenKind::BlockString, base + start, base + index, attachment(line, start, index));
+                    break;
                 } else {
                     index = bytes.len();
                     push_token(source, tokens, TokenKind::TailString, base + start, base + index, attachment(line, start, index));
