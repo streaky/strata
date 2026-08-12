@@ -141,14 +141,26 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
                 ));
             } else if let Some(value) = value.strip_prefix('>') {
                 message = Some(value.to_owned());
-            } else if value.starts_with('\'') {
-                if value.len() >= 2 && value.ends_with('\'') {
-                    message = Some(unescape(
-                        &value[1..value.len() - 1],
-                        source,
-                        offset + indent_len + 8,
-                        &mut errors,
-                    ));
+            } else if let Some(quoted) = value.strip_prefix('\'') {
+                if let Some(closing) = closing_quote(quoted) {
+                    if closing + 1 == quoted.len() {
+                        message = Some(unescape(
+                            &quoted[..closing],
+                            source,
+                            offset + indent_len + 8,
+                            &mut errors,
+                        ));
+                    } else {
+                        errors.push(Diagnostic::error(
+                            "S0004",
+                            "content after closing string quote is not supported",
+                            Span::new(
+                                source.id(),
+                                offset + indent_len + 9 + closing,
+                                offset + line.len(),
+                            ),
+                        ));
+                    }
                 } else {
                     errors.push(Diagnostic::error(
                         "S0002",
@@ -239,6 +251,20 @@ fn duplicate(source: &SourceFile, offset: usize, line: &str, description: &str) 
         format!("duplicate {description}"),
         Span::new(source.id(), offset, offset + line.len()),
     )
+}
+
+fn closing_quote(value: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if character == '\'' && !escaped {
+            return Some(index);
+        }
+        escaped = character == '\\' && !escaped;
+        if character != '\\' {
+            escaped = false;
+        }
+    }
+    None
 }
 
 fn indentation_len(line: &str) -> usize {
