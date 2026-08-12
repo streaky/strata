@@ -230,7 +230,7 @@ Deliver:
 - identifiers with operator-bearing joiners, including `<` and `>`, while a terminal joiner followed by a digits-only unit is rejected;
 - comparison and shift operators using `<`, `>`, `<<`, and `>>`, with `>` and `>>` additionally opening tail and block strings in expression-start position; these tokens never delimit generic arguments;
 - structural punctuation and spacing-sensitive operator attachment, including `++`/`--` as declared postfix tokens;
-- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix, and the left-attached trailing `>` in `list<string>`;
+- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix, the left-attached trailing `>` in `list<string>`, and the no-space `===` spelling as `==` followed by an invalid structural `=`;
 
 Required conformance boundaries include:
 
@@ -246,6 +246,7 @@ print .concat
 count-1
 -einval
 list<string>
+value===other
 ```
 
 Indentation cases must cover consistently space-indented and consistently tab-indented files, a mixture within one indentation prefix, and a style change between different code lines in one file.
@@ -264,7 +265,7 @@ Deliver:
 - `if`/`else`, `while`, collection and three-clause `for`, `return`, `break`, and `continue` syntax;
 - parser recovery at newline and dedent boundaries;
 - normalized parse-tree serializer for goldens;
-- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters and recognition of angle-bracket generic intent in type position with a canonical `list of string` fix.
+- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters and recognition of angle-bracket generic intent in type position with a canonical `list of string` fix;
 
 Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 
@@ -276,6 +277,7 @@ Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 - call semicolon precedence, named arguments, and grouping of nested calls;
 - grouping calls inside the clauses of a three-clause `for`;
 - `is a` as identity against an ordinary binding versus type membership when `a` is followed by a complete type expression.
+- type expressions that preserve sufficient structure for later resolution of core names, explicitly imported descriptor bindings, union members, constructors, and finite descriptor alternatives without treating fixed-width names as parser keywords.
 
 Invalid adjacency and missing grouping must produce source-oriented diagnostics with valid explicit-semicolon and parenthesized-call fixes; the parser must never repair them silently.
 
@@ -297,7 +299,7 @@ Deliver:
 - explicit `global` handling for program-global creation/replacement and rejection of plain top-level assignment where a global operation is required;
 - duplicate, shadowing, visibility/inaccessibility, unresolved-name, and same-scope object-form collision diagnostics;
 - idempotent reimport of the same object-form export, with aliases required for distinct colliding exports;
-- fixed bootstrap importer limited to the versioned `/core output`, `/core types`, `/core errors`, and `/collections` module table, processed as a structural compilation phase rather than an ordinary runtime call; `/collections` exposes only the collection subset admitted by milestone 4;
+- fixed bootstrap importer whose milestone-3 module table registers versioned `/core output`, `/core types`, `/core errors`, and `/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core types`, while milestone 4 populates `/collections` with its selected collection subset;
 - the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`;
 - import resolution that does not create an ordinary binding automatically, and proof that an ordinary binding named `import` cannot alter structural import syntax or importer selection.
 
@@ -312,6 +314,7 @@ Deliver:
 - direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, `string`, and `none`, where the Rust representation preserves the complete Strata contract;
 - core `int` as an exact signed integer with adaptive `i64`, `i128`, and arbitrary-precision tiers, including normalization to the smallest exact tier;
 - the initial integer support component and lowering hooks for checked tier promotion, exact wide operations, normalization, and capability rejection where arbitrary-precision promotion is unavailable;
+- explicit `/core types` resolution for fixed-width descriptor objects: programs import dot-object descriptors and bind ordinary type names, while the exact default prelude remains unchanged;
 - typed literals and inferred local bindings, with destination-range checking applied to every compile-time constant expression and signed fixed-width minima accepted without first rejecting their positive magnitude;
 - typed parameters, optional parameters with defaults, and return contracts;
 - initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
@@ -324,22 +327,24 @@ Deliver:
 - positional and named argument binding, arity and default checks, explicit zero-argument `;`, and duplicate-argument errors;
 - semantic distinction among calls, member access, and dot-objects passed explicitly as ordinary argument values;
 - strict left-to-right operand and argument evaluation, receiver-before-selection, exactly-once assignment receiver/index evaluation, `and`/`or` short-circuiting, and call-site defaults after supplied arguments in parameter order;
-- truth protocol initially implemented for core types only;
+- truth and core text-display protocols implemented for the supported core types, with `print` consuming canonical scalar display left to right and appending a newline; arbitrary `bytes`, unsupported values, and locale/styled formatting are not guessed;
 - branch and loop checking, postfix-update placement and integer-family semantics, loop-control placement, unreachable-code facts, and definite return analysis;
 - default `string.length` measured in grapheme clusters, either backed by the required segmentation capability or rejected with a capability diagnostic suggesting explicit implemented `bytes`, `scalars`, or `graphemes` views; another unit must never be substituted silently;
 - an explicit minimal collection subset for iteration, with mutation accepted only where ordinary assignment cannot expose aliasing that violates deferred universal COW semantics;
 - version-one identity restricted to canonical compiler-owned descriptor objects, including type descriptors exposed by `.type`; ordinary scalars, strings, and collections are identity-less, so even `x is x` is false for them, while `===` is rejected with the explicit `left == right and left.type is right.type` spelling;
+- canonical type descriptors as source-observable values with stable identity, while version-one type expressions and coercion destinations must resolve to finite compiler-known descriptor alternatives and may be erased only when source behavior is preserved;
 - explicit unsupported-feature diagnostics for source-declared type parameters rather than accidental parser or type-checker failures;
 - finite dynamic bindings only where all alternatives lower soundly without a universal box.
 
-Receiver-based text behavior must be tested using the canonical object model, for example:
+Core text display and receiver-based text behavior must be exercised through the canonical object model, including integer output:
 
 ```text
 message = ': '.concat; project-name, build-target, build-status
 print; message
+print; completed-count
 ```
 
-Exit criterion: semantic and lowering conformance for `fizz-buzz` and `build-report` proves the specified integer, type, call, evaluation-order, and control-flow contracts; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, and capability mistakes fail at Strata source spans.
+Exit criterion: semantic and lowering conformance for a program that exercises the same contracts as `fizz-buzz` and `build-report` proves the specified integer, canonical scalar text-display, type-descriptor, call, evaluation-order, and control-flow behavior; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, display, descriptor-resolution, and capability mistakes fail at Strata source spans. If the text-display protocol is not yet implemented when milestone 4 begins, the initial executable fixture may print literal strings only, but integer-rendering conformance is required before the milestone exits.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -352,7 +357,7 @@ Deliver:
 - integration of the adaptive core-`int` support component into the explicit Rust IR, preserving checked tier promotion, exact wide operations, result normalization, normative runtime failures, and target capability diagnostics;
 - structured expression/block emission with a pinned formatter policy;
 - generated `Cargo.toml`, source tree, compiler metadata, and entrypoint;
-- deterministic inclusion of the integer support crate in generated projects from source bundled with the installed compiler, without registry or network access; its content identity and compiler-relative resolution enter the build key;
+- deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
 - `cargo check`, build, and run process wrappers with captured structured output;
 - `strata rust` output or path display suitable for inspection.
