@@ -40,6 +40,8 @@ fn all_commands_share_the_hello_pipeline() {
     assert!(build.status.success());
     let executable = String::from_utf8(build.stdout).unwrap();
     assert!(Path::new(executable.trim()).is_file());
+    let source_root = hello().parent().unwrap().canonicalize().unwrap();
+    assert!(Path::new(executable.trim()).starts_with(source_root.join(".strata")));
 
     let run = Command::new(binary)
         .args(["run", hello().to_str().unwrap()])
@@ -72,5 +74,38 @@ fn help_succeeds_and_extra_arguments_are_rejected() {
         String::from_utf8(extra.stderr)
             .unwrap()
             .starts_with("usage:")
+    );
+}
+
+#[test]
+fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
+    let binary = env!("CARGO_BIN_EXE_strata");
+    let missing = Command::new(binary)
+        .args(["check", "missing.strata"])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(3));
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("error[S0000]")
+    );
+
+    let invalid_path = std::env::temp_dir().join(format!(
+        "strata-invalid-{}-{}.strata",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("cli")
+    ));
+    fs::write(&invalid_path, "namespace invalid\n").unwrap();
+    let invalid = Command::new(binary)
+        .args(["check", invalid_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    fs::remove_file(invalid_path).unwrap();
+    assert_eq!(invalid.status.code(), Some(3));
+    assert!(
+        String::from_utf8(invalid.stderr)
+            .unwrap()
+            .contains("error[S0003]")
     );
 }

@@ -26,6 +26,35 @@ fn rejects_mixed_indentation() {
 }
 
 #[test]
+fn blank_lines_do_not_select_indentation_style() {
+    let source = HELLO
+        .replace(
+            "function main\n  print; >>",
+            "function main\n \n\tprint; >>",
+        )
+        .replace("\n    Hello from Strata!", "\n\t\tHello from Strata!")
+        .replace("\n    Tail strings", "\n\t\tTail strings");
+    strata_compiler::compile("blank-indent.strata", source).unwrap();
+}
+
+#[test]
+fn diagnoses_content_after_a_closed_quote() {
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; 'hello' # unsupported trailing comment",
+    );
+    let failure = strata_compiler::compile("trailing-content.strata", source).unwrap_err();
+    assert!(failure.iter().any(|diagnostic| {
+        diagnostic.code == "S0004" && diagnostic.message.contains("after closing string quote")
+    }));
+    assert!(
+        !failure
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("unterminated"))
+    );
+}
+
+#[test]
 fn compilation_failure_owns_the_original_source() {
     let source = HELLO.replace("print = .print", "print = .missing");
     let failure = strata_compiler::compile("owned.strata", source.clone()).unwrap_err();
