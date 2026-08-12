@@ -110,6 +110,14 @@ fn strings_comments_and_trivia_retain_exact_source() {
 }
 
 #[test]
+fn comments_do_not_change_expression_start() {
+    let lexed = lex_source("x = /* c */ >tail text");
+    assert!(lexed.tokens.iter().any(|token| {
+        token.kind == TokenKind::TailString && token.text == ">tail text"
+    }));
+}
+
+#[test]
 fn block_strings_are_contextual_and_require_a_clean_marker_line() {
     let lexed = lex_source("message = >>\n  literal # text\nnext = left >> right");
     assert!(

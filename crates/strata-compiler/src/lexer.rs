@@ -434,7 +434,7 @@ fn lex_line(
                     );
                 }
             }
-            b'>' if expression_start(line, start) => {
+            b'>' if expression_start(tokens) => {
                 if bytes.get(index + 1) == Some(&b'>') {
                     index += 2;
                     if index != bytes.len() {
@@ -587,15 +587,22 @@ fn indentation_len(line: &str) -> usize {
         .count()
 }
 
-fn expression_start(line: &str, index: usize) -> bool {
-    let before = line[..index].trim_end();
-    before.is_empty()
-        || before.ends_with('=')
-        || before.ends_with(';')
-        || before.ends_with(',')
-        || before.ends_with('(')
-        || before.ends_with('[')
-        || before.ends_with('{')
+fn expression_start(tokens: &[Token]) -> bool {
+    tokens.last().is_none_or(|token| {
+        matches!(
+            token.kind,
+            TokenKind::Newline
+                | TokenKind::Indent
+                | TokenKind::Dedent
+                | TokenKind::Assign
+                | TokenKind::Semicolon
+                | TokenKind::Comma
+                | TokenKind::OpenParen
+                | TokenKind::OpenBracket
+                | TokenKind::OpenBrace
+                | TokenKind::Operator
+        )
+    })
 }
 
 fn push_token(
