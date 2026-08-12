@@ -816,7 +816,7 @@ After this declaration, ordinary lookup of `print` through the program-global ti
 
 A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
 
-Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, and `.uint128` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -1095,6 +1095,8 @@ At minimum, the language requires protocols for:
 The core text-display protocol produces a `string` for human-facing output. Version one implements it for `string`, `int`, every fixed-width integer, `float`, `float32`, `float64`, `bool`, and `none`. Strings are returned unchanged; integers use base-ten digits with a leading `-` only when negative and no grouping; floating-point values use the shortest round-trippable decimal spelling while preserving negative zero and spelling non-finite values `inf`, `-inf`, and `nan`; booleans and absence render as `true`, `false`, and `none`. `bytes` deliberately does not implement text display because arbitrary bytes are not Unicode text.
 
 The core `print` object accepts values implementing text display, invokes that protocol left to right, writes the resulting text, and terminates the record with a newline. A value without the protocol is a source type error when known statically and a typed runtime error otherwise. Formatting policy beyond this canonical scalar display remains in explicitly imported formatting facilities; `print` does not obtain locale, width, precision, or arbitrary object formatting implicitly.
+
+Version one admits a dynamic binding only when its alternatives form a finite compiler-known set. Protocol availability and typed-boundary compatibility are therefore checked across every alternative statically. If any possible alternative lacks text display, passing that binding to `print` is a source type error; the first-version compiler does not defer that case to the runtime. The typed runtime-error rule above applies to later or foreign erased dynamic values whose complete alternatives are unavailable at compilation.
 
 A particular object need not implement every protocol.
 
@@ -2811,6 +2813,8 @@ A `no-std` build uses a minimal support crate and target-provided capabilities.
 Features that can be compiled away remain available. Features that require unavailable runtime support are rejected at source level.
 
 The target capability model records whether arbitrary-precision `int` promotion and its required allocation are available. Lacking that capability does not change `int` into a bounded or wrapping type: the compiler must prove that every reachable value remains within a target-supported representation or reject the program with a capability diagnostic. Engineers selecting guaranteed bounded, allocation-free arithmetic use an explicit fixed-width integer type.
+
+The minimal support layer includes the adaptive integer representation and its normative integer failures when core `int` first requires them. This is part of the same layered support architecture: hosted and allocation-capable targets may provide arbitrary-precision storage, while constrained targets use proof or capability rejection rather than changed integer semantics.
 
 ### 22.5 Layout and ABI
 

@@ -230,7 +230,7 @@ Deliver:
 - identifiers with operator-bearing joiners, including `<` and `>`, while a terminal joiner followed by a digits-only unit is rejected;
 - comparison and shift operators using `<`, `>`, `<<`, and `>>`, with `>` and `>>` additionally opening tail and block strings in expression-start position; these tokens never delimit generic arguments;
 - structural punctuation and spacing-sensitive operator attachment, including `++`/`--` as declared postfix tokens;
-- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix, the left-attached trailing `>` in `list<string>`, and the no-space `===` spelling as `==` followed by an invalid structural `=`;
+- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, and attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix;
 
 Required conformance boundaries include:
 
@@ -249,6 +249,8 @@ list<string>
 value===other
 ```
 
+The lexer must tokenize `value === other` and `value===other` consistently as `==` followed by structural `=`, and must tokenize `list<string>` without treating angle brackets as generic delimiters. Milestone 2 owns the contextual rejection and fixes for both spellings.
+
 Indentation cases must cover consistently space-indented and consistently tab-indented files, a mixture within one indentation prefix, and a style change between different code lines in one file.
 
 Exit criterion: lexer corpus covers every token class and malformed boundary; all diagnostics point to the originating bytes and remain correct for multibyte UTF-8.
@@ -265,7 +267,7 @@ Deliver:
 - `if`/`else`, `while`, collection and three-clause `for`, `return`, `break`, and `continue` syntax;
 - parser recovery at newline and dedent boundaries;
 - normalized parse-tree serializer for goldens;
-- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters and recognition of angle-bracket generic intent in type position with a canonical `list of string` fix;
+- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters, `===` with an explicit equality/type-identity fix, and angle-bracket generic intent in type position with a canonical `list of string` fix;
 
 Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 
@@ -277,7 +279,8 @@ Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 - call semicolon precedence, named arguments, and grouping of nested calls;
 - grouping calls inside the clauses of a three-clause `for`;
 - `is a` as identity against an ordinary binding versus type membership when `a` is followed by a complete type expression.
-- type expressions that preserve sufficient structure for later resolution of core names, explicitly imported descriptor bindings, union members, constructors, and finite descriptor alternatives without treating fixed-width names as parser keywords.
+
+The delivered tree must also preserve sufficient type-expression structure for later resolution of core names, explicitly imported descriptor bindings, union members, constructors, and finite descriptor alternatives without treating fixed-width names as parser keywords.
 
 Invalid adjacency and missing grouping must produce source-oriented diagnostics with valid explicit-semicolon and parenthesized-call fixes; the parser must never repair them silently.
 
@@ -327,14 +330,14 @@ Deliver:
 - positional and named argument binding, arity and default checks, explicit zero-argument `;`, and duplicate-argument errors;
 - semantic distinction among calls, member access, and dot-objects passed explicitly as ordinary argument values;
 - strict left-to-right operand and argument evaluation, receiver-before-selection, exactly-once assignment receiver/index evaluation, `and`/`or` short-circuiting, and call-site defaults after supplied arguments in parameter order;
-- truth and core text-display protocols implemented for the supported core types, with `print` consuming canonical scalar display left to right and appending a newline; arbitrary `bytes`, unsupported values, and locale/styled formatting are not guessed;
+- truth and core text-display protocols implemented for the supported core types, with `print` consuming canonical scalar display left to right and appending a newline; arbitrary `bytes`, unsupported values, and locale/styled formatting are not guessed; float display must explicitly normalize non-finite spellings to `inf`, `-inf`, and `nan` rather than inherit Rust's `NaN`, while preserving negative zero and shortest round-trippable finite output;
 - branch and loop checking, postfix-update placement and integer-family semantics, loop-control placement, unreachable-code facts, and definite return analysis;
 - default `string.length` measured in grapheme clusters, either backed by the required segmentation capability or rejected with a capability diagnostic suggesting explicit implemented `bytes`, `scalars`, or `graphemes` views; another unit must never be substituted silently;
 - an explicit minimal collection subset for iteration, with mutation accepted only where ordinary assignment cannot expose aliasing that violates deferred universal COW semantics;
 - version-one identity restricted to canonical compiler-owned descriptor objects, including type descriptors exposed by `.type`; ordinary scalars, strings, and collections are identity-less, so even `x is x` is false for them, while `===` is rejected with the explicit `left == right and left.type is right.type` spelling;
 - canonical type descriptors as source-observable values with stable identity, while version-one type expressions and coercion destinations must resolve to finite compiler-known descriptor alternatives and may be erased only when source behavior is preserved;
 - explicit unsupported-feature diagnostics for source-declared type parameters rather than accidental parser or type-checker failures;
-- finite dynamic bindings only where all alternatives lower soundly without a universal box.
+- finite dynamic bindings only where all alternatives lower soundly without a universal box; because version one knows every alternative in such a binding, protocol availability and typed-boundary compatibility are checked statically, so unsupported text display or argument compatibility is rejected at compile time rather than entering the interim runtime-failure contract.
 
 Core text display and receiver-based text behavior must be exercised through the canonical object model, including integer output:
 
@@ -360,11 +363,11 @@ Deliver:
 - deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
 - `cargo check`, build, and run process wrappers with captured structured output;
-- `strata rust` output or path display suitable for inspection.
+- `strata rust` output or path display suitable for inspection, clearly distinguishing authored generated modules from vendored support source.
 
 Generated artifacts should be organized under a project-local ignored directory or a user cache, never mixed with authored source. A `--keep-generated` or stable development path may expose them intentionally.
 
-Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens.
+Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens. Goldens pin canonical float display for `nan`, `inf`, `-inf`, negative zero, and shortest round-trippable finite values, plus adjacent `print` calls that prove record separation and newline behavior; generated-project goldens include both authored lowered modules and the vendored support copy.
 
 ### Milestone 6 — Source diagnostics across Rust
 
