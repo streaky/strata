@@ -79,6 +79,11 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
 
     while let Some((offset, line)) = lines.next() {
         let indent_len = indentation_len(line);
+        let raw_content = &line[indent_len..];
+        let content = raw_content.trim_end();
+        if content.is_empty() || content.starts_with('#') || content.starts_with("//") {
+            continue;
+        }
         check_indentation(
             source,
             offset,
@@ -86,20 +91,39 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
             &mut indent_style,
             &mut errors,
         );
-        let raw_content = &line[indent_len..];
-        let content = raw_content.trim_end();
-        if content.is_empty() || content.starts_with('#') || content.starts_with("//") {
-            continue;
-        }
         if content.starts_with("namespace ") && indent_len == 0 {
-            namespace = Some(content[10..].trim().to_owned());
+            if namespace.is_some() {
+                errors.push(duplicate(source, offset, line, "namespace declaration"));
+            } else {
+                namespace = Some(content[10..].trim().to_owned());
+            }
         } else if content == "from /core output import .print" && indent_len == 0 {
-            output_path = Some("/core output".to_owned());
+            if output_path.is_some() {
+                errors.push(duplicate(source, offset, line, "output import"));
+            } else {
+                output_path = Some("/core output".to_owned());
+            }
         } else if content == "print = .print" && indent_len == 0 {
-            print_binding = Some("print".to_owned());
+            if print_binding.is_some() {
+                errors.push(duplicate(source, offset, line, "print binding"));
+            } else {
+                print_binding = Some("print".to_owned());
+            }
         } else if content == "function main" && indent_len == 0 {
-            in_main = true;
+            if in_main {
+                errors.push(duplicate(source, offset, line, "`main` function"));
+            } else {
+                in_main = true;
+            }
         } else if in_main && indent_len > 0 && raw_content.starts_with("print; ") {
+            if message.is_some() {
+                errors.push(Diagnostic::error(
+                    "S0005",
+                    "only one statement is supported in `main` by this compiler version",
+                    Span::new(source.id(), offset + indent_len, offset + line.len()),
+                ));
+                continue;
+            }
             let value = &raw_content[7..];
             if value == ">>" {
                 message = parse_block_string(
@@ -202,6 +226,13 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
     } else {
         Err(errors)
     }
+}
+fn duplicate(source: &SourceFile, offset: usize, line: &str, description: &str) -> Diagnostic {
+    Diagnostic::error(
+        "S0005",
+        format!("duplicate {description}"),
+        Span::new(source.id(), offset, offset + line.len()),
+    )
 }
 
 fn indentation_len(line: &str) -> usize {
