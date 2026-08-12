@@ -350,9 +350,15 @@ class widget
 
 A block begins when the next logical line is more deeply indented and ends on dedent.
 
-Tabs are not valid indentation. A leading indentation prefix containing a tab—including any mixture of tabs and spaces—is a compile-time error. The lexer must not expand tabs, guess an indentation width, or silently repair the line; it must report the offending source location as inconsistent indentation. Tabs remain valid inside quoted strings through escapes such as `\t`.
+Tabs and spaces are both valid indentation styles, but a source file must use exactly one of them for leading block indentation. The first indented logical code line selects the file's style. After that:
 
-The formatter should use two spaces by default, although indentation width is not semantically fixed; indentation depth is.
+- a tabs-style file uses one tab per indentation level and rejects spaces in every leading indentation prefix;
+- a spaces-style file uses only spaces in leading indentation prefixes and rejects tabs there;
+- blank and comment-only lines do not select or alter the style.
+
+Any mixed leading indentation, whether within one prefix or across different code lines in the same file, is a compile-time error at the offending whitespace. The lexer must not silently convert or repair indentation. Tabs remain valid as string content through escapes such as `\t`.
+
+The formatter emits two spaces per level by default, although it may preserve or be configured to emit a consistently tab-indented file. For spaces-style source, indentation width is not fixed semantically; indentation depth is determined by increases and returns to previously established indentation columns.
 
 ### 6.3 Empty blocks
 
@@ -493,15 +499,24 @@ At minimum, the following escapes are supported:
 \t
 ```
 
-A **bare text literal** is a run of two or more unquoted identifier-shaped words in a value position:
+A **bare text literal** is the remaining non-comment content of a logical line when a value position begins with two or more unquoted identifier-shaped words:
 
 ```text
-this-is = my rifle
-there-are = many like it
-but = this one is mine
+project-kind = native executable
+build-status = ready to build
+release-channel = long term support
 ```
 
-This is unambiguous because ordinary invocation uses `;`, and inherent object application requires a dot-form object.
+It consumes through the logical end of line. Leading indentation and trailing horizontal whitespace are not part of the value, and each internal run of horizontal whitespace is normalised to one ASCII space. A line comment still begins at its normal lexical marker and is not part of the text.
+
+Bare text is deliberately the simple whole-line form, not a general expression fragment. If text must participate in member access, argument lists, operators, continuation, punctuation-sensitive syntax, or any other complex expression, it must be quoted:
+
+```text
+name-length = 'foobar'.length
+message = 'ready, steady, go'
+```
+
+This boundary is unambiguous because ordinary invocation uses `;`, inherent object application requires a dot-form object, and bare text does not continue into surrounding expression grammar.
 
 A single bare word is a binding lookup, not a string literal:
 
@@ -517,20 +532,21 @@ To assign a one-word string, quote it:
 x = 'hello'
 ```
 
-Bare text:
+Bare text therefore:
 
-- excludes indentation;
-- excludes trailing structural whitespace;
+- excludes indentation, line comments, and trailing horizontal whitespace;
 - normalises each internal run of horizontal whitespace to one ASCII space;
-- ends at a structural delimiter, comment, or newline.
+- ends only at the logical end of line;
+- is valid only when the entire value expression is that bare text.
 
 Quoted strings are required for:
 
 - exact repeated whitespace;
 - leading or trailing whitespace;
 - tabs;
-- punctuation that would otherwise be grammatical;
-- one-word text that could be a binding.
+- punctuation or syntax that would otherwise be grammatical;
+- one-word text that could be a binding;
+- text used as part of a larger expression.
 
 ### 6.8 Newlines and continuation
 
@@ -4390,6 +4406,7 @@ argument
 bare-text
   = bare-word whitespace bare-word
     { whitespace bare-word }
+    trailing-whitespace? line-end
 ```
 
 Parser precedence must ensure:
@@ -4407,10 +4424,10 @@ print .concat
 is an inherent object call.
 
 ```text
-my rifle
+native executable
 ```
 
-in a value position is bare text, not general whitespace application.
+as the complete value expression on a logical line is bare text, not general whitespace application. Bare text is not admitted as a subexpression; quote the value when member access, calls, operators, or other surrounding syntax follows.
 
 ### 34.1 Indentation grammar
 
