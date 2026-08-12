@@ -76,6 +76,16 @@ fn punctuation_comparisons_and_shifts_are_deterministic() {
 }
 
 #[test]
+fn bitwise_operators_and_numeric_forms_are_single_tokens() {
+    for source in ["a & b", "a ^ b", "~value"] {
+        assert!(significant(source).iter().any(|token| token.0 == TokenKind::Operator));
+    }
+    for source in ["1.5", "0xff", "1_000"] {
+        assert_eq!(significant(source), vec![(TokenKind::Number, source.into(), Attachment::Detached)]);
+    }
+}
+
+#[test]
 fn strings_comments_and_trivia_retain_exact_source() {
     let lexed =
         lex_source("name = 'a\\n' # note\n// second\n/* block */\nmessage = >literal # text");

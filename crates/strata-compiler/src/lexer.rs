@@ -263,8 +263,24 @@ fn lex_line(
             }
             byte if byte.is_ascii_digit() => {
                 index += 1;
-                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_') {
                     index += 1;
+                }
+                if bytes.get(index) == Some(&b'.')
+                    && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
+                {
+                    index += 1;
+                    while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_') {
+                        index += 1;
+                    }
+                } else if index == start + 1
+                    && bytes[start] == b'0'
+                    && bytes.get(index).is_some_and(|byte| matches!(byte, b'x' | b'X'))
+                {
+                    index += 1;
+                    while index < bytes.len() && (bytes[index].is_ascii_hexdigit() || bytes[index] == b'_') {
+                        index += 1;
+                    }
                 }
                 push_token(
                     source,
@@ -479,7 +495,7 @@ fn lex_line(
                     break;
                 }
             }
-            byte if is_joiner(byte) || matches!(byte, b'!' | b'<' | b'>' | b'%') => {
+            byte if is_joiner(byte) || matches!(byte, b'!' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') => {
                 index += 1;
                 if index < bytes.len()
                     && bytes[index] == byte
