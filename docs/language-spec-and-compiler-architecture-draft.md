@@ -335,7 +335,7 @@ Generated Rust should normally not be edited in place. A module may instead be d
 
 Source files are UTF-8.
 
-Identifiers should support Unicode identifier characters eventually, but the first implementation may restrict identifiers to ASCII letters and digits while the grammar stabilises.
+The version-one compiler restricts identifier characters to ASCII letters and digits while the grammar stabilises. A later language version may admit Unicode identifier characters deliberately; non-ASCII characters are not silently normalized or accepted by version one.
 
 ### 6.2 Indentation and blocks
 
