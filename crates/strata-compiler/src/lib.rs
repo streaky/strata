@@ -1,8 +1,8 @@
 mod compiler;
 pub mod diagnostic;
 pub mod lexer;
-pub mod tokens;
 pub mod source;
+pub mod tokens;
 
 pub use compiler::{Compilation, CompilationFailure, Program, compile};
 pub use diagnostic::{Diagnostic, Severity};
