@@ -61,9 +61,9 @@ print = .print
 
 function main
 
-  project-name = strata
-  build-target = native executable
-  build-status = ready to build
+  project-name = >Strata
+  build-target = >native executable
+  build-status = >ready to build
 
   message = ': '.concat; project-name, build-target, build-status
   print; message
@@ -478,7 +478,7 @@ unsafe
 
 The language should use contextual rather than gratuitously reserved keywords where doing so remains unambiguous.
 
-### 6.7 Strings and bare text
+### 6.7 Text literals
 
 Quoted strings use single quotes by default:
 
@@ -499,54 +499,58 @@ At minimum, the following escapes are supported:
 \t
 ```
 
-A **bare text literal** is the remaining non-comment content of a logical line when a value position begins with two or more unquoted identifier-shaped words:
+An attached `>` in an expression-start position begins a **tail string**. Every source character after the marker through the physical end of that line is literal content; the line terminator is excluded:
 
 ```text
-project-kind = native executable
-build-status = ready to build
-release-channel = long term support
+project-kind = >native executable
+message = >Hello! From, "Strata"! >>
+send; recipient, >Error: file not found!
 ```
 
-It consumes through the logical end of line. Leading indentation and trailing horizontal whitespace are not part of the value, and each internal run of horizontal whitespace is normalised to one ASCII space. A line comment still begins at its normal lexical marker and is not part of the text.
+The second value is exactly `Hello! From, "Strata"! >>`. Quotes, commas, operators, comment markers, and further `>` characters have no grammatical meaning after the opening marker. Whitespace is preserved exactly, including whitespace immediately after `>` and trailing horizontal whitespace. An attached `>` with no following content is the empty string.
 
-Bare text is deliberately the simple whole-line form, not a general expression fragment. If text must participate in member access, argument lists, operators, continuation, punctuation-sensitive syntax, or any other complex expression, it must be quoted:
+The marker must begin an expression and must be lexically attached to the expression position; its content begins with the very next character, which may be whitespace. This keeps it distinct from infix comparison:
 
 ```text
-name-length = 'foobar'.length
-message = 'ready, steady, go'
+is-larger = left > right
+message = >left > right
 ```
 
-This boundary is unambiguous because ordinary invocation uses `;`, inherent object application requires a dot-form object, and bare text does not continue into surrounding expression grammar.
+A tail string consumes the remainder of its line, so it is necessarily the final syntactic element on that line. It may nevertheless be the final argument of a call, as in `send; recipient, >Error: file not found!`. Use a quoted string when member access, another argument, an operator, or any other syntax must follow the literal.
 
-A single bare word is a binding lookup, not a string literal:
+An exact `>>` in an expression-start position opens a **block string** whose content is the following indented block:
+
+```text
+message = >>
+  Hello! From, "Strata"!
+
+  Everything in this block is text.
+  # This is content, not a comment.
+```
+
+If `>>` is followed by any same-line content, including horizontal whitespace, the construct is invalid; it is not reinterpreted as a tail string beginning with `>`.
+
+The first nonblank line selects the block's structural indentation prefix. That exact prefix is removed from each nonblank content line; any indentation beyond it is preserved as content. Blank lines are preserved and do not end the block. The first nonblank line lacking that prefix ends the block and is parsed normally. This follows the source file's selected tab-or-space indentation style without expanding tabs or normalising content whitespace.
+
+Lines are joined with `\n`. Source layout does not add a final newline to the value. An empty block is invalid rather than silently producing an empty string; use `>` or `''` for that value.
+
+Both tail and block strings are literal and non-interpolating. Once either form begins, comments, escapes, substitutions, and ordinary Strata tokens are not recognised within its content. Interpolation, if added, requires a separate explicit form.
+
+A bare identifier always performs binding lookup:
 
 ```text
 x = hello
 ```
 
-looks up `hello`.
-
-To assign a one-word string, quote it:
+To create text, use one of the three explicit forms:
 
 ```text
-x = 'hello'
+inline = 'hello'
+tail = >Hello, from Strata!
+multiline = >>
+  Hello,
+  from Strata!
 ```
-
-Bare text therefore:
-
-- excludes indentation, line comments, and trailing horizontal whitespace;
-- normalises each internal run of horizontal whitespace to one ASCII space;
-- ends only at the logical end of line;
-- is valid only when the entire value expression is that bare text.
-
-Quoted strings are required for:
-
-- exact repeated whitespace;
-- leading or trailing whitespace;
-- tabs;
-- punctuation or syntax that would otherwise be grammatical;
-- one-word text that could be a binding;
-- text used as part of a larger expression.
 
 ### 6.8 Newlines and continuation
 
@@ -576,8 +580,10 @@ The core punctuation has rigid jobs:
 | `=` | bind or assign a value |
 | `/` before a namespace path | anchor lookup at the root namespace |
 | `..` before a namespace path | ascend one namespace tier |
-| `'...'` | exact string literal |
-| `#` or `//` | begin a line comment |
+| `'...'` | delimited quoted string |
+| `>text` | exact text through the physical end of line |
+| `>>` followed by an indented block | exact multiline block text |
+| `#` or `//` | begin a line comment outside text literals |
 | `/* ... */` | block comment, possibly multiline |
 
 Whitespace around a dot is semantic:
@@ -1011,7 +1017,7 @@ Only a dot-object expression has this inherent adjacency behaviour. Ordinary val
 print; message
 ```
 
-This avoids turning whitespace into general function application and keeps bare text literals unambiguous.
+This avoids turning whitespace into general function application and keeps expression boundaries unambiguous.
 
 ### 9.5 Positional and named arguments
 
@@ -3492,7 +3498,7 @@ Rust provides one distributable toolchain executable, precise and exhaustively c
 
 Mature parser tooling should be evaluated rather than assuming that a Rust implementation requires every frontend component to be handwritten. A parser-combinator library such as Chumsky may provide token parsing, spans, recursive grammars, Pratt expression parsing, rich errors, and recovery. Strata's token, syntax, span, and diagnostic models remain compiler-owned so a library can be replaced or selectively bypassed without changing language semantics.
 
-The hardest whitespace-sensitive and operator-attachment cases must be prototyped before the parser architecture is frozen. A narrow handwritten lexer remains appropriate if indentation, bare text, or attached-operator rules are clearer there.
+The hardest whitespace-sensitive and operator-attachment cases must be prototyped before the parser architecture is frozen. A narrow handwritten lexer remains appropriate if indentation, tail/block strings, or attached-operator rules are clearer there.
 
 The runtime characteristics of compiled programs do not depend on the frontend implementation language.
 
@@ -4403,10 +4409,11 @@ argument-list
 argument
   = [ identifier "=" ] expression
 
-bare-text
-  = bare-word whitespace bare-word
-    { whitespace bare-word }
-    trailing-whitespace? line-end
+tail-string
+  = ">" { source-character } physical-line-end
+
+block-string
+  = ">>" physical-line-end indented-text-body
 ```
 
 Parser precedence must ensure:
@@ -4424,10 +4431,10 @@ print .concat
 is an inherent object call.
 
 ```text
-native executable
+>native executable
 ```
 
-as the complete value expression on a logical line is bare text, not general whitespace application. Bare text is not admitted as a subexpression; quote the value when member access, calls, operators, or other surrounding syntax follows.
+is a tail string when `>` appears in expression-start position. An exact `>>` followed by a newline opens an indented block string. Neither form is admitted as a non-final subexpression because its lexical boundary consumes the remainder of the line or the following text block.
 
 ### 34.1 Indentation grammar
 
@@ -4466,7 +4473,7 @@ from /my-output import .print
 print = .print
 
 function main
-  print; hello world
+  print; >Hello! From, "Strata"!
 ```
 
 Only `my-app` and descendants see this `print` unless it is promoted globally.
@@ -4742,7 +4749,7 @@ print.concat
 print .concat
 ```
 
-namespace tiers, root/parent anchors, bare text, and `= / ref / move`.
+namespace tiers, root/parent anchors, all three text literal forms, and `= / ref / move`.
 
 ### 38.2 Milestone one: minimal source-to-Rust compiler
 
@@ -4754,7 +4761,7 @@ Implement:
 - object-form imports using a fixed bootstrap importer;
 - ordinary bindings;
 - scalar literals;
-- bare text;
+- quoted, tail, and indented block strings;
 - functions;
 - default calls;
 - member calls;
@@ -4872,7 +4879,7 @@ The first serious prototype should prove all of these:
 11. a custom `import` object changes subsequent import resolution.
 12. `#`, `//`, and `/* ... */` comments lex and format without changing indentation structure.
 13. an unterminated block comment fails at its opening delimiter, and an unused string is never treated as a comment.
-14. bare text and exact quoted whitespace behave deterministically.
+14. quoted, tail, and indented block strings preserve their specified content deterministically.
 15. typed scalars lower to native Rust primitives.
 16. dynamic finite alternatives lower without a universal heap object.
 17. explicit coercion succeeds or throws cleanly.

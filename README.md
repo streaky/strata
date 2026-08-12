@@ -19,15 +19,15 @@ Its guiding priorities are:
 
 ## Project status
 
-Strata is currently in the design and early tooling stage. The language document describes the proposed contract; it does not claim that the full language or compiler already exists.
+Strata is in the design and early compiler stage. The language document describes the proposed full contract; the implemented subset is intentionally much smaller.
 
-The first compiler is planned as a source-to-Rust toolchain with commands for checking, running, building, and viewing the generated Rust. Development will begin with a deliberately small, coherent language subset and grow through executable examples and conformance cases.
+The working `strata` CLI can check, lower, build, and run the milestone-zero hello program through generated Rust and Cargo. Development is growing that coherent subset through executable examples and conformance cases.
 
 ## Learn more
 
 The [language specification and compiler architecture draft](docs/language-spec-and-compiler-architecture-draft.md) is the main source for syntax, semantics, examples, interoperability, tooling, and other technical details.
 
-The [first-version compiler plan](docs/dump/plan.md) describes the intended implementation milestones and the capabilities targeted for the first usable release.
+The [first-version compiler plan](docs/compiler-plan.md) describes the implementation milestones and the capabilities targeted for the first usable release.
 
 The `demos/` directory contains exploratory design exercises. These files deliberately stress ambitious or unfinished ideas and should not be read as examples of features already supported by a compiler.
 
