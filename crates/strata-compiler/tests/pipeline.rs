@@ -15,6 +15,33 @@ fn hello_lowers_deterministically() {
 }
 
 #[test]
+fn rejects_every_repeated_milestone_construct() {
+    let cases = [
+        ("namespace hello", "namespace declaration"),
+        ("from /core output import .print", "output import"),
+        ("print = .print", "print binding"),
+        ("function main", "`main` function"),
+    ];
+
+    for (construct, description) in cases {
+        let source = HELLO.replacen(construct, &format!("{construct}\n{construct}"), 1);
+        let diagnostics = strata_compiler::compile("duplicate.strata", source).unwrap_err();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "S0005" && diagnostic.message == format!("duplicate {description}")
+        }));
+    }
+
+    let source = HELLO.replace("print; >>", "print; >first\n  print; >>");
+    let diagnostics = strata_compiler::compile("statements.strata", source).unwrap_err();
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "S0005"
+            && diagnostic
+                .message
+                .contains("only one statement is supported")
+    }));
+}
+
+#[test]
 fn rejects_mixed_indentation() {
     let source = HELLO.replace("  print", " \tprint");
     let diagnostics = strata_compiler::compile("mixed.strata", source).unwrap_err();

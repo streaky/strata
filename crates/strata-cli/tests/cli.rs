@@ -85,11 +85,9 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
         .output()
         .unwrap();
     assert_eq!(missing.status.code(), Some(3));
-    assert!(
-        String::from_utf8(missing.stderr)
-            .unwrap()
-            .contains("error[S0000]")
-    );
+    let missing_stderr = String::from_utf8(missing.stderr).unwrap();
+    assert!(missing_stderr.contains("missing.strata: error[S0000]"));
+    assert!(!missing_stderr.contains("missing.strata:1:1"));
 
     let invalid_path = std::env::temp_dir().join(format!(
         "strata-invalid-{}-{}.strata",

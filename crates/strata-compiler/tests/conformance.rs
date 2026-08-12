@@ -19,7 +19,7 @@ fn every_manifest_drives_a_conformance_case() {
         let source = fs::read_to_string(&source_path).unwrap();
 
         match (phase, status) {
-            ("run", "accept") => {
+            ("run" | "check", "accept") => {
                 let expected = fs::read_to_string(case.join("lower.rs")).unwrap();
                 let compilation = strata_compiler::compile(&source_path, source).unwrap();
                 let normalized = compilation

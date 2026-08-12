@@ -174,19 +174,15 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
 
     add_missing_diagnostics(
         source,
-        Presence([
-            namespace.is_some(),
-            output_path.is_some(),
-            print_binding.is_some(),
-            in_main,
-            main_statement_seen,
-        ]),
+        namespace.as_deref(),
+        output_path.as_deref(),
+        print_binding.as_deref(),
+        in_main,
+        main_statement_seen,
         &mut errors,
     );
     finish_parse(namespace, output_path, print_binding, message, errors)
 }
-#[derive(Clone, Copy)]
-struct Presence([bool; 5]);
 
 #[derive(Clone, Copy)]
 struct LineContext<'source> {
@@ -195,7 +191,15 @@ struct LineContext<'source> {
     indent_len: usize,
 }
 
-fn add_missing_diagnostics(source: &SourceFile, presence: Presence, errors: &mut Vec<Diagnostic>) {
+fn add_missing_diagnostics(
+    source: &SourceFile,
+    namespace: Option<&str>,
+    output_path: Option<&str>,
+    print_binding: Option<&str>,
+    main: bool,
+    main_statement: bool,
+    errors: &mut Vec<Diagnostic>,
+) {
     let end = source.text().len();
     let mut missing = |condition: bool, code: &'static str, message: &'static str, span: Span| {
         if !condition {
@@ -203,31 +207,31 @@ fn add_missing_diagnostics(source: &SourceFile, presence: Presence, errors: &mut
         }
     };
     missing(
-        presence.0[0],
+        namespace.is_some(),
         "S0005",
         "missing namespace declaration",
         Span::new(source.id(), 0, 0),
     );
     missing(
-        presence.0[1],
+        output_path.is_some(),
         "S0003",
         "missing import for `.print`",
         Span::new(source.id(), end, end),
     );
     missing(
-        presence.0[2],
+        print_binding.is_some(),
         "S0003",
         "missing ordinary `print` binding",
         Span::new(source.id(), end, end),
     );
     missing(
-        presence.0[3],
+        main,
         "S0005",
         "missing `function main`",
         Span::new(source.id(), end, end),
     );
     missing(
-        presence.0[4],
+        main_statement,
         "S0005",
         "main must invoke `print`",
         Span::new(source.id(), end, end),
@@ -340,9 +344,6 @@ fn closing_quote(value: &str) -> Option<usize> {
             return Some(index);
         }
         escaped = character == '\\' && !escaped;
-        if character != '\\' {
-            escaped = false;
-        }
     }
     None
 }

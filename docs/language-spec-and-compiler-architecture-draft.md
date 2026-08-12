@@ -528,6 +528,8 @@ message = >>
   # This is content, not a comment.
 ```
 
+If `>>` is followed by any same-line content, including horizontal whitespace, the construct is invalid; it is not reinterpreted as a tail string beginning with `>`.
+
 The first nonblank line selects the block's structural indentation prefix. That exact prefix is removed from each nonblank content line; any indentation beyond it is preserved as content. Blank lines are preserved and do not end the block. The first nonblank line lacking that prefix ends the block and is parsed normally. This follows the source file's selected tab-or-space indentation style without expanding tabs or normalising content whitespace.
 
 Lines are joined with `\n`. Source layout does not add a final newline to the value. An empty block is invalid rather than silently producing an empty string; use `>` or `''` for that value.

@@ -18,8 +18,7 @@ impl CliFailure {
 
     fn diagnostic(path: PathBuf, code: &'static str, message: String, exit_code: u8) -> Self {
         let source = strata_compiler::SourceFile::new(0, path, String::new());
-        let diagnostic =
-            strata_compiler::Diagnostic::error(code, message, strata_compiler::Span::new(0, 0, 0));
+        let diagnostic = strata_compiler::Diagnostic::unlocated_error(code, message);
         Self {
             code: exit_code,
             message: diagnostic.render(&source),
