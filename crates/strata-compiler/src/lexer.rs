@@ -8,7 +8,7 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut logical_lines = Vec::new();
     let mut offset = 0;
-    let mut block_string_indent = None;
+    let mut block_string: Option<(usize, usize, Option<Vec<u8>>)> = None;
     let mut block_comment_start = None;
     let mut indent_style = None;
     let mut indent_stack = vec![0];
@@ -16,10 +16,22 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
         let line = raw.trim_end_matches(['\n', '\r']);
         logical_lines.push((offset, line.to_owned()));
         let indent = indentation_len(line);
-        let in_block_string = match block_string_indent {
-            Some(parent) if line.trim().is_empty() || indent > parent => true,
+        let in_block_string = match &mut block_string {
+            Some((marker_indent, token_index, content_prefix)) if line.trim().is_empty() => {
+                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+                true
+            }
+            Some((marker_indent, token_index, prefix @ None)) if indent > *marker_indent => {
+                *prefix = Some(line.as_bytes()[..indent].to_vec());
+                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+                true
+            }
+            Some((_, token_index, Some(prefix))) if line.as_bytes().starts_with(prefix) => {
+                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+                true
+            }
             Some(_) => {
-                block_string_indent = None;
+                block_string = None;
                 false
             }
             None => false,
@@ -62,11 +74,11 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
                 &mut diagnostics,
                 &mut block_comment_start,
             );
-            if tokens[token_count..]
+            if let Some(relative_index) = tokens[token_count..]
                 .iter()
-                .any(|token| token.kind == TokenKind::BlockString)
+                .position(|token| token.kind == TokenKind::BlockString)
             {
-                block_string_indent = Some(indent);
+                block_string = Some((indent, token_count + relative_index, None));
             }
         }
         if raw.ends_with('\n') {
@@ -630,4 +642,9 @@ fn attachment(line: &str, start: usize, end: usize) -> Attachment {
         (false, true) => Attachment::Right,
         (true, true) => Attachment::Both,
     }
+}
+
+fn extend_token(source: &SourceFile, token: &mut Token, end: usize) {
+    token.span = Span::new(source.id(), token.span.start, end);
+    token.text = source.text()[token.span.start..end].to_owned();
 }

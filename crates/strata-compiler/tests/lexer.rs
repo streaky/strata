@@ -143,6 +143,14 @@ fn block_strings_are_contextual_and_require_a_clean_marker_line() {
 }
 
 #[test]
+fn block_string_token_covers_body_and_uses_its_selected_prefix() {
+    let lexed = lex_source("x = >>\n    first\n  second\n");
+    let block = lexed.tokens.iter().find(|token| token.kind == TokenKind::BlockString).unwrap();
+    assert_eq!(block.text, ">>\n    first\n");
+    assert!(lexed.tokens.iter().any(|token| token.text == "second"));
+}
+
+#[test]
 fn comments_and_shift_operators_do_not_open_block_strings() {
     for source in ["x = 1 # use >>\n  kept = 2\nafter = 3\n", "x = value >>\n  8\n"] {
         let lexed = lex_source(source);
