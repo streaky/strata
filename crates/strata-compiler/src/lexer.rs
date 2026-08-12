@@ -8,24 +8,36 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut logical_lines = Vec::new();
     let mut offset = 0;
-    let mut block_indent = None;
-
+    let mut block_string_indent = None;
+    let mut block_comment_start = None;
+    let mut indent_style = None;
+    let mut indent_stack = vec![0];
     for raw in text.split_inclusive('\n') {
         let line = raw.trim_end_matches(['\n', '\r']);
         logical_lines.push((offset, line.to_owned()));
         let indent = indentation_len(line);
-        let in_block = match block_indent {
+        let in_block_string = match block_string_indent {
             Some(parent) if line.trim().is_empty() || indent > parent => true,
             Some(_) => {
-                block_indent = None;
+                block_string_indent = None;
                 false
             }
             None => false,
         };
-        if !in_block {
-            lex_line(source, line, offset, &mut tokens, &mut trivia, &mut diagnostics);
+        let trimmed = line[indent..].trim_start();
+        let comment_only = block_comment_start.is_some()
+            || trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("//")
+            || (trimmed.starts_with("/*") && !trimmed.contains("*/"));
+        if !in_block_string {
+            if !comment_only {
+                check_indent(source, offset, &line.as_bytes()[..indent], &mut indent_style, &mut diagnostics);
+                emit_indentation(source, offset, indent, &mut indent_stack, &mut tokens, &mut diagnostics);
+            }
+            lex_line(source, line, offset, &mut tokens, &mut trivia, &mut diagnostics, &mut block_comment_start);
             if line.trim_end().ends_with(">>") {
-                block_indent = Some(indent);
+                block_string_indent = Some(indent);
             }
         }
         if raw.ends_with('\n') {
@@ -37,6 +49,17 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
         logical_lines.push((0, String::new()));
     } else if !text.ends_with('\n') {
         push_token(source, &mut tokens, TokenKind::Newline, text.len(), text.len(), Attachment::Detached);
+    }
+    if let Some(start) = block_comment_start {
+        diagnostics.push(Diagnostic::error(
+            "L0002",
+            "unterminated block comment",
+            Span::new(source.id(), start, start + 2),
+        ));
+    }
+    while indent_stack.len() > 1 {
+        indent_stack.pop();
+        push_token(source, &mut tokens, TokenKind::Dedent, text.len(), text.len(), Attachment::Detached);
     }
     push_token(source, &mut tokens, TokenKind::Eof, text.len(), text.len(), Attachment::Detached);
 
@@ -54,10 +77,22 @@ fn lex_line(
     tokens: &mut Vec<Token>,
     trivia: &mut Vec<Trivia>,
     diagnostics: &mut Vec<Diagnostic>,
+    block_comment_start: &mut Option<usize>,
 ) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
+        if block_comment_start.is_some() {
+            if let Some(relative_end) = line[index..].find("*/") {
+                let end = index + relative_end + 2;
+                trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + index, base + end), text: line[index..end].to_owned() });
+                *block_comment_start = None;
+                index = end;
+                continue;
+            }
+            trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + index, base + line.len()), text: line[index..].to_owned() });
+            break;
+        }
         let start = index;
         match bytes[index] {
             b' ' | b'\t' => {
@@ -73,16 +108,38 @@ fn lex_line(
                 trivia.push(Trivia { kind: TriviaKind::LineComment, span: Span::new(source.id(), base + start, base + bytes.len()), text: line[start..].to_owned() });
                 break;
             }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                if let Some(relative_end) = line[index + 2..].find("*/") {
+                    index += relative_end + 4;
+                    trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + start, base + index), text: line[start..index].to_owned() });
+                } else {
+                    trivia.push(Trivia { kind: TriviaKind::BlockComment, span: Span::new(source.id(), base + start, base + line.len()), text: line[start..].to_owned() });
+                    *block_comment_start = Some(base + start);
+                    break;
+                }
+            }
             byte if byte.is_ascii_alphabetic() => {
                 index += 1;
                 while index < bytes.len() {
                     if bytes[index].is_ascii_alphanumeric() {
                         index += 1;
-                    } else if is_joiner(bytes[index])
-                        && bytes[index..].iter().skip_while(|byte| is_joiner(**byte)).any(u8::is_ascii_alphabetic)
-                    {
-                        index += 1;
-                    } else {
+                        continue;
+                    }
+                    if !is_joiner(bytes[index]) { break; }
+                    let joiner_start = index;
+                    while index < bytes.len() && is_joiner(bytes[index]) { index += 1; }
+                    let unit_start = index;
+                    while index < bytes.len() && bytes[index].is_ascii_alphanumeric() { index += 1; }
+                    if unit_start == index {
+                        index = joiner_start;
+                        break;
+                    }
+                    if !bytes[unit_start..index].iter().any(u8::is_ascii_alphabetic) {
+                        diagnostics.push(Diagnostic::error(
+                            "L0005",
+                            "identifier joiner cannot introduce a digits-only terminal unit; add spaces for an operator expression",
+                            Span::new(source.id(), base + joiner_start, base + index),
+                        ));
                         break;
                     }
                 }
@@ -96,7 +153,16 @@ fn lex_line(
             b'.' => { index += 1; push_token(source, tokens, TokenKind::Dot, base + start, base + index, attachment(line, start, index)); }
             b';' => { index += 1; push_token(source, tokens, TokenKind::Semicolon, base + start, base + index, attachment(line, start, index)); }
             b',' => { index += 1; push_token(source, tokens, TokenKind::Comma, base + start, base + index, attachment(line, start, index)); }
-            b'=' => { index += 1; push_token(source, tokens, TokenKind::Assign, base + start, base + index, attachment(line, start, index)); }
+            b'=' => {
+                index += 1;
+                let kind = if bytes.get(index) == Some(&b'=') {
+                    index += 1;
+                    TokenKind::Operator
+                } else {
+                    TokenKind::Assign
+                };
+                push_token(source, tokens, kind, base + start, base + index, attachment(line, start, index));
+            }
             b':' => { index += 1; push_token(source, tokens, TokenKind::Colon, base + start, base + index, attachment(line, start, index)); }
             b'|' => { index += 1; push_token(source, tokens, TokenKind::Pipe, base + start, base + index, attachment(line, start, index)); }
             b'(' => { index += 1; push_token(source, tokens, TokenKind::OpenParen, base + start, base + index, attachment(line, start, index)); }
@@ -137,14 +203,76 @@ fn lex_line(
             }
             byte if is_joiner(byte) || matches!(byte, b'!' | b'<' | b'>' | b'%') => {
                 index += 1;
-                while index < bytes.len() && (is_joiner(bytes[index]) || matches!(bytes[index], b'!' | b'=' | b'<' | b'>')) { index += 1; }
-                push_token(source, tokens, TokenKind::Operator, base + start, base + index, attachment(line, start, index));
+                if index < bytes.len() && bytes[index] == byte && matches!(byte, b'+' | b'-' | b'<' | b'>') {
+                    index += 1;
+                } else if index < bytes.len() && bytes[index] == b'=' {
+                    index += 1;
+                }
+                let text = &line[start..index];
+                let kind = match text {
+                    "++" => TokenKind::Increment,
+                    "--" => TokenKind::Decrement,
+                    _ => TokenKind::Operator,
+                };
+                let attached = attachment(line, start, index);
+                if matches!(attached, Attachment::Left | Attachment::Both)
+                    && !matches!(kind, TokenKind::Increment | TokenKind::Decrement)
+                    && !matches!(text, ">" | ">=")
+                {
+                    diagnostics.push(Diagnostic::error(
+                        "L0006",
+                        format!("operator `{text}` cannot be left-attached; add a space before it"),
+                        Span::new(source.id(), base + start, base + index),
+                    ));
+                }
+                push_token(source, tokens, kind, base + start, base + index, attached);
             }
             other => {
                 let width = line[start..].chars().next().map_or(1, char::len_utf8);
                 diagnostics.push(Diagnostic::error("L0001", format!("invalid source character `{}`", char::from(other)), Span::new(source.id(), base + start, base + start + width)));
                 index += width;
             }
+        }
+    }
+}
+
+fn check_indent(
+    source: &SourceFile,
+    offset: usize,
+    indent: &[u8],
+    style: &mut Option<u8>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if indent.contains(&b' ') && indent.contains(&b'\t') {
+        diagnostics.push(Diagnostic::error("S0001", "mixed tabs and spaces in indentation", Span::new(source.id(), offset, offset + indent.len())));
+    } else if let Some(first) = indent.first().copied() {
+        match style {
+            Some(selected) if *selected != first => diagnostics.push(Diagnostic::error("S0001", "indentation style changes within the file", Span::new(source.id(), offset, offset + indent.len()))),
+            None => *style = Some(first),
+            _ => {}
+        }
+    }
+}
+
+fn emit_indentation(
+    source: &SourceFile,
+    offset: usize,
+    indent: usize,
+    stack: &mut Vec<usize>,
+    tokens: &mut Vec<Token>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let current = *stack.last().expect("indentation stack is never empty");
+    if indent > current {
+        stack.push(indent);
+        push_token(source, tokens, TokenKind::Indent, offset, offset + indent, Attachment::Detached);
+    } else if indent < current {
+        while stack.last().is_some_and(|level| *level > indent) {
+            stack.pop();
+            push_token(source, tokens, TokenKind::Dedent, offset + indent, offset + indent, Attachment::Detached);
+        }
+        if stack.last() != Some(&indent) {
+            diagnostics.push(Diagnostic::error("L0004", "inconsistent dedent", Span::new(source.id(), offset, offset + indent)));
         }
     }
 }
