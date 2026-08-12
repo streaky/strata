@@ -400,9 +400,11 @@ fn lex_line(
             b'\'' => {
                 index += 1;
                 let mut escaped = false;
+                let mut terminated = false;
                 while index < bytes.len() {
                     if bytes[index] == b'\'' && !escaped {
                         index += 1;
+                        terminated = true;
                         break;
                     }
                     escaped = bytes[index] == b'\\' && !escaped;
@@ -411,7 +413,7 @@ fn lex_line(
                     }
                     index += 1;
                 }
-                if !line[start + 1..index].ends_with('\'') {
+                if !terminated {
                     diagnostics.push(Diagnostic::error(
                         "S0002",
                         "unterminated string literal",
