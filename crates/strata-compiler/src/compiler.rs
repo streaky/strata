@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, SourceFile, Span};
+use crate::{Diagnostic, SourceFile, Span, lexer, tokens::LexedSource};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -18,9 +18,6 @@ struct SyntaxProgram {
     message: String,
 }
 
-struct LexedSource<'source> {
-    logical_lines: Vec<(usize, &'source str)>,
-}
 
 struct RustIr<'program> {
     namespace: &'program str,
@@ -55,7 +52,10 @@ impl std::ops::Deref for CompilationFailure {
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
     let source = SourceFile::new(0, path.into(), text);
-    let tokens = lex(&source);
+    let tokens = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
+        source: source.clone(),
+        diagnostics,
+    })?;
     let syntax = parse(&source, &tokens).map_err(|diagnostics| CompilationFailure {
         source: source.clone(),
         diagnostics,
@@ -70,21 +70,13 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
     })
 }
 
-fn lex(source: &SourceFile) -> LexedSource<'_> {
-    let logical_lines = source
-        .text()
-        .split_inclusive('\n')
-        .scan(0, |offset, raw| {
-            let start = *offset;
-            *offset += raw.len();
-            Some((start, raw.trim_end_matches(['\n', '\r'])))
-        })
-        .collect();
-    LexedSource { logical_lines }
-}
 
-fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram, Vec<Diagnostic>> {
-    let mut lines = tokens.logical_lines.iter().copied().peekable();
+fn parse(source: &SourceFile, tokens: &LexedSource) -> Result<SyntaxProgram, Vec<Diagnostic>> {
+    let mut lines = tokens
+        .logical_lines
+        .iter()
+        .map(|(offset, line)| (*offset, line.as_str()))
+        .peekable();
     let mut errors = Vec::new();
     let mut namespace = None;
     let mut output_path = None;
