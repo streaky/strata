@@ -2,5 +2,5 @@
 // Source: case.strata
 // Namespace: hello
 fn main() {
-    println!("{}", "hello from strata");
+    println!("{}", "Hello from Strata!\n\nTail strings make punctuation literal: >, #, \"quotes\".");
 }

@@ -68,7 +68,7 @@ fn lex(source: &SourceFile) -> LexedSource<'_> {
 
 #[allow(clippy::too_many_lines)]
 fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram, Vec<Diagnostic>> {
-    let mut lines = tokens.logical_lines.iter().copied();
+    let mut lines = tokens.logical_lines.iter().copied().peekable();
     let mut errors = Vec::new();
     let mut namespace = None;
     let mut output_path = None;
@@ -77,32 +77,17 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
     let mut message = None;
     let mut indent_style: Option<u8> = None;
 
-    for (offset, line) in &mut lines {
-        let indent_len = line
-            .bytes()
-            .take_while(|byte| matches!(byte, b' ' | b'\t'))
-            .count();
-        let indent = &line.as_bytes()[..indent_len];
-        if indent.contains(&b' ') && indent.contains(&b'\t') {
-            errors.push(Diagnostic::error(
-                "S0001",
-                "mixed tabs and spaces in indentation",
-                Span::new(source.id(), offset, offset + indent_len),
-            ));
-            continue;
-        }
-        if let Some(first) = indent.first().copied() {
-            match indent_style {
-                Some(style) if style != first => errors.push(Diagnostic::error(
-                    "S0001",
-                    "indentation style changes within the file",
-                    Span::new(source.id(), offset, offset + indent_len),
-                )),
-                None => indent_style = Some(first),
-                _ => {}
-            }
-        }
-        let content = line[indent_len..].trim_end();
+    while let Some((offset, line)) = lines.next() {
+        let indent_len = indentation_len(line);
+        check_indentation(
+            source,
+            offset,
+            &line.as_bytes()[..indent_len],
+            &mut indent_style,
+            &mut errors,
+        );
+        let raw_content = &line[indent_len..];
+        let content = raw_content.trim_end();
         if content.is_empty() || content.starts_with('#') || content.starts_with("//") {
             continue;
         }
@@ -114,9 +99,19 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
             print_binding = Some("print".to_owned());
         } else if content == "function main" && indent_len == 0 {
             in_main = true;
-        } else if in_main && indent_len > 0 && content.starts_with("print; ") {
-            let value = &content[7..];
-            if value.starts_with('\'') {
+        } else if in_main && indent_len > 0 && raw_content.starts_with("print; ") {
+            let value = &raw_content[7..];
+            if value == ">>" {
+                message = parse_block_string(
+                    source,
+                    &mut lines,
+                    indent_len,
+                    &mut indent_style,
+                    &mut errors,
+                );
+            } else if let Some(value) = value.strip_prefix('>') {
+                message = Some(value.to_owned());
+            } else if value.starts_with('\'') {
                 if value.len() >= 2 && value.ends_with('\'') {
                     message = Some(unescape(
                         &value[1..value.len() - 1],
@@ -134,7 +129,7 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
             } else {
                 errors.push(Diagnostic::error(
                     "S0004",
-                    "print expects one quoted string argument",
+                    "print expects one text argument",
                     Span::new(source.id(), offset + indent_len, offset + line.len()),
                 ));
             }
@@ -206,6 +201,91 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
         })
     } else {
         Err(errors)
+    }
+}
+
+fn indentation_len(line: &str) -> usize {
+    line.bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count()
+}
+
+fn check_indentation(
+    source: &SourceFile,
+    offset: usize,
+    indent: &[u8],
+    indent_style: &mut Option<u8>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if indent.contains(&b' ') && indent.contains(&b'\t') {
+        errors.push(Diagnostic::error(
+            "S0001",
+            "mixed tabs and spaces in indentation",
+            Span::new(source.id(), offset, offset + indent.len()),
+        ));
+        return;
+    }
+    if let Some(first) = indent.first().copied() {
+        match *indent_style {
+            Some(style) if style != first => errors.push(Diagnostic::error(
+                "S0001",
+                "indentation style changes within the file",
+                Span::new(source.id(), offset, offset + indent.len()),
+            )),
+            None => *indent_style = Some(first),
+            _ => {}
+        }
+    }
+}
+
+fn parse_block_string<'source>(
+    source: &SourceFile,
+    lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, &'source str)>>,
+    statement_indent: usize,
+    indent_style: &mut Option<u8>,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let mut block_indent = None;
+    let mut content_lines = Vec::new();
+    while let Some((offset, line)) = lines.peek().copied() {
+        let indent_len = indentation_len(line);
+        if line.trim().is_empty() {
+            lines.next();
+            if block_indent.is_some() {
+                content_lines.push(String::new());
+            }
+            continue;
+        }
+        let required = match block_indent {
+            Some(required) => required,
+            None if indent_len > statement_indent => {
+                block_indent = Some(indent_len);
+                indent_len
+            }
+            None => break,
+        };
+        if indent_len < required {
+            break;
+        }
+        lines.next();
+        check_indentation(
+            source,
+            offset,
+            &line.as_bytes()[..indent_len],
+            indent_style,
+            errors,
+        );
+        content_lines.push(line[required..].to_owned());
+    }
+    if block_indent.is_none() {
+        errors.push(Diagnostic::error(
+            "S0004",
+            "block string requires an indented nonblank line",
+            Span::new(source.id(), source.text().len(), source.text().len()),
+        ));
+        None
+    } else {
+        Some(content_lines.join("\n"))
     }
 }
 

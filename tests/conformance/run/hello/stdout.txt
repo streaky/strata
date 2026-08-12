@@ -1,1 +1,3 @@
-hello from strata
+Hello from Strata!
+
+Tail strings make punctuation literal: >, #, "quotes".

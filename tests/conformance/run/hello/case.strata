@@ -5,4 +5,7 @@ from /core output import .print
 print = .print
 
 function main
-  print; 'hello from strata'
+  print; >>
+    Hello from Strata!
+
+    Tail strings make punctuation literal: >, #, "quotes".

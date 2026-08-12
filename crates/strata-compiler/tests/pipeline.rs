@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-const HELLO: &str = "namespace hello\n\nfrom /core output import .print\n\nprint = .print\n\nfunction main\n  print; 'hello from strata'\n";
+const HELLO: &str = "namespace hello\n\nfrom /core output import .print\n\nprint = .print\n\nfunction main\n  print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".\n";
 
 #[test]
 fn hello_lowers_deterministically() {
@@ -10,7 +10,7 @@ fn hello_lowers_deterministically() {
     assert!(
         first
             .rust
-            .contains("println!(\"{}\", \"hello from strata\")")
+            .contains("Hello from Strata!\\n\\nTail strings make punctuation literal")
     );
 }
 
@@ -26,13 +26,30 @@ fn rejects_mixed_indentation() {
 }
 
 #[test]
-fn rejects_unterminated_string() {
-    let source = HELLO.replace("'hello from strata'", "'hello from strata");
+fn tail_string_preserves_every_remaining_character() {
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >Hello! From, \"Strata\"! >> # literal",
+    );
+    let compilation = strata_compiler::compile("tail.strata", source).unwrap();
+    assert!(
+        compilation
+            .rust
+            .contains("Hello! From, \\\"Strata\\\"! >> # literal")
+    );
+}
+
+#[test]
+fn rejects_empty_block_string() {
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>",
+    );
     let diagnostics = strata_compiler::compile("string.strata", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "S0002")
+            .any(|diagnostic| diagnostic.code == "S0004")
     );
 }
 
@@ -49,7 +66,10 @@ fn rejects_unresolved_object() {
 
 #[test]
 fn rejects_wrong_call() {
-    let source = HELLO.replace("print; 'hello from strata'", "print; hello");
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; hello",
+    );
     let diagnostics = strata_compiler::compile("call.strata", source).unwrap_err();
     assert!(
         diagnostics
