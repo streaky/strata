@@ -139,7 +139,7 @@ Golden files must be reviewed output, not snapshots accepted blindly. Unstable d
 Create these incrementally rather than borrowing from `demos/`:
 
 1. **hello:** import/bind output, define `main`, print exact text.
-2. **build-report:** kebab-case bindings, typed integers and strings, receiver-based string concatenation, named arguments, and output.
+2. **build-report:** kebab-case bindings, typed integers and strings, receiver-based string concatenation, named arguments, and output. Because fixed-width names are `/core types` descriptor objects rather than prelude bindings, the authored file either uses `int` or writes the explicit descriptor import and ordinary binding for each width it names.
 3. **fizz-buzz:** arithmetic, comparisons, `if`/`else`, a loop, function calls, and return.
 4. **word-count:** command-line arguments, string iteration or splitting, a standard collection, mutation, and deterministic formatted output. Add only after milestone 4 selects and implements an explicit grapheme/scalar/byte iteration contract and a collection subset whose mutation preserves version-one value semantics.
 5. **multi-file greeting:** two namespaces, explicit object import, ordinary binding, and deterministic module lowering.
@@ -230,7 +230,7 @@ Deliver:
 - identifiers with operator-bearing joiners, including `<` and `>`, while a terminal joiner followed by a digits-only unit is rejected;
 - comparison and shift operators using `<`, `>`, `<<`, and `>>`, with `>` and `>>` additionally opening tail and block strings in expression-start position; these tokens never delimit generic arguments;
 - structural punctuation and spacing-sensitive operator attachment, including `++`/`--` as declared postfix tokens;
-- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, and attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix;
+- lexical diagnostics for mixed tab/space indentation styles, invalid characters, unterminated strings/comments, inconsistent dedents, illegal attached operators, and attached joiner-plus-digits forms such as `count-1` with a spaced-expression fix.
 
 Required conformance boundaries include:
 
@@ -246,10 +246,11 @@ print .concat
 count-1
 -einval
 list<string>
+list<string>= x
 value===other
 ```
 
-The lexer must tokenize `value === other` and `value===other` consistently as `==` followed by structural `=`, and must tokenize `list<string>` without treating angle brackets as generic delimiters. Milestone 2 owns the contextual rejection and fixes for both spellings.
+The lexer must tokenize `value === other` and `value===other` consistently as `==` followed by structural `=`, and must tokenize `list<string>` without treating angle brackets as generic delimiters. Both angle spellings must tokenize deterministically even though they produce different trailing tokens: a bare trailing `>` where whitespace or a delimiter follows, and a single `>=` token where `=` follows immediately. Milestone 2 owns the contextual rejection and fixes for every one of these spellings.
 
 Indentation cases must cover consistently space-indented and consistently tab-indented files, a mixture within one indentation prefix, and a style change between different code lines in one file.
 
@@ -267,7 +268,7 @@ Deliver:
 - `if`/`else`, `while`, collection and three-clause `for`, `return`, `break`, and `continue` syntax;
 - parser recovery at newline and dedent boundaries;
 - normalized parse-tree serializer for goldens;
-- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters, `===` with an explicit equality/type-identity fix, and angle-bracket generic intent in type position with a canonical `list of string` fix;
+- explicit unsupported-feature nodes or diagnostics for reserved/deferred constructs, including source-declared type parameters, `===` with an explicit equality/type-identity fix, and angle-bracket generic intent in type position with a canonical `list of string` fix, recognized from both the bare trailing `>` and the `>=` spelling.
 
 Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 
@@ -314,7 +315,7 @@ Exit criterion: a purpose-built manifest-enumerated multi-file test proves manif
 
 Deliver:
 
-- direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, `string`, and `none`, where the Rust representation preserves the complete Strata contract;
+- direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, the explicit widths `float32` and `float64`, `string`, and `none`, where the Rust representation preserves the complete Strata contract;
 - core `int` as an exact signed integer with adaptive `i64`, `i128`, and arbitrary-precision tiers, including normalization to the smallest exact tier;
 - the initial integer support component and lowering hooks for checked tier promotion, exact wide operations, normalization, and capability rejection where arbitrary-precision promotion is unavailable;
 - explicit `/core types` resolution for fixed-width descriptor objects: programs import dot-object descriptors and bind ordinary type names, while the exact default prelude remains unchanged;
@@ -322,7 +323,7 @@ Deliver:
 - typed parameters, optional parameters with defaults, and return contracts;
 - initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
 - assignment compatibility without implicit cross-type coercion;
-- explicit throwing `coerce` plus `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` for version-one numeric conversions, including fixed-width-to-`int` widening only when requested explicitly;
+- explicit throwing `coerce` plus `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` for integer destinations only, covering `int` and every fixed width, including fixed-width-to-`int` widening only when requested explicitly; a floating-point or `string` destination is rejected with an explicit unsupported-destination diagnostic rather than partially implemented, so `.integer-conversion-overflow` remains the only conversion failure version one can raise;
 - unary, arithmetic, shift, bitwise, comparison, Boolean, equality, identity/type-membership, and type-appropriate operator checking;
 - exact `int` arithmetic, infinite two's-complement bitwise behavior, exact/arithmetic shifts, and Euclidean division/remainder without inheriting Rust overflow, shift, or signed division behavior;
 - fixed-width checked ordinary arithmetic and explicit checked, wrapping, saturating, and overflowing operation families without host debug/release dependence; fixed-width shift counts receive an explicit source-language operation contract rather than inheriting host behavior;
@@ -367,7 +368,7 @@ Deliver:
 
 Generated artifacts should be organized under a project-local ignored directory or a user cache, never mixed with authored source. A `--keep-generated` or stable development path may expose them intentionally.
 
-Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens. Goldens pin canonical float display for `nan`, `inf`, `-inf`, negative zero, and shortest round-trippable finite values, plus adjacent `print` calls that prove record separation and newline behavior; generated-project goldens include both authored lowered modules and the vendored support copy.
+Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens. Goldens pin canonical float display at both `float32` and `float64` width for `nan`, `inf`, `-inf`, negative zero, and shortest round-trippable finite values; they pin one multi-argument `print` call proving that arguments render adjacently with no inserted separator and exactly one trailing newline, alongside adjacent `print` calls proving record separation; and generated-project goldens include both authored lowered modules and the vendored support copy.
 
 ### Milestone 6 — Source diagnostics across Rust
 
@@ -429,7 +430,7 @@ The release pipeline must prove, from a clean checkout:
 - a minimal package manifest, manifest-enumerated source units, implicit single-file package identity, namespace declarations, and the fixed version-one bootstrap module table;
 - ordinary/object-form lexical lookup distinction, collision/idempotent-import rules, and structural imports unaffected by ordinary bindings;
 - locals, namespace bindings, visibility, explicit `global` bindings, definite assignment, and the exact default prelude;
-- core literals and static scalar types, including adaptive exact `int`, fixed-width integer contracts, explicit numeric coercion families, normative arithmetic/conversion failures, and target capability diagnostics;
+- core literals and static scalar types, including adaptive exact `int`, fixed-width integer contracts, `float` with its explicit `float32`/`float64` widths, integer-destination coercion families, normative arithmetic/conversion failures, and target capability diagnostics;
 - functions, required/optional parameters, positional/named arguments, calls, and return values;
 - basic expressions, descriptor-object identity and `.type`, type-membership predicates, assignment, shifts, bitwise operators, and specified evaluation order; ordinary values remain identity-less and `===` is rejected;
 - `if`/`else`, `while`, collection and three-clause `for`, `break`, `continue`, and `return`;
@@ -442,6 +443,7 @@ The release pipeline must prove, from a clean checkout:
 - universal COW semantics and mutable collection aliasing;
 - `ref`, borrow families, `move`, linear values, and deterministic user-defined destruction;
 - `throw`/`try`/`catch`/`finally`;
+- floating-point and `string` coercion destinations, including numeric-to-float rounding and text parsing;
 - variadics, generators, closures if they delay the core pipeline;
 - custom declaration modifiers and package-defined type constructors;
 - custom importers, registries, lockfiles, Rust/system/runtime dependencies;
@@ -478,7 +480,7 @@ Resolve these through small conformance branches before their dependent mileston
 - representation of finite dynamic alternatives in generated Rust;
 - generated module boundaries for multiple namespaces in one package;
 - source-map encoding between Strata byte spans and generated Rust spans;
-- manifest location and deterministic discovery for multi-unit projects;
+- manifest location and deterministic discovery for multi-unit projects.
 
 Each decision should leave behind executable accepted/rejected cases. Do not use `demos/` to settle these questions because their surrounding unsupported constructs would confound the result.
 
