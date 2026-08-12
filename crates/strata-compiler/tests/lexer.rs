@@ -195,6 +195,14 @@ fn malformed_lexemes_report_originating_bytes() {
 }
 
 #[test]
+fn multibyte_invalid_character_is_rendered_as_unicode() {
+    let source = SourceFile::new(0, "case.strata".into(), "naïve".to_owned());
+    let error = lex(&source).unwrap_err().remove(0);
+    assert_eq!(error.message, "invalid source character `ï`");
+    assert_eq!(error.primary.unwrap(), strata_compiler::Span::new(0, 2, 4));
+}
+
+#[test]
 fn escaped_quote_does_not_terminate_a_quoted_string() {
     let source = SourceFile::new(0, "case.strata".into(), "name = 'it\\'".to_owned());
     let diagnostics = lex(&source).unwrap_err();
