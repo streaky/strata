@@ -816,7 +816,7 @@ After this declaration, ordinary lookup of `print` through the program-global ti
 
 A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
 
-Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, and `.uint128` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -1385,9 +1385,11 @@ A constrained binding may combine coercion and checking:
 x float = '42'.coerce; float
 ```
 
-`coerce` either returns an object compatible with the requested type or throws a coercion/type error.
+`coerce` either returns an object compatible with the requested type or throws `.coercion-error`.
 
 There is no universal guarantee that every type can coerce to every other type.
+
+Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range coerces to the corresponding infinity only when the source type's protocol declares that behaviour; otherwise it throws `.coercion-error`. Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` for text it cannot represent exactly under the rounding rule above. Locale-sensitive or format-directed parsing belongs to explicitly imported facilities, not to `coerce`.
 
 ### 11.6 Type objects
 
@@ -1471,6 +1473,8 @@ Strictness is local and composable. A strict package may call a dynamic package 
 A type violation should be reported at compile time when provable.
 
 When a dynamic value crosses a typed boundary and its concrete type is not known until runtime, the generated program performs a runtime check and throws a source-language type error.
+
+Version one reaches that runtime path in no ordinary program. Because it admits a dynamic binding only when its alternatives form a finite compiler-known set, as stated in §9.6, protocol availability and typed-boundary compatibility are decided statically across every alternative and incompatibility is a compile-time error. The runtime check exists for later erased or foreign dynamic values whose complete alternatives are unavailable at compilation.
 
 ### 11.11 Truth
 
@@ -2156,6 +2160,7 @@ The `/core errors` namespace defines the standard error protocol and the followi
 | `.division-by-zero` | An integer division or remainder operation has a zero divisor. | `/`, `%`, and `div-rem` for every integer type and arithmetic mode. | operation and numeric type |
 | `.integer-conversion-overflow` | An explicit throwing integer conversion cannot represent the mathematical source value in its destination type. | `coerce` to a fixed-width integer destination. | source value/type and destination type |
 | `.negative-shift-count` | An integer shift count is negative. | Unbounded-`int` `<<` and `>>`. | attempted count and shift operation |
+| `.coercion-error` | An explicit coercion has no result compatible with the requested destination, outside the integer-overflow case above. | `coerce` where the source value or text cannot be represented in the destination type, including parsing coercion from `string` and an out-of-range floating-point destination whose protocol does not declare infinity. | source value/type and destination type |
 
 Each is a subtype or conforming instance of `.error`, is catchable through the ordinary `throw`/`catch` model, and has the standard `message` plus the structured information listed above. Implementations may attach additional diagnostic fields without changing program-visible matching. Names such as `.file-error`, `.not-found`, `.config-error`, and `.python-error` used elsewhere are package- or adapter-defined error objects, not additional implicit core errors.
 
@@ -3695,6 +3700,7 @@ The support runtime should be layered and pay-for-use.
 
 Possible components include:
 
+- the adaptive exact `int` representation, its arithmetic, and its normative integer failures;
 - dynamic `Value` representation;
 - type/object descriptors;
 - callable/default-invocation adapters;
@@ -4843,7 +4849,7 @@ function read-ratio float; input
   return ratio
 ```
 
-An invalid conversion throws a source-language coercion error.
+An invalid conversion throws `.coercion-error`.
 
 ### 35.5 Value, ref, and move
 
@@ -5174,6 +5180,7 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 71. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
 72. fixed-width numeric descriptor objects resolve only through explicit `/core types` object-form imports and ordinary bindings; they are not added to the exact default prelude or treated as reserved type words.
 73. canonical type descriptors are real values with stable identity, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative even when the lowering erases the runtime descriptor.
+74. numeric-to-float coercion rounds to nearest with ties to even and reports precision loss through the destination type rather than an error, unrepresentable float destinations and unparseable text throw `.coercion-error`, and parsing coercion accepts exactly the destination's canonical text-display spelling.
 
 ---
 
