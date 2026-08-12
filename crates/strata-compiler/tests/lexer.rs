@@ -50,6 +50,14 @@ fn identifiers_and_spaced_operators_have_stable_boundaries() {
 }
 
 #[test]
+fn required_attachment_spellings_remain_distinct() {
+    assert_eq!(significant("a + b")[1].2, Attachment::Detached);
+    assert_eq!(significant("-einval")[0].1, "-");
+    assert_eq!(significant("print.concat")[1].2, Attachment::Both);
+    assert_eq!(significant("print .concat")[1].2, Attachment::Right);
+}
+
+#[test]
 fn punctuation_comparisons_and_shifts_are_deterministic() {
     assert_eq!(
         significant("value===other")
@@ -190,6 +198,43 @@ fn indentation_ignores_blank_and_comment_only_lines() {
             .count(),
         1
     );
+}
+
+#[test]
+fn tab_indentation_and_style_changes_are_covered() {
+    assert_eq!(
+        lex_source("function main\n\tvalue\nnext\n")
+            .tokens
+            .iter()
+            .filter(|token| token.kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    let source = SourceFile::new(0, "case.strata".into(), "function main\n  value\n\tnext\n".to_owned());
+    assert!(lex(&source).unwrap_err().iter().any(|diagnostic| diagnostic.code == "S0001"));
+}
+
+#[test]
+fn inconsistent_dedent_is_rejected() {
+    let source = SourceFile::new(0, "case.strata".into(), "root\n    deep\n  invalid\n".to_owned());
+    assert!(lex(&source).unwrap_err().iter().any(|diagnostic| diagnostic.code == "L0004"));
+}
+
+#[test]
+fn structural_tokens_and_trivia_have_exact_spans() {
+    let source = ":|(),[]{}--";
+    let lexed = lex_source(source);
+    let kinds = lexed.tokens.iter().map(|token| token.kind).collect::<Vec<_>>();
+    for kind in [
+        TokenKind::Colon, TokenKind::Pipe, TokenKind::OpenParen, TokenKind::CloseParen,
+        TokenKind::Comma, TokenKind::OpenBracket, TokenKind::CloseBracket,
+        TokenKind::OpenBrace, TokenKind::CloseBrace, TokenKind::Decrement,
+    ] {
+        assert!(kinds.contains(&kind), "{kind:?}");
+    }
+    let trivia = lex_source("x # note").trivia.pop().unwrap();
+    assert_eq!(trivia.text, "# note");
+    assert_eq!(trivia.span, strata_compiler::Span::new(0, 2, 8));
 }
 
 #[test]
