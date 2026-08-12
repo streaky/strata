@@ -2199,19 +2199,24 @@ The compiler may statically lower standard iterators to native Rust iterator cha
 
 A `string` stores Unicode text, conventionally as UTF-8.
 
-The standard API must distinguish:
+The standard API distinguishes three explicit units:
 
-- byte length;
-- Unicode scalar count;
-- grapheme count.
+- `bytes`: UTF-8 encoded bytes;
+- `scalars`: Unicode scalar values;
+- `graphemes`: Unicode extended grapheme clusters, corresponding most closely to user-perceived characters.
 
-The recommended default `string.length` is human-oriented grapheme count. Explicit fast/storage operations remain available:
+The default `string.length` is the number of grapheme clusters:
 
 ```text
+text.length
 text.bytes.length
 text.scalars.length
 text.graphemes.length
 ```
+
+`text.length` and `text.graphemes.length` are semantically identical. The explicit form is useful when the unit deserves emphasis alongside byte or scalar operations. `text.bytes.length` reports encoded storage bytes; an API named `raw` is deliberately avoided because it does not identify a unit.
+
+Grapheme and scalar counts generally require traversal, while the UTF-8 byte length may be available in constant time. Performance tooling should expose that distinction rather than changing the default unit. An implementation must not silently substitute byte or scalar count when grapheme support is unavailable.
 
 String indexing should either return graphemes or be rejected in favour of explicit views; it must never ambiguously mean bytes on one target and characters on another.
 
@@ -3465,19 +3470,13 @@ Neither is a user-visible canonical IR.
 
 ### 27.3 Compiler implementation language
 
-A Python prototype frontend is entirely reasonable:
+The first compiler frontend should be implemented in Rust.
 
-- rapid lexer/parser iteration;
-- easy golden testing;
-- straightforward Rust source emission;
-- low initial implementation cost.
+Rust provides one distributable toolchain executable, precise and exhaustively checked compiler phase models, and direct integration with generated Cargo projects, structured rustc diagnostics, source maps, and any future support crates.
 
-A production compiler may later be:
+Mature parser tooling should be evaluated rather than assuming that a Rust implementation requires every frontend component to be handwritten. A parser-combinator library such as Chumsky may provide token parsing, spans, recursive grammars, Pratt expression parsing, rich errors, and recovery. Strata's token, syntax, span, and diagnostic models remain compiler-owned so a library can be replaced or selectively bypassed without changing language semantics.
 
-- rewritten in Rust;
-- partially moved into Rust;
-- self-hosted in the language;
-- or remain a mixed implementation.
+The hardest whitespace-sensitive and operator-attachment cases must be prototyped before the parser architecture is frozen. A narrow handwritten lexer remains appropriate if indentation, bare text, or attached-operator rules are clearer there.
 
 The runtime characteristics of compiled programs do not depend on the frontend implementation language.
 
@@ -4060,6 +4059,10 @@ The language needs a public conformance corpus covering:
 - package and FFI boundaries.
 
 Generated Rust snapshots are useful but semantic execution tests remain authoritative.
+
+The conformance suite should contain many minimal Strata snippets, each isolating one lexical, syntactic, semantic, or lowering decision. Where lowering is expected to succeed, the case should be able to assert canonical generated Rust byte for byte. This turns the public lowered representation into a precise, reviewable compiler contract and makes broad coverage inexpensive.
+
+Not every minimal snapshot needs its own Cargo invocation. The harness may combine independent accepted snippets into deterministic generated crates for batched `cargo check`, while cases whose contract depends on crate structure, linking, diagnostics, or runtime behaviour remain individually compiled or executed. Snapshot agreement proves what the compiler emitted; Rust compilation proves that emission is valid; selected execution tests remain the authority for observable language semantics.
 
 ### 31.7 Fuzzing
 
@@ -4923,37 +4926,32 @@ list of string
 
 is readable and unshifted, but needs parser and tooling validation in complex signatures.
 
-### 40.4 String length
 
-The draft recommends grapheme-oriented default length.
-
-Performance and user expectations may favour requiring explicit `.graphemes.length` and giving `.length` a cheaper scalar-count contract. The distinction must be explicit whichever default wins.
-
-### 40.5 Class inheritance lowering
+### 40.4 Class inheritance lowering
 
 Single inheritance is useful, especially with `protected`, but generated Rust quality should be tested against composition plus interfaces.
 
 The source feature should remain only if its costs stay inspectable and unsurprising.
 
-### 40.6 Reference implementation
+### 40.5 Reference implementation
 
 The source semantics of `ref` are fixed as shared object identity.
 
 The compiler’s thresholds for borrow, `Rc`-like, `Arc`-like, or custom dynamic storage need profiling and target-specific tuning.
 
-### 40.7 Public-by-default package APIs
+### 40.6 Public-by-default package APIs
 
 Public-by-default matches the language philosophy.
 
 A package linter or strict API mode may still be desirable to prevent accidental long-term compatibility commitments.
 
-### 40.8 Reflection embedding
+### 40.7 Reflection embedding
 
 Runtime access to generated Rust is extremely useful in development.
 
 The default release policy—embedded, sidecar, or stripped—must balance inspectability, binary size, security, and deployability.
 
-### 40.9 Import evaluation order
+### 40.8 Import evaluation order
 
 Source-order importer replacement is understandable and bootstrappable.
 
