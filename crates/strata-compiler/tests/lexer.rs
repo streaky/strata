@@ -184,3 +184,10 @@ fn malformed_lexemes_report_originating_bytes() {
         assert_eq!(error.primary.unwrap().start, start, "{text}");
     }
 }
+
+#[test]
+fn escaped_quote_does_not_terminate_a_quoted_string() {
+    let source = SourceFile::new(0, "case.strata".into(), "name = 'it\\'".to_owned());
+    let diagnostics = lex(&source).unwrap_err();
+    assert!(diagnostics.iter().any(|diagnostic| diagnostic.code == "S0002"));
+}
