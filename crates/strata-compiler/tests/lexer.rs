@@ -86,10 +86,17 @@ fn punctuation_comparisons_and_shifts_are_deterministic() {
 #[test]
 fn bitwise_operators_and_numeric_forms_are_single_tokens() {
     for source in ["a & b", "a ^ b", "~value"] {
-        assert!(significant(source).iter().any(|token| token.0 == TokenKind::Operator));
+        assert!(
+            significant(source)
+                .iter()
+                .any(|token| token.0 == TokenKind::Operator)
+        );
     }
     for source in ["1.5", "0xff", "1_000"] {
-        assert_eq!(significant(source), vec![(TokenKind::Number, source.into(), Attachment::Detached)]);
+        assert_eq!(
+            significant(source),
+            vec![(TokenKind::Number, source.into(), Attachment::Detached)]
+        );
     }
 }
 
@@ -130,9 +137,12 @@ fn strings_comments_and_trivia_retain_exact_source() {
 #[test]
 fn comments_do_not_change_expression_start() {
     let lexed = lex_source("x = /* c */ >tail text");
-    assert!(lexed.tokens.iter().any(|token| {
-        token.kind == TokenKind::TailString && token.text == ">tail text"
-    }));
+    assert!(
+        lexed
+            .tokens
+            .iter()
+            .any(|token| { token.kind == TokenKind::TailString && token.text == ">tail text" })
+    );
 }
 
 #[test]
@@ -156,24 +166,34 @@ fn block_strings_are_contextual_and_require_a_clean_marker_line() {
         lex(&source)
             .unwrap_err()
             .iter()
-            .any(|diagnostic| diagnostic.code == "S0004")
+            .any(|diagnostic| diagnostic.code == "L0008")
     );
 }
 
 #[test]
 fn block_string_token_covers_body_and_uses_its_selected_prefix() {
     let lexed = lex_source("x = >>\n    first\n  second\n");
-    let block = lexed.tokens.iter().find(|token| token.kind == TokenKind::BlockString).unwrap();
+    let block = lexed
+        .tokens
+        .iter()
+        .find(|token| token.kind == TokenKind::BlockString)
+        .unwrap();
     assert_eq!(block.text, ">>\n    first\n");
     assert!(lexed.tokens.iter().any(|token| token.text == "second"));
 }
 
 #[test]
 fn comments_and_shift_operators_do_not_open_block_strings() {
-    for source in ["x = 1 # use >>\n  kept = 2\nafter = 3\n", "x = value >>\n  8\n"] {
+    for source in [
+        "x = 1 # use >>\n  kept = 2\nafter = 3\n",
+        "x = value >>\n  8\n",
+    ] {
         let lexed = lex_source(source);
         assert!(
-            lexed.tokens.iter().any(|token| token.text == "kept" || token.text == "8"),
+            lexed
+                .tokens
+                .iter()
+                .any(|token| token.text == "kept" || token.text == "8"),
             "{source}"
         );
     }
@@ -210,25 +230,54 @@ fn tab_indentation_and_style_changes_are_covered() {
             .count(),
         1
     );
-    let source = SourceFile::new(0, "case.strata".into(), "function main\n  value\n\tnext\n".to_owned());
-    assert!(lex(&source).unwrap_err().iter().any(|diagnostic| diagnostic.code == "S0001"));
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "function main\n  value\n\tnext\n".to_owned(),
+    );
+    assert!(
+        lex(&source)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0003")
+    );
 }
 
 #[test]
 fn inconsistent_dedent_is_rejected() {
-    let source = SourceFile::new(0, "case.strata".into(), "root\n    deep\n  invalid\n".to_owned());
-    assert!(lex(&source).unwrap_err().iter().any(|diagnostic| diagnostic.code == "L0004"));
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "root\n    deep\n  invalid\n".to_owned(),
+    );
+    assert!(
+        lex(&source)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0004")
+    );
 }
 
 #[test]
 fn structural_tokens_and_trivia_have_exact_spans() {
     let source = ":|(),[]{}--";
     let lexed = lex_source(source);
-    let kinds = lexed.tokens.iter().map(|token| token.kind).collect::<Vec<_>>();
+    let kinds = lexed
+        .tokens
+        .iter()
+        .map(|token| token.kind)
+        .collect::<Vec<_>>();
     for kind in [
-        TokenKind::Colon, TokenKind::Pipe, TokenKind::OpenParen, TokenKind::CloseParen,
-        TokenKind::Comma, TokenKind::OpenBracket, TokenKind::CloseBracket,
-        TokenKind::OpenBrace, TokenKind::CloseBrace, TokenKind::Decrement,
+        TokenKind::Colon,
+        TokenKind::Pipe,
+        TokenKind::OpenParen,
+        TokenKind::CloseParen,
+        TokenKind::Comma,
+        TokenKind::OpenBracket,
+        TokenKind::CloseBracket,
+        TokenKind::OpenBrace,
+        TokenKind::CloseBrace,
+        TokenKind::Decrement,
     ] {
         assert!(kinds.contains(&kind), "{kind:?}");
     }
@@ -240,9 +289,25 @@ fn structural_tokens_and_trivia_have_exact_spans() {
 #[test]
 fn code_after_a_multiline_comment_terminator_keeps_indentation() {
     let lexed = lex_source("function main\n  /* c\n  */ value\nnext\n");
-    let kinds = lexed.tokens.iter().map(|token| token.kind).collect::<Vec<_>>();
-    assert_eq!(kinds.iter().filter(|kind| **kind == TokenKind::Indent).count(), 1);
-    assert_eq!(kinds.iter().filter(|kind| **kind == TokenKind::Dedent).count(), 1);
+    let kinds = lexed
+        .tokens
+        .iter()
+        .map(|token| token.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count(),
+        1
+    );
     assert!(lexed.tokens.iter().any(|token| token.text == "value"));
 }
 
@@ -251,7 +316,7 @@ fn malformed_lexemes_report_originating_bytes() {
     for (text, code, start) in [
         ("count-1", "L0005", 5),
         ("a+ b", "L0006", 1),
-        ("function main\n \tvalue", "S0001", 14),
+        ("function main\n \tvalue", "L0003", 14),
         ("/* open", "L0002", 0),
         ("naïve", "L0001", 2),
     ] {
@@ -277,5 +342,9 @@ fn multibyte_invalid_character_is_rendered_as_unicode() {
 fn escaped_quote_does_not_terminate_a_quoted_string() {
     let source = SourceFile::new(0, "case.strata".into(), "name = 'it\\'".to_owned());
     let diagnostics = lex(&source).unwrap_err();
-    assert!(diagnostics.iter().any(|diagnostic| diagnostic.code == "S0002"));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0007")
+    );
 }
