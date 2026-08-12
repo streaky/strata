@@ -93,9 +93,16 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), String> {
         "[package]\nname = \"strata_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
     )
     .map_err(|error| format!("cannot write generated manifest: {error}"))?;
-    fs::write(directory.join("src/main.rs"), rust)
+    write_if_changed(&directory.join("src/main.rs"), rust.as_bytes())
         .map_err(|error| format!("cannot write generated Rust: {error}"))?;
     Ok(())
+}
+
+fn write_if_changed(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    if fs::read(path).is_ok_and(|existing| existing == content) {
+        return Ok(());
+    }
+    fs::write(path, content)
 }
 fn ensure_rust_toolchain() -> Result<(), String> {
     let status = Command::new("cargo")
