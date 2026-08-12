@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-const HELLO: &str = "namespace hello\n\nfrom /core output import .print\n\nprint = .print\n\nfunction main\n  print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".\n";
+const HELLO: &str = include_str!("../../../tests/conformance/run/hello/case.strata");
 
 #[test]
 fn hello_lowers_deterministically() {
