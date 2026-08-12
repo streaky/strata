@@ -45,6 +45,16 @@ fn strings_comments_and_trivia_retain_exact_source() {
 }
 
 #[test]
+fn block_strings_are_contextual_and_require_a_clean_marker_line() {
+    let lexed = lex_source("message = >>\n  literal # text\nnext = left >> right");
+    assert!(lexed.tokens.iter().any(|token| token.kind == TokenKind::BlockString));
+    assert!(lexed.tokens.iter().any(|token| token.kind == TokenKind::Operator && token.text == ">>"));
+
+    let source = SourceFile::new(0, "case.strata".into(), "message = >> ".to_owned());
+    assert!(lex(&source).unwrap_err().iter().any(|diagnostic| diagnostic.code == "S0004"));
+}
+
+#[test]
 fn indentation_ignores_blank_and_comment_only_lines() {
     let lexed = lex_source("function main\n  value\n\n    # ignored\n  next\nafter\n");
     assert_eq!(lexed.tokens.iter().filter(|token| token.kind == TokenKind::Indent).count(), 1);
