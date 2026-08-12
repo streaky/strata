@@ -26,6 +26,18 @@ fn rejects_mixed_indentation() {
 }
 
 #[test]
+fn compilation_failure_owns_the_original_source() {
+    let source = HELLO.replace("print = .print", "print = .missing");
+    let failure = strata_compiler::compile("owned.strata", source.clone()).unwrap_err();
+    assert_eq!(failure.source.text(), source);
+    assert_eq!(
+        failure.source.path(),
+        PathBuf::from("owned.strata").as_path()
+    );
+    assert!(failure.iter().any(|diagnostic| diagnostic.code == "S0003"));
+}
+
+#[test]
 fn tail_string_preserves_every_remaining_character() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
