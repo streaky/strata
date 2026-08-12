@@ -18,7 +18,6 @@ struct SyntaxProgram {
     message: String,
 }
 
-
 struct RustIr<'program> {
     namespace: &'program str,
     message: &'program str,
@@ -69,7 +68,6 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
         rust,
     })
 }
-
 
 fn parse(source: &SourceFile, tokens: &LexedSource) -> Result<SyntaxProgram, Vec<Diagnostic>> {
     let mut lines = tokens
