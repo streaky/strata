@@ -1,0 +1,8 @@
+namespace hello
+
+from /core output import .print
+
+print = .print
+
+function main
+  print; 'hello from strata'

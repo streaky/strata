@@ -52,8 +52,14 @@ impl SourceFile {
 
     #[must_use]
     pub fn line_column(&self, offset: usize) -> (usize, usize) {
-        let line_index = self.line_starts.partition_point(|start| *start <= offset).saturating_sub(1);
+        let line_index = self
+            .line_starts
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1);
         let line_start = self.line_starts[line_index];
-        (line_index + 1, self.text[line_start..offset].chars().count() + 1)
+        (
+            line_index + 1,
+            self.text[line_start..offset].chars().count() + 1,
+        )
     }
 }
