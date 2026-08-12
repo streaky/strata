@@ -83,7 +83,6 @@ fn lex(source: &SourceFile) -> LexedSource<'_> {
     LexedSource { logical_lines }
 }
 
-#[allow(clippy::too_many_lines)]
 fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram, Vec<Diagnostic>> {
     let mut lines = tokens.logical_lines.iter().copied().peekable();
     let mut errors = Vec::new();
@@ -92,6 +91,7 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
     let mut print_binding = None;
     let mut in_main = false;
     let mut message = None;
+    let mut main_statement_seen = false;
     let mut indent_style: Option<u8> = None;
 
     while let Some((offset, line)) = lines.next() {
@@ -133,6 +133,7 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
                 in_main = true;
             }
         } else if in_main && indent_len > 0 && raw_content.starts_with("print; ") {
+            main_statement_seen = true;
             if message.is_some() {
                 errors.push(Diagnostic::error(
                     "S0005",
@@ -141,57 +142,18 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
                 ));
                 continue;
             }
-            let value = &raw_content[7..];
-            if value == ">>" {
-                message = parse_block_string(
-                    source,
-                    &mut lines,
+            message = parse_print_value(
+                source,
+                &mut lines,
+                &raw_content[7..],
+                LineContext {
+                    offset,
+                    line,
                     indent_len,
-                    &mut indent_style,
-                    &mut errors,
-                );
-            } else if value.starts_with(">>") {
-                errors.push(Diagnostic::error(
-                    "S0004",
-                    "block string marker `>>` must be the final content on its line",
-                    Span::new(source.id(), offset + indent_len + 7, offset + line.len()),
-                ));
-            } else if let Some(value) = value.strip_prefix('>') {
-                message = Some(value.to_owned());
-            } else if let Some(quoted) = value.strip_prefix('\'') {
-                if let Some(closing) = closing_quote(quoted) {
-                    if closing + 1 == quoted.len() {
-                        message = Some(unescape(
-                            &quoted[..closing],
-                            source,
-                            offset + indent_len + 8,
-                            &mut errors,
-                        ));
-                    } else {
-                        errors.push(Diagnostic::error(
-                            "S0004",
-                            "content after closing string quote is not supported",
-                            Span::new(
-                                source.id(),
-                                offset + indent_len + 9 + closing,
-                                offset + line.len(),
-                            ),
-                        ));
-                    }
-                } else {
-                    errors.push(Diagnostic::error(
-                        "S0002",
-                        "unterminated string literal",
-                        Span::new(source.id(), offset + indent_len + 7, offset + line.len()),
-                    ));
-                }
-            } else {
-                errors.push(Diagnostic::error(
-                    "S0004",
-                    "print expects one text argument",
-                    Span::new(source.id(), offset + indent_len, offset + line.len()),
-                ));
-            }
+                },
+                &mut indent_style,
+                &mut errors,
+            );
         } else if content.contains("= .") {
             let object = content
                 .split_once("= .")
@@ -210,47 +172,75 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
         }
     }
 
-    let end = source.text().len();
-    if namespace.is_none() {
-        errors.push(Diagnostic::error(
-            "S0005",
-            "missing namespace declaration",
-            Span::new(source.id(), 0, 0),
-        ));
-    }
-    if output_path.is_none() {
-        errors.push(Diagnostic::error(
-            "S0003",
-            "missing import for `.print`",
-            Span::new(source.id(), end, end),
-        ));
-    }
-    if print_binding.is_none() {
-        errors.push(Diagnostic::error(
-            "S0003",
-            "missing ordinary `print` binding",
-            Span::new(source.id(), end, end),
-        ));
-    }
-    if !in_main {
-        errors.push(Diagnostic::error(
-            "S0005",
-            "missing `function main`",
-            Span::new(source.id(), end, end),
-        ));
-    }
-    if message.is_none()
-        && !errors
-            .iter()
-            .any(|error| error.code == "S0002" || error.code == "S0004")
-    {
-        errors.push(Diagnostic::error(
-            "S0005",
-            "main must invoke `print`",
-            Span::new(source.id(), end, end),
-        ));
-    }
+    add_missing_diagnostics(
+        source,
+        Presence([
+            namespace.is_some(),
+            output_path.is_some(),
+            print_binding.is_some(),
+            in_main,
+            main_statement_seen,
+        ]),
+        &mut errors,
+    );
+    finish_parse(namespace, output_path, print_binding, message, errors)
+}
+#[derive(Clone, Copy)]
+struct Presence([bool; 5]);
 
+#[derive(Clone, Copy)]
+struct LineContext<'source> {
+    offset: usize,
+    line: &'source str,
+    indent_len: usize,
+}
+
+fn add_missing_diagnostics(source: &SourceFile, presence: Presence, errors: &mut Vec<Diagnostic>) {
+    let end = source.text().len();
+    let mut missing = |condition: bool, code: &'static str, message: &'static str, span: Span| {
+        if !condition {
+            errors.push(Diagnostic::error(code, message, span));
+        }
+    };
+    missing(
+        presence.0[0],
+        "S0005",
+        "missing namespace declaration",
+        Span::new(source.id(), 0, 0),
+    );
+    missing(
+        presence.0[1],
+        "S0003",
+        "missing import for `.print`",
+        Span::new(source.id(), end, end),
+    );
+    missing(
+        presence.0[2],
+        "S0003",
+        "missing ordinary `print` binding",
+        Span::new(source.id(), end, end),
+    );
+    missing(
+        presence.0[3],
+        "S0005",
+        "missing `function main`",
+        Span::new(source.id(), end, end),
+    );
+    missing(
+        presence.0[4],
+        "S0005",
+        "main must invoke `print`",
+        Span::new(source.id(), end, end),
+    );
+}
+
+fn finish_parse(
+    namespace: Option<String>,
+    output_path: Option<String>,
+    print_binding: Option<String>,
+    message: Option<String>,
+    errors: Vec<Diagnostic>,
+) -> Result<SyntaxProgram, Vec<Diagnostic>> {
     if errors.is_empty() {
         Ok(SyntaxProgram {
             namespace: namespace.unwrap(),
@@ -262,6 +252,79 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
         Err(errors)
     }
 }
+
+fn parse_print_value<'source>(
+    source: &SourceFile,
+    lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, &'source str)>>,
+    value: &str,
+    context: LineContext<'_>,
+    indent_style: &mut Option<u8>,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let LineContext {
+        offset,
+        line,
+        indent_len,
+    } = context;
+    if value == ">>" {
+        parse_block_string(source, lines, indent_len, indent_style, errors)
+    } else if value.starts_with(">>") {
+        errors.push(Diagnostic::error(
+            "S0004",
+            "block string marker `>>` must be the final content on its line",
+            Span::new(source.id(), offset + indent_len + 7, offset + line.len()),
+        ));
+        None
+    } else if let Some(value) = value.strip_prefix('>') {
+        Some(value.to_owned())
+    } else if let Some(quoted) = value.strip_prefix('\'') {
+        parse_quoted_value(source, quoted, offset, line, indent_len, errors)
+    } else {
+        errors.push(Diagnostic::error(
+            "S0004",
+            "print expects one text argument",
+            Span::new(source.id(), offset + indent_len, offset + line.len()),
+        ));
+        None
+    }
+}
+
+fn parse_quoted_value(
+    source: &SourceFile,
+    quoted: &str,
+    offset: usize,
+    line: &str,
+    indent_len: usize,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let Some(closing) = closing_quote(quoted) else {
+        errors.push(Diagnostic::error(
+            "S0002",
+            "unterminated string literal",
+            Span::new(source.id(), offset + indent_len + 7, offset + line.len()),
+        ));
+        return None;
+    };
+    if closing + 1 != quoted.len() {
+        errors.push(Diagnostic::error(
+            "S0004",
+            "content after closing string quote is not supported",
+            Span::new(
+                source.id(),
+                offset + indent_len + 9 + closing,
+                offset + line.len(),
+            ),
+        ));
+        return None;
+    }
+    Some(unescape(
+        &quoted[..closing],
+        source,
+        offset + indent_len + 8,
+        errors,
+    ))
+}
+
 fn duplicate(source: &SourceFile, offset: usize, line: &str, description: &str) -> Diagnostic {
     Diagnostic::error(
         "S0005",
