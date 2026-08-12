@@ -816,7 +816,7 @@ After this declaration, ordinary lookup of `print` through the program-global ti
 
 A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
 
-Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -1092,6 +1092,12 @@ At minimum, the language requires protocols for:
 - reflection;
 - destruction/drop.
 
+The core text-display protocol produces a `string` for human-facing output. Version one implements it for `string`, `int`, every fixed-width integer, `float`, `float32`, `float64`, `bool`, and `none`. Strings are returned unchanged; integers use base-ten digits with a leading `-` only when negative and no grouping; floating-point values use the shortest round-trippable decimal spelling while preserving negative zero and spelling non-finite values `inf`, `-inf`, and `nan`; booleans and absence render as `true`, `false`, and `none`. `bytes` deliberately does not implement text display because arbitrary bytes are not Unicode text.
+
+The core `print` object accepts values implementing text display, invokes that protocol left to right, writes the resulting text, and terminates the record with a newline. A value without the protocol is a source type error when known statically and a typed runtime error otherwise. Formatting policy beyond this canonical scalar display remains in explicitly imported formatting facilities; `print` does not obtain locale, width, precision, or arbitrary object formatting implicitly.
+
+Version one admits a dynamic binding only when its alternatives form a finite compiler-known set. Protocol availability and typed-boundary compatibility are therefore checked across every alternative statically. If any possible alternative lacks text display, passing that binding to `print` is a source type error; the first-version compiler does not defer that case to the runtime. The typed runtime-error rule above applies to later or foreign erased dynamic values whose complete alternatives are unavailable at compilation.
+
 A particular object need not implement every protocol.
 
 ### 9.7 Classes
@@ -1269,6 +1275,17 @@ uint8 uint16 uint32 uint64 uint128
 float32 float64
 ```
 
+These descriptor objects are exported from `/core types` under their corresponding dot-object names. The default prelude binds only `int`, `float`, `bool`, `string`, `bytes`, and `none`; a program using a fixed-width type must import and bind it explicitly:
+
+```text
+from /core types import .int64
+int64 = .int64
+
+count int64 = 42
+```
+
+An imported descriptor can be rebound under another ordinary name without changing the represented type. The fixed-width spellings are therefore standard object names, not reserved type keywords and not hidden compiler-only names.
+
 `int` is one source type, not an alias for `int64` and not a union of source-visible width types. Its values have no language-level minimum or maximum. Ordinary `int` arithmetic produces the exact mathematical result; crossing a representation boundary is internal runtime control flow, not a throw, panic, type change, or observable conversion.
 
 The standard runtime represents `int` values adaptively: a compact `i64` fast tier, an `i128` middle tier, and arbitrary-precision signed limb storage beyond that. The erased wrapper must keep an ordinary small integer machine-word-sized where the target permits; it must not inflate every `int` to an inline 128-bit payload merely because wider values are supported. A wide tier may therefore be boxed or share a wide/big allocation header. Statically proven values may lower directly to `i64`, `i128`, or specialised limb operations without constructing the erased wrapper.
@@ -1368,9 +1385,11 @@ A constrained binding may combine coercion and checking:
 x float = '42'.coerce; float
 ```
 
-`coerce` either returns an object compatible with the requested type or throws a coercion/type error.
+`coerce` either returns an object compatible with the requested type or throws `.coercion-error`.
 
 There is no universal guarantee that every type can coerce to every other type.
+
+Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range coerces to the corresponding infinity only when the source type's protocol declares that behaviour; otherwise it throws `.coercion-error`. Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` for text it cannot represent exactly under the rounding rule above. Locale-sensitive or format-directed parsing belongs to explicitly imported facilities, not to `coerce`.
 
 ### 11.6 Type objects
 
@@ -1391,6 +1410,8 @@ person user-type = .user; data
 ```
 
 The compiler resolves type compatibility through the object’s type protocol.
+
+Type objects are canonical compiler-owned descriptor values with stable type identity. A statically known descriptor argument may be erased during lowering, but source-observable behavior must remain the same as passing the descriptor value: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
 
 ### 11.7 Union and parameterised types
 
@@ -1452,6 +1473,8 @@ Strictness is local and composable. A strict package may call a dynamic package 
 A type violation should be reported at compile time when provable.
 
 When a dynamic value crosses a typed boundary and its concrete type is not known until runtime, the generated program performs a runtime check and throws a source-language type error.
+
+Version one reaches that runtime path in no ordinary program. Because it admits a dynamic binding only when its alternatives form a finite compiler-known set, as stated in §9.6, protocol availability and typed-boundary compatibility are decided statically across every alternative and incompatibility is a compile-time error. The runtime check exists for later erased or foreign dynamic values whose complete alternatives are unavailable at compilation.
 
 ### 11.11 Truth
 
@@ -2137,6 +2160,7 @@ The `/core errors` namespace defines the standard error protocol and the followi
 | `.division-by-zero` | An integer division or remainder operation has a zero divisor. | `/`, `%`, and `div-rem` for every integer type and arithmetic mode. | operation and numeric type |
 | `.integer-conversion-overflow` | An explicit throwing integer conversion cannot represent the mathematical source value in its destination type. | `coerce` to a fixed-width integer destination. | source value/type and destination type |
 | `.negative-shift-count` | An integer shift count is negative. | Unbounded-`int` `<<` and `>>`. | attempted count and shift operation |
+| `.coercion-error` | An explicit coercion has no result compatible with the requested destination, outside the integer-overflow case above. | `coerce` where the source value or text cannot be represented in the destination type, including parsing coercion from `string` and an out-of-range floating-point destination whose protocol does not declare infinity. | source value/type and destination type |
 
 Each is a subtype or conforming instance of `.error`, is catchable through the ordinary `throw`/`catch` model, and has the standard `message` plus the structured information listed above. Implementations may attach additional diagnostic fields without changing program-visible matching. Names such as `.file-error`, `.not-found`, `.config-error`, and `.python-error` used elsewhere are package- or adapter-defined error objects, not additional implicit core errors.
 
@@ -2794,6 +2818,8 @@ A `no-std` build uses a minimal support crate and target-provided capabilities.
 Features that can be compiled away remain available. Features that require unavailable runtime support are rejected at source level.
 
 The target capability model records whether arbitrary-precision `int` promotion and its required allocation are available. Lacking that capability does not change `int` into a bounded or wrapping type: the compiler must prove that every reachable value remains within a target-supported representation or reject the program with a capability diagnostic. Engineers selecting guaranteed bounded, allocation-free arithmetic use an explicit fixed-width integer type.
+
+The minimal support layer includes the adaptive integer representation and its normative integer failures when core `int` first requires them. This is part of the same layered support architecture: hosted and allocation-capable targets may provide arbitrary-precision storage, while constrained targets use proof or capability rejection rather than changed integer semantics.
 
 ### 22.5 Layout and ABI
 
@@ -3674,6 +3700,7 @@ The support runtime should be layered and pay-for-use.
 
 Possible components include:
 
+- the adaptive exact `int` representation, its arithmetic, and its normative integer failures;
 - dynamic `Value` representation;
 - type/object descriptors;
 - callable/default-invocation adapters;
@@ -4822,7 +4849,7 @@ function read-ratio float; input
   return ratio
 ```
 
-An invalid conversion throws a source-language coercion error.
+An invalid conversion throws `.coercion-error`.
 
 ### 35.5 Value, ref, and move
 
@@ -5130,26 +5157,30 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 48. a call owns its remaining logical expression, nested calls require grouping, zero-argument calls require `;`, and three-clause `for` semicolons cannot be consumed as call delimiters.
 49. source type parameters are rejected; strict code uses concrete types, unions, interfaces, or generated concrete declarations rather than silently becoming dynamic.
 50. `c is a` parses as identity against the binding `a`, `c is a widget` parses as type membership, ordinary identity-less values compare false even to themselves, explicit refs alias one identity, and linear resources preserve identity across moves.
-51. an interior `ref` separates COW storage, remains attached to its original logical owner, pins the referenced path, and rejects removal, replacement, escape, or lifetime widening while live.
-52. exported may-throw functions expose `throws`, non-throwing callable contracts reject may-throw implementations, fixed-width checked arithmetic throws a catchable `.arithmetic-overflow`, `int` representation promotion does not throw, and explicit wrapping operations do not.
-53. assigning a subclass value to a base-typed binding preserves the complete dynamic value and dispatch; implementations that would slice are rejected.
-54. protocols express structural capabilities, interfaces define typed dispatch boundaries, traits reuse implementation without becoming types, and single inheritance preserves value and dynamic-type semantics.
-55. only declared precompiled host extensions execute as importers or modifiers; `when build` accepts only its restricted deterministic query subset, records inputs and plans in cache keys, and never recursively executes ordinary Strata source.
-56. an `async function` has an async callable type, `await` is rejected outside async context, sync and async callables are incompatible without an explicit adapter, and no borrow crosses suspension unless its contract proves that lifetime.
-57. default `string.length` requires grapheme segmentation capability; a target lacking it diagnoses the operation instead of substituting scalar or byte length, while explicit scalar/byte views remain available.
-58. representation specialisation may inspect only a package compilation unit and declared dependency metadata; downstream packages consume the published representation contract rather than changing upstream layout.
-59. precedence, associativity, comparison non-associativity, short-circuiting, receiver/index evaluation, assignment-target evaluation, argument order, and default-argument order match §34 exactly under both interpreted tooling and generated Rust.
-60. `private cache = .map;`, `protected state = none`, bare rebinding, member assignment, and index assignment parse; literals, calls, postfix updates, non-assignable temporaries, and ownership-invalid paths are rejected as assignment targets.
-61. every statement form in §34 parses with empty and non-empty bodies where allowed; `else`, `catch`, `finally`, and `case` bind only to their owning constructs, and `return`, loop control, throw, yield, labels, and jumps preserve required cleanup.
-62. unary `-`, `~`, and `not` compose according to precedence; unary `+`, `ref ref value`, and `move move value` are rejected.
-63. unconstrained integer literals beyond `int64` and `int128` range remain `int`; runtime addition, subtraction, and negation promote exactly from the compact tier through `i128` to arbitrary precision without a source-visible overflow.
-64. completed `int` operations normalise back to the smallest exact tier, including an `i128`-tier value crossing into `int64` range and a big value producing a small result; equality and hashing remain identical across every tier.
-65. multiplying two small `int` values uses an exact `i128` intermediate, wider multiplication produces the exact arbitrary-precision result, and multiplication by `0`, `1`, or `-1` preserves promotion and normalisation edge cases.
-66. signed `/`, `%`, and `div-rem` obey the Euclidean quotient/remainder invariant for every sign combination; division by zero throws `.division-by-zero`, `int` division promotes for a representation `MIN / -1`, and fixed-width `MIN / -1` follows its selected overflow mode.
-67. every signed and unsigned fixed width through 128 bits keeps its declared type under arithmetic and implements throwing ordinary, checked, wrapping, saturating, and overflowing operation contracts without build-mode-dependent behaviour.
-68. `coerce`, `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, and fixed-width-to-`int` conversion cannot overflow.
-69. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `.negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
-70. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
+51. core text display renders supported scalar values canonically, `print` consumes that protocol and appends a newline, arbitrary `bytes` and values without text display are rejected rather than guessed, and locale-sensitive or styled formatting remains explicitly imported.
+52. an interior `ref` separates COW storage, remains attached to its original logical owner, pins the referenced path, and rejects removal, replacement, escape, or lifetime widening while live.
+53. exported may-throw functions expose `throws`, non-throwing callable contracts reject may-throw implementations, fixed-width checked arithmetic throws a catchable `.arithmetic-overflow`, `int` representation promotion does not throw, and explicit wrapping operations do not.
+54. assigning a subclass value to a base-typed binding preserves the complete dynamic value and dispatch; implementations that would slice are rejected.
+55. protocols express structural capabilities, interfaces define typed dispatch boundaries, traits reuse implementation without becoming types, and single inheritance preserves value and dynamic-type semantics.
+56. only declared precompiled host extensions execute as importers or modifiers; `when build` accepts only its restricted deterministic query subset, records inputs and plans in cache keys, and never recursively executes ordinary Strata source.
+57. an `async function` has an async callable type, `await` is rejected outside async context, sync and async callables are incompatible without an explicit adapter, and no borrow crosses suspension unless its contract proves that lifetime.
+58. default `string.length` requires grapheme segmentation capability; a target lacking it diagnoses the operation instead of substituting scalar or byte length, while explicit scalar/byte views remain available.
+59. representation specialisation may inspect only a package compilation unit and declared dependency metadata; downstream packages consume the published representation contract rather than changing upstream layout.
+60. precedence, associativity, comparison non-associativity, short-circuiting, receiver/index evaluation, assignment-target evaluation, argument order, and default-argument order match §34 exactly under both interpreted tooling and generated Rust.
+61. `private cache = .map;`, `protected state = none`, bare rebinding, member assignment, and index assignment parse; literals, calls, postfix updates, non-assignable temporaries, and ownership-invalid paths are rejected as assignment targets.
+62. every statement form in §34 parses with empty and non-empty bodies where allowed; `else`, `catch`, `finally`, and `case` bind only to their owning constructs, and `return`, loop control, throw, yield, labels, and jumps preserve required cleanup.
+63. unary `-`, `~`, and `not` compose according to precedence; unary `+`, `ref ref value`, and `move move value` are rejected.
+64. unconstrained integer literals beyond `int64` and `int128` range remain `int`; runtime addition, subtraction, and negation promote exactly from the compact tier through `i128` to arbitrary precision without a source-visible overflow.
+65. completed `int` operations normalise back to the smallest exact tier, including an `i128`-tier value crossing into `int64` range and a big value producing a small result; equality and hashing remain identical across every tier.
+66. multiplying two small `int` values uses an exact `i128` intermediate, wider multiplication produces the exact arbitrary-precision result, and multiplication by `0`, `1`, or `-1` preserves promotion and normalisation edge cases.
+67. signed `/`, `%`, and `div-rem` obey the Euclidean quotient/remainder invariant for every sign combination; division by zero throws `.division-by-zero`, `int` division promotes for a representation `MIN / -1`, and fixed-width `MIN / -1` follows its selected overflow mode.
+68. every signed and unsigned fixed width through 128 bits keeps its declared type under arithmetic and implements throwing ordinary, checked, wrapping, saturating, and overflowing operation contracts without build-mode-dependent behaviour.
+69. `coerce`, `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, and fixed-width-to-`int` conversion cannot overflow.
+70. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `.negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
+71. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
+72. fixed-width numeric descriptor objects resolve only through explicit `/core types` object-form imports and ordinary bindings; they are not added to the exact default prelude or treated as reserved type words.
+73. canonical type descriptors are real values with stable identity, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative even when the lowering erases the runtime descriptor.
+74. numeric-to-float coercion rounds to nearest with ties to even and reports precision loss through the destination type rather than an error, unrepresentable float destinations and unparseable text throw `.coercion-error`, and parsing coercion accepts exactly the destination's canonical text-display spelling.
 
 ---
 
