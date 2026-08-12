@@ -1,5 +1,7 @@
 mod compiler;
 pub mod diagnostic;
+pub mod lexer;
+pub mod tokens;
 pub mod source;
 
 pub use compiler::{Compilation, CompilationFailure, Program, compile};
