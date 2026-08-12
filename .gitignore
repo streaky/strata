@@ -6,4 +6,4 @@ AGENTS.md
 
 # Rust and Strata build artifacts
 /target/
-/.strata/
+**/.strata/
