@@ -54,6 +54,15 @@ fn rejects_empty_block_string() {
 }
 
 #[test]
+fn rejects_trailing_content_after_block_marker() {
+    let source = HELLO.replace("print; >>", "print; >> ");
+    let diagnostics = strata_compiler::compile("marker.strata", source).unwrap_err();
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "S0004" && diagnostic.message.contains("final content")
+    }));
+}
+
+#[test]
 fn rejects_unresolved_object() {
     let source = HELLO.replace("print = .print", "print = .missing");
     let diagnostics = strata_compiler::compile("object.strata", source).unwrap_err();

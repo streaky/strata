@@ -133,6 +133,12 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
                     &mut indent_style,
                     &mut errors,
                 );
+            } else if value.starts_with(">>") {
+                errors.push(Diagnostic::error(
+                    "S0004",
+                    "block string marker `>>` must be the final content on its line",
+                    Span::new(source.id(), offset + indent_len + 7, offset + line.len()),
+                ));
             } else if let Some(value) = value.strip_prefix('>') {
                 message = Some(value.to_owned());
             } else if value.starts_with('\'') {
