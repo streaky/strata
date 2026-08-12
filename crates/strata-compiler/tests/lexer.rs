@@ -135,6 +135,17 @@ fn block_strings_are_contextual_and_require_a_clean_marker_line() {
 }
 
 #[test]
+fn comments_and_shift_operators_do_not_open_block_strings() {
+    for source in ["x = 1 # use >>\n  kept = 2\nafter = 3\n", "x = value >>\n  8\n"] {
+        let lexed = lex_source(source);
+        assert!(
+            lexed.tokens.iter().any(|token| token.text == "kept" || token.text == "8"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn indentation_ignores_blank_and_comment_only_lines() {
     let lexed = lex_source("function main\n  value\n\n    # ignored\n  next\nafter\n");
     assert_eq!(
