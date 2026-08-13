@@ -374,6 +374,14 @@ fn parses_structural_import_forms_and_named_arguments() {
 }
 
 #[test]
+fn two_token_import_binding_does_not_consume_structural_imports() {
+    let tree = parse_source("import value = 1\nfrom /core output import .print\n");
+
+    assert_eq!(tree.root.children[0].kind, SyntaxKind::Binding);
+    assert_eq!(tree.root.children[1].kind, SyntaxKind::ImportDeclaration);
+}
+
+#[test]
 fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
     rejected("value =\n", "S1019");
