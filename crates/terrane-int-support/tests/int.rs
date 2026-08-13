@@ -1,5 +1,5 @@
 use num_bigint::BigInt;
-use terrane_int_support::{ArithmeticError, Int, Tier};
+use terrane_int_support::{ArithmeticError, FixedWidthArithmetic, Int, Tier};
 
 #[test]
 fn arithmetic_promotes_and_normalizes_exactly() {
@@ -73,5 +73,26 @@ fn shifts_are_exact_and_reject_negative_counts() {
     assert_eq!(
         Int::from(1_i64).shift_left(&Int::from(-1_i64)),
         Err(ArithmeticError::NegativeShiftCount)
+    );
+}
+
+#[test]
+fn fixed_width_operation_families_pin_overflow_modes() {
+    assert_eq!(i8::MAX.checked_addition(1), None);
+    assert_eq!(i8::MAX.wrapping_addition(1), i8::MIN);
+    assert_eq!(i8::MAX.saturating_addition(1), i8::MAX);
+    assert_eq!(i8::MAX.overflowing_addition(1), (i8::MIN, true));
+
+    assert_eq!(i8::MIN.checked_division(-1), Ok(None));
+    assert_eq!(i8::MIN.wrapping_division(-1), Ok(i8::MIN));
+    assert_eq!(i8::MIN.saturating_division(-1), Ok(i8::MAX));
+    assert_eq!(i8::MIN.overflowing_division(-1), Ok((i8::MIN, true)));
+    assert_eq!(
+        1_u8.checked_division(0),
+        Err(ArithmeticError::DivisionByZero)
+    );
+    assert_eq!(
+        1_u8.wrapping_remainder(0),
+        Err(ArithmeticError::DivisionByZero)
     );
 }

@@ -15,6 +15,7 @@ pub enum Int {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArithmeticError {
     DivisionByZero,
+    ArithmeticOverflow,
     NegativeShiftCount,
     ShiftCountTooLarge,
 }
@@ -23,6 +24,7 @@ impl fmt::Display for ArithmeticError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::DivisionByZero => "integer division by zero",
+            Self::ArithmeticOverflow => "fixed-width integer arithmetic overflow",
             Self::NegativeShiftCount => "negative integer shift count",
             Self::ShiftCountTooLarge => "integer shift count cannot be represented on this target",
         })
@@ -224,3 +226,94 @@ impl Not for Int {
         Self::from_big(!self.as_big())
     }
 }
+
+/// The four explicit overflow policies shared by every fixed-width integer.
+pub trait FixedWidthArithmetic: Sized + Copy {
+    fn checked_addition(self, rhs: Self) -> Option<Self>;
+    #[must_use]
+    fn wrapping_addition(self, rhs: Self) -> Self;
+    #[must_use]
+    fn saturating_addition(self, rhs: Self) -> Self;
+    fn overflowing_addition(self, rhs: Self) -> (Self, bool);
+    fn checked_subtraction(self, rhs: Self) -> Option<Self>;
+    #[must_use]
+    fn wrapping_subtraction(self, rhs: Self) -> Self;
+    #[must_use]
+    fn saturating_subtraction(self, rhs: Self) -> Self;
+    fn overflowing_subtraction(self, rhs: Self) -> (Self, bool);
+    fn checked_multiplication(self, rhs: Self) -> Option<Self>;
+    #[must_use]
+    fn wrapping_multiplication(self, rhs: Self) -> Self;
+    #[must_use]
+    fn saturating_multiplication(self, rhs: Self) -> Self;
+    fn overflowing_multiplication(self, rhs: Self) -> (Self, bool);
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn checked_division(self, rhs: Self) -> Result<Option<Self>, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn wrapping_division(self, rhs: Self) -> Result<Self, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn saturating_division(self, rhs: Self) -> Result<Self, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn overflowing_division(self, rhs: Self) -> Result<(Self, bool), ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn wrapping_remainder(self, rhs: Self) -> Result<Self, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn saturating_remainder(self, rhs: Self) -> Result<Self, ArithmeticError>;
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError>;
+}
+
+macro_rules! fixed_width_arithmetic {
+    ($($type:ty),+ $(,)?) => {$(
+        impl FixedWidthArithmetic for $type {
+            fn checked_addition(self, rhs: Self) -> Option<Self> { self.checked_add(rhs) }
+            fn wrapping_addition(self, rhs: Self) -> Self { self.wrapping_add(rhs) }
+            fn saturating_addition(self, rhs: Self) -> Self { self.saturating_add(rhs) }
+            fn overflowing_addition(self, rhs: Self) -> (Self, bool) { self.overflowing_add(rhs) }
+            fn checked_subtraction(self, rhs: Self) -> Option<Self> { self.checked_sub(rhs) }
+            fn wrapping_subtraction(self, rhs: Self) -> Self { self.wrapping_sub(rhs) }
+            fn saturating_subtraction(self, rhs: Self) -> Self { self.saturating_sub(rhs) }
+            fn overflowing_subtraction(self, rhs: Self) -> (Self, bool) { self.overflowing_sub(rhs) }
+            fn checked_multiplication(self, rhs: Self) -> Option<Self> { self.checked_mul(rhs) }
+            fn wrapping_multiplication(self, rhs: Self) -> Self { self.wrapping_mul(rhs) }
+            fn saturating_multiplication(self, rhs: Self) -> Self { self.saturating_mul(rhs) }
+            fn overflowing_multiplication(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
+            fn checked_division(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_div(rhs)) }
+            }
+            fn wrapping_division(self, rhs: Self) -> Result<Self, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_div(rhs)) }
+            }
+            fn saturating_division(self, rhs: Self) -> Result<Self, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.saturating_div(rhs)) }
+            }
+            fn overflowing_division(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_div(rhs)) }
+            }
+            fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_rem(rhs)) }
+            }
+            fn wrapping_remainder(self, rhs: Self) -> Result<Self, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem(rhs)) }
+            }
+            fn saturating_remainder(self, rhs: Self) -> Result<Self, ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem(rhs)) }
+            }
+            fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_rem(rhs)) }
+            }
+        }
+    )+};
+}
+
+fixed_width_arithmetic!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
