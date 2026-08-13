@@ -112,6 +112,24 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
 
     let mut namespaces = bootstrap_namespaces();
     for unit in &units {
+        if namespaces.contains_key(&unit.namespace) {
+            let span = unit
+                .tree
+                .root
+                .children
+                .iter()
+                .find(|node| node.kind == SyntaxKind::NamespaceDeclaration)
+                .map_or(Span::new(unit.source.id(), 0, 0), |node| node.span);
+            return Err(failure(
+                &unit.source,
+                "S2017",
+                format!(
+                    "cannot declare into compiler-owned namespace `{}`",
+                    source_namespace(&unit.namespace)
+                ),
+                span,
+            ));
+        }
         namespaces.entry(unit.namespace.clone()).or_default();
     }
 
