@@ -338,7 +338,7 @@ S1009 malformed collection `for`          S1025 trailing statement content
 S1011 value on a value-free statement     S1026 malformed `from` import
 S1012 chained non-associative test         S1027 malformed importer selection
 S1013 invalid member adjacency            S1028 malformed collection target
-S1014 missing member name                 S1029 invalid declaration modifier
+S1014 missing member name                 S1029 invalid declaration prefix
 S1015 unclosed index expression           S1030 assignment in condition
 S1016 unparenthesized nested call         S1090 reserved unsupported syntax
 S1091 unsupported `===`                   S1092 unsupported angle generic
