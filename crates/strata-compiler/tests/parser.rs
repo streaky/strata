@@ -73,6 +73,16 @@ fn expression_tree_respects_precedence_and_postfix_binding() {
 }
 
 #[test]
+fn bare_names_are_expression_statements() {
+    let tree = parse_source("thing\nfunction main\n  thing\n");
+    assert_eq!(tree.root.children[0].kind, SyntaxKind::Name);
+    assert_eq!(
+        tree.root.children[1].children.last().unwrap().children[0].kind,
+        SyntaxKind::Name
+    );
+}
+
+#[test]
 fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
     let tree = parse_source(
         ".print; 'hello'\n.thing\nresult = .thing;\nvalue = call; first, (convert; second)\n",

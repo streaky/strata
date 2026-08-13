@@ -971,10 +971,12 @@ impl Parser<'_> {
             offset += 1;
         }
         self.peek_kind(offset) == Some(TokenKind::Identifier)
-            && (matches!(
-                self.peek_kind(offset + 1),
-                Some(TokenKind::Identifier | TokenKind::Newline)
-            ) || (has_prefix && self.peek_kind(offset + 1) == Some(TokenKind::Assign)))
+            && (self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
+                || (has_prefix
+                    && matches!(
+                        self.peek_kind(offset + 1),
+                        Some(TokenKind::Assign | TokenKind::Newline)
+                    )))
             && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
     }
 
