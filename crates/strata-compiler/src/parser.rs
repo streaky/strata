@@ -340,12 +340,28 @@ impl Parser<'_> {
                 self.recover_line();
             }
         } else {
-            children.push(self.require_expression("for target"));
+            children.push(self.parse_for_target());
             self.expect_text("in", "S1009", "expected `in` in collection for");
             children.push(self.require_expression("for collection"));
         }
         children.push(self.parse_block());
         self.node(SyntaxKind::ForStatement, start, self.position, children)
+    }
+    fn parse_for_target(&mut self) -> SyntaxNode {
+        let start = self.position;
+        let mut children = Vec::new();
+        loop {
+            if self.at(TokenKind::Identifier) && !self.at_text("in") {
+                children.push(self.leaf(SyntaxKind::Name));
+            } else {
+                self.error_here("S1028", "expected a name in collection for target");
+                self.recover_to_comma_or_text("in");
+            }
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.node(SyntaxKind::ForTarget, start, self.position, children)
     }
 
     fn parse_for_clause(&mut self) -> SyntaxNode {
@@ -799,13 +815,12 @@ impl Parser<'_> {
         self.tokens[self.position..]
             .iter()
             .take_while(|token| token.kind != TokenKind::Newline)
-            .skip_while(|token| {
-                matches!(
+            .find(|token| {
+                !matches!(
                     token.text.as_str(),
                     "public" | "private" | "protected" | "static" | "async" | "mutating" | "throws"
                 )
             })
-            .next()
             .is_some_and(|token| token.text == "function")
     }
     fn line_has_semicolons(&self, count: usize) -> bool {
@@ -838,6 +853,11 @@ impl Parser<'_> {
     }
     fn recover_to_comma_or_line(&mut self) {
         while !self.at(TokenKind::Comma) && !self.at_line_end() {
+            self.bump();
+        }
+    }
+    fn recover_to_comma_or_text(&mut self, text: &str) {
+        while !self.at(TokenKind::Comma) && !self.at_text(text) && !self.at_line_end() {
             self.bump();
         }
     }

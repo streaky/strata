@@ -78,7 +78,7 @@ fn tail_strings_remain_literals_while_comparisons_and_shifts_parse_as_operators(
 #[test]
 fn parses_control_flow_and_recovers_at_layout_boundaries() {
     let tree = parse_source(
-        "function main\n  if ready\n    return value\n  else\n  while running\n    continue\n  for item in values\n    break\n  for i = 0; i < 3; i++\n    value = i\n",
+        "function main\n  if ready\n    return value\n  else\n  while running\n    continue\n  for key, value in values\n    break\n  for i = 0; i < 3; i++\n    value = i\n",
     );
     assert!(contains(&tree.root, SyntaxKind::IfStatement));
     assert!(contains(&tree.root, SyntaxKind::ElseClause));
@@ -87,6 +87,7 @@ fn parses_control_flow_and_recovers_at_layout_boundaries() {
     assert!(contains(&tree.root, SyntaxKind::ReturnStatement));
     assert!(contains(&tree.root, SyntaxKind::BreakStatement));
     assert!(contains(&tree.root, SyntaxKind::ContinueStatement));
+    assert!(contains(&tree.root, SyntaxKind::ForTarget));
 }
 
 #[test]
@@ -94,6 +95,8 @@ fn three_clause_for_requires_grouping_for_calls() {
     parse_source("for i = (next;); i < limit; i++\n");
     rejected("for i = next; value; i < limit; i++\n", "S1016");
     parse_source("for item in (values; a, (b; c))\n  break\n");
+    rejected("for item.member in values\n  break\n", "S1009");
+    rejected("for item + other in values\n  break\n", "S1009");
 }
 
 #[test]
