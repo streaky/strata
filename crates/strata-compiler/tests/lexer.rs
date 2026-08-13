@@ -98,6 +98,31 @@ fn bitwise_operators_and_numeric_forms_are_single_tokens() {
             vec![(TokenKind::Number, source.into(), Attachment::Detached)]
         );
     }
+    assert_eq!(
+        significant("1.type")
+            .iter()
+            .map(|(kind, _, _)| *kind)
+            .collect::<Vec<_>>(),
+        vec![TokenKind::Number, TokenKind::Dot, TokenKind::Identifier]
+    );
+}
+
+#[test]
+fn malformed_numeric_literals_are_rejected_whole() {
+    for source in ["1e9", "0x", "0xzz", "1_", "1__0", "123abc", "0b101"] {
+        let file = SourceFile::new(0, "case.strata".into(), source.to_owned());
+        let error = lex(&file)
+            .unwrap_err()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "L0009")
+            .unwrap_or_else(|| panic!("{source} was accepted"));
+        let primary = error.primary.unwrap();
+        assert_eq!(
+            (primary.start, primary.end),
+            (0, source.len()),
+            "{source} must be reported as one literal"
+        );
+    }
 }
 
 #[test]
