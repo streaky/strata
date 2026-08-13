@@ -48,7 +48,7 @@ fn implicit_source_has_stable_package_contract() {
 fn manifest_enumerates_sources_in_deterministic_path_order() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         "# complete source set\npackage example.tools\nprelude false\nsource zed.strata\nsource nested/alpha.strata\n",
     );
     package.write("zed.strata", "namespace zed\n");
@@ -74,7 +74,7 @@ fn manifest_enumerates_sources_in_deterministic_path_order() {
 fn package_compilation_parses_every_enumerated_unit() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         "package example.multi\nsource support.strata\nsource main.strata\n",
     );
     package.write("support.strata", "namespace hello helpers\nvalue = 1\n");
@@ -94,7 +94,7 @@ fn package_compilation_parses_every_enumerated_unit() {
 fn syntax_failure_in_non_main_unit_stops_package_compilation() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         "package example.invalid\nsource main.strata\nsource support.strata\n",
     );
     package.write(
@@ -113,7 +113,7 @@ fn syntax_failure_in_non_main_unit_stops_package_compilation() {
 fn malformed_manifests_report_all_manifest_errors() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         "prelude perhaps\nsource ../escape.strata\nsource repeated.strata\nsource repeated.strata\nunknown field\n",
     );
 
@@ -150,7 +150,7 @@ fn malformed_manifests_report_all_manifest_errors() {
 fn manifest_package_drives_complete_namespace_and_scope_resolution() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         concat!(
             "package namespace-contract\n",
             "prelude false\n",
@@ -205,11 +205,11 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
 fn missing_enumerated_sources_are_package_errors() {
     let package = TempPackage::new();
     package.write(
-        "strata.package",
+        "package.toml",
         "package missing-source\nsource absent.strata\n",
     );
 
-    let errors = Package::load(package.0.join("strata.package")).unwrap_err();
+    let errors = Package::load(package.0.join("package.toml")).unwrap_err();
 
     assert_eq!(errors.len(), 1);
     assert!(errors[0].message.contains("cannot read package source"));

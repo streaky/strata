@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::SourceFile;
 
-pub const MANIFEST_FILE_NAME: &str = "strata.package";
+pub const MANIFEST_FILE_NAME: &str = "package.toml";
 pub const IMPLICIT_PACKAGE_ID: &str = "single-file";
 
 #[derive(Clone, Debug)]
@@ -49,7 +49,7 @@ impl Package {
         }
     }
 
-    /// Loads a package from a `strata.package` file or a directory containing one.
+    /// Loads a package from a `package.toml` file or a directory containing one.
     ///
     /// The compact manifest is line-oriented:
     /// `package <identity>`, `prelude <true|false>`, and one or more

@@ -72,7 +72,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         .is_some_and(|extension| extension == "strata")
         && input_path
             .file_name()
-            .is_some_and(|name| name != "strata.package")
+            .is_some_and(|name| name != strata_compiler::MANIFEST_FILE_NAME)
     {
         let source_text = fs::read_to_string(&input_path).map_err(|error| {
             CliFailure::diagnostic(input_path.clone(), "S0000", error.to_string(), 3)
