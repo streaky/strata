@@ -465,7 +465,8 @@ fn imported_object(
                 "S2009",
                 format!(
                     "unresolved object `.{}` in `{}`",
-                    import.object, import.target
+                    import.object,
+                    source_namespace(&import.target)
                 ),
                 import.span,
             )
@@ -815,6 +816,19 @@ fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item
         current = scope.parent;
         Some(scope)
     })
+}
+
+fn source_namespace(namespace: &str) -> String {
+    namespace.strip_prefix('/').map_or_else(
+        || namespace.replace('/', " "),
+        |components| {
+            if components.is_empty() {
+                "/".to_owned()
+            } else {
+                format!("/ {}", components.replace('/', " "))
+            }
+        },
+    )
 }
 
 fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {

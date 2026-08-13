@@ -45,6 +45,23 @@ fn assembles_namespaces_symmetrically_before_import_resolution() {
 }
 
 #[test]
+fn namespace_diagnostics_use_source_spelling() {
+    let failure = analyze(&package(
+        false,
+        &[(
+            "main.strata",
+            "namespace app\nfrom /missing nested import .item\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "unresolved object `.item` in `/ missing nested`"
+    );
+}
+
+#[test]
 fn resolves_exact_root_and_parent_namespace_anchors() {
     let analyzed = analyze(&package(
         false,
