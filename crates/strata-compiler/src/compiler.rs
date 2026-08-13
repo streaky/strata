@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, SourceFile, Span, lexer, parser, syntax::SyntaxTree};
+use crate::{
+    Diagnostic, Package, SourceFile, Span,
+    semantics::{self, SymbolKind},
+    syntax::SyntaxTree,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -44,25 +48,74 @@ impl std::ops::Deref for CompilationFailure {
     }
 }
 
-/// Compiles one Strata source file through parsing, resolution, and Rust lowering.
+/// Compiles one Strata source file as an implicit, stable-identity package.
 ///
 /// # Errors
 ///
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
-    let source = SourceFile::new(0, path.into(), text);
-    let lexed = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
-        source: source.clone(),
-        diagnostics,
+    compile_package(&Package::implicit(path, text))
+}
+
+/// Compiles every manifest-enumerated source unit through the shared frontend.
+///
+/// # Errors
+///
+/// Returns diagnostics from the first source unit that fails. All units are
+/// parsed before semantic projection, in deterministic package order.
+pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFailure> {
+    let semantic = semantics::analyze(package).map_err(|failure| CompilationFailure {
+        source: failure.source,
+        diagnostics: failure.diagnostics,
     })?;
-    let parsed = parser::parse(&source, lexed);
-    if !parsed.diagnostics.is_empty() {
-        return Err(CompilationFailure {
-            source,
-            diagnostics: parsed.diagnostics,
-        });
-    }
-    let program = project_bootstrap_program(&source, &parsed.tree).map_err(|diagnostics| {
+    let entry_points = semantic
+        .namespaces
+        .values()
+        .filter_map(|namespace| namespace.ordinary.get("main"))
+        .filter(|symbol| symbol.kind == SymbolKind::Function)
+        .collect::<Vec<_>>();
+    let entry = match entry_points.as_slice() {
+        [] => {
+            let source = &semantic.units[0].source;
+            return Err(CompilationFailure {
+                source: source.clone(),
+                diagnostics: vec![Diagnostic::error(
+                    "S2015",
+                    "package has no `main` function",
+                    Span::new(source.id(), 0, 0),
+                )],
+            });
+        }
+        [entry] => *entry,
+        [_, ambiguous, ..] => {
+            let span = ambiguous
+                .declaration_span
+                .unwrap_or_else(|| Span::new(semantic.units[0].source.id(), 0, 0));
+            let source = semantic
+                .units
+                .iter()
+                .find(|unit| unit.source.id() == span.file)
+                .map_or(&semantic.units[0].source, |unit| &unit.source);
+            return Err(CompilationFailure {
+                source: source.clone(),
+                diagnostics: vec![Diagnostic::error(
+                    "S2016",
+                    "package has more than one `main` function",
+                    span,
+                )],
+            });
+        }
+    };
+    let entry_span = entry
+        .declaration_span
+        .unwrap_or_else(|| Span::new(semantic.units[0].source.id(), 0, 0));
+    let unit = semantic
+        .units
+        .iter()
+        .find(|unit| unit.source.id() == entry_span.file)
+        .unwrap_or(&semantic.units[0]);
+    let source = &unit.source;
+    let program = project_bootstrap_program(source, &unit.tree).map_err(|diagnostics| {
         CompilationFailure {
             source: source.clone(),
             diagnostics,
@@ -70,9 +123,9 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
     })?;
     let program = resolve(program);
     let ir = lower(&program);
-    let rust = emit_rust(&ir, &source);
+    let rust = emit_rust(&ir, source);
     Ok(Compilation {
-        source,
+        source: (*source).clone(),
         program,
         rust,
     })

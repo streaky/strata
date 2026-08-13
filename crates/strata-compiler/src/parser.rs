@@ -74,6 +74,13 @@ impl Parser<'_> {
             "break" => self.parse_bare_statement(SyntaxKind::BreakStatement),
             "continue" => self.parse_bare_statement(SyntaxKind::ContinueStatement),
             "from" => self.parse_import_declaration(),
+            "import"
+                if self.peek_kind(1) == Some(TokenKind::Assign)
+                    || (self.peek_kind(1) == Some(TokenKind::Identifier)
+                        && self.peek_kind(2) == Some(TokenKind::Assign)) =>
+            {
+                self.parse_binding()
+            }
             "import" => self.parse_import_selection(),
             "class" | "try" | "throw" | "yield" | "match" | "unsafe" | "rust" | "label"
             | "goto" | "when" | "use" | "catch" | "finally" | "case" => self.parse_unsupported(),
@@ -244,6 +251,8 @@ impl Parser<'_> {
         }
         if self.at(TokenKind::Identifier) {
             children.push(self.leaf(SyntaxKind::Name));
+        } else if self.at(TokenKind::Dot) && self.peek_kind(1) == Some(TokenKind::Identifier) {
+            children.push(self.parse_object_name("S1003", "expected an object binding name"));
         } else {
             self.error_here("S1003", "expected a binding name");
         }
@@ -715,6 +724,9 @@ impl Parser<'_> {
 
     fn parse_primary(&mut self) -> SyntaxNode {
         match self.current().kind {
+            TokenKind::Identifier if self.at_text("true") || self.at_text("false") => {
+                self.leaf(SyntaxKind::Literal)
+            }
             TokenKind::Identifier => self.leaf(SyntaxKind::Name),
             TokenKind::Number
             | TokenKind::String
@@ -970,14 +982,21 @@ impl Parser<'_> {
             has_prefix = true;
             offset += 1;
         }
-        self.peek_kind(offset) == Some(TokenKind::Identifier)
+        (self.peek_kind(offset) == Some(TokenKind::Identifier)
+            && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
             && (self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
                 || (has_prefix
                     && matches!(
                         self.peek_kind(offset + 1),
                         Some(TokenKind::Assign | TokenKind::Newline)
-                    )))
-            && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
+                    ))))
+            || (has_prefix
+                && self.peek_kind(offset) == Some(TokenKind::Dot)
+                && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
+                && matches!(
+                    self.peek_kind(offset + 2),
+                    Some(TokenKind::Assign | TokenKind::Newline)
+                ))
     }
 
     fn looks_like_function_declaration(&self) -> bool {

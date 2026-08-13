@@ -63,14 +63,28 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     if !has_valid_arity {
         return Err(CliFailure::usage());
     }
-    let source_path = arguments
+    let input_path = arguments
         .get(1)
         .map(PathBuf::from)
         .ok_or_else(CliFailure::usage)?;
-    let source_text = fs::read_to_string(&source_path).map_err(|error| {
-        CliFailure::diagnostic(source_path.clone(), "S0000", error.to_string(), 3)
-    })?;
-    let compilation = match strata_compiler::compile(&source_path, source_text) {
+    let package = if input_path
+        .extension()
+        .is_some_and(|extension| extension == "strata")
+    {
+        let source_text = fs::read_to_string(&input_path).map_err(|error| {
+            CliFailure::diagnostic(input_path.clone(), "S0000", error.to_string(), 3)
+        })?;
+        strata_compiler::Package::implicit(&input_path, source_text)
+    } else {
+        strata_compiler::Package::load(&input_path).map_err(|errors| CliFailure {
+            code: 3,
+            message: errors
+                .into_iter()
+                .map(|error| error.diagnostic.render(&error.source))
+                .collect(),
+        })?
+    };
+    let compilation = match strata_compiler::compile_package(&package) {
         Ok(compilation) => compilation,
         Err(failure) => {
             return Err(CliFailure {
@@ -88,7 +102,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         return Ok(ExitCode::SUCCESS);
     }
     ensure_rust_toolchain()?;
-    let crate_dir = generated_crate_path(&source_path, &compilation.rust)?;
+    let crate_dir = generated_crate_path(compilation.source.path(), &compilation.rust)?;
     write_generated_crate(&crate_dir, &compilation.rust)?;
     let cargo_command = if command == "check" { "check" } else { "build" };
     let status = Command::new("cargo")

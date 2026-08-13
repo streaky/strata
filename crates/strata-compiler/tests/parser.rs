@@ -92,6 +92,15 @@ fn bare_names_are_expression_statements() {
 }
 
 #[test]
+fn boolean_words_are_literals_not_names() {
+    let tree = parse_source("enabled = true\ndisabled = false\n");
+
+    for binding in &tree.root.children {
+        assert_eq!(binding.children.last().unwrap().kind, SyntaxKind::Literal);
+    }
+}
+
+#[test]
 fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
     let tree = parse_source(
         ".print; 'hello'\n.thing\nresult = .thing;\nvalue = call; first, (convert; second)\n",
@@ -254,6 +263,19 @@ fn deferred_spellings_receive_canonical_fixes() {
 }
 
 #[test]
+fn binary_word_operators_do_not_look_like_bindings() {
+    for operator in ["in", "is", "and", "or"] {
+        let text = format!("left {operator} right\n");
+        let source = SourceFile::new(0, "case.strata".into(), text);
+        let parsed = parse(&source, lex(&source).unwrap());
+        assert_ne!(parsed.tree.root.children[0].kind, SyntaxKind::Binding);
+        if let Some(diagnostic) = parsed.diagnostics.first() {
+            assert_eq!(diagnostic.primary.unwrap().start, 5);
+        }
+    }
+}
+
+#[test]
 fn normalized_tree_retains_tokens_and_trivia() {
     assert_eq!(
         parse_source("value = 1 # note\n").normalized(),
@@ -349,6 +371,14 @@ fn parses_structural_import_forms_and_named_arguments() {
             .len(),
         2
     );
+}
+
+#[test]
+fn two_token_import_binding_does_not_consume_structural_imports() {
+    let tree = parse_source("import value = 1\nfrom /core output import .print\n");
+
+    assert_eq!(tree.root.children[0].kind, SyntaxKind::Binding);
+    assert_eq!(tree.root.children[1].kind, SyntaxKind::ImportDeclaration);
 }
 
 #[test]

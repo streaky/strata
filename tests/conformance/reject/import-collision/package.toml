@@ -1,0 +1,3 @@
+package = "import-collision"
+prelude = false
+sources = ["one.strata", "two.strata", "main.strata"]

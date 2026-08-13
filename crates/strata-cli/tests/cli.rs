@@ -94,7 +94,7 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
         std::process::id(),
         std::thread::current().name().unwrap_or("cli")
     ));
-    fs::write(&invalid_path, "namespace invalid\n").unwrap();
+    fs::write(&invalid_path, "namespace invalid\nfunction main\n").unwrap();
     let invalid = Command::new(binary)
         .args(["check", invalid_path.to_str().unwrap()])
         .output()

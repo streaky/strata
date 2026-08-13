@@ -373,6 +373,21 @@ Defer custom importer execution and package acquisition. The initial bootstrap e
 
 Exit criterion: a purpose-built manifest-enumerated multi-file test proves manifest loading, complete source-unit assembly, implicit single-file package identity, symmetric namespace declaration/import resolution, explicit object-to-ordinary binding, lexical object-form lookup, collision and idempotent-reimport rules, prelude enablement and disablement, `global` versus namespace-local assignment, visibility, shadowing, root/parent lookup, and structural import independence from ordinary bindings.
 
+Implemented evidence: package input now uses the authored `package.toml` contract and
+deterministically loads its complete enumerated source set before analysis. The shared
+semantic pass assembles symmetric namespace declarations, resolves exact root and parent
+imports, keeps ordinary and object-form namespaces separate, and records lexical scopes
+for parameters, local bindings, assignments, and block-local object imports. Its fixed
+bootstrap table and exact default prelude are versioned compiler-owned data. Focused
+accepted and rejected cases cover explicit object-to-ordinary binding, visibility,
+duplicate and collision rules, idempotent reimports, `global` assignment, legal
+namespace-local shadowing of program globals, unresolved references, and ordinary
+bindings named `import`; a manifest-driven multi-source contract test exercises package
+assembly and cross-unit resolution. Semantic phases report the first failure in
+deterministic package and source order because subsequent resolution failures can depend
+on declarations or imports that the first failure prevented from assembling; manifest
+loading instead accumulates its independently discoverable diagnostics.
+
 ### Milestone 4 — Types, calls, and control-flow semantics
 
 Deliver:
