@@ -178,8 +178,37 @@ fn block_string_token_covers_body_and_uses_its_selected_prefix() {
         .iter()
         .find(|token| token.kind == TokenKind::BlockString)
         .unwrap();
-    assert_eq!(block.text, ">>\n    first\n");
+    assert_eq!(block.text, ">>\n    first");
     assert!(lexed.tokens.iter().any(|token| token.text == "second"));
+}
+
+#[test]
+fn a_block_string_body_terminates_exactly_one_statement() {
+    let lexed = lex_source("x = >>\n  a\n\n  b\nafter = 1\n");
+    let block = lexed
+        .tokens
+        .iter()
+        .find(|token| token.kind == TokenKind::BlockString)
+        .unwrap();
+    assert_eq!(block.text, ">>\n  a\n\n  b");
+    let newlines = lexed
+        .tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::Newline)
+        .count();
+    assert_eq!(newlines, 2, "one terminator per statement");
+    let covered: usize = lexed
+        .tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::Eof)
+        .map(|token| token.span.end - token.span.start)
+        .sum();
+    let trivia: usize = lexed
+        .trivia
+        .iter()
+        .map(|item| item.span.end - item.span.start)
+        .sum();
+    assert_eq!(covered + trivia, "x = >>\n  a\n\n  b\nafter = 1\n".len());
 }
 
 #[test]
