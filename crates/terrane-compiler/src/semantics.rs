@@ -863,6 +863,16 @@ fn analyze_binding_node(
         return Ok(());
     }
 
+    if node.kind == SyntaxKind::Assignment
+        && declared.is_none()
+        && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
+        && let ValueType::Scalar(expected) = previous.value_type
+        && let Some(initializer) = initializer
+        && let Some(actual) = infer_literal_type(unit, initializer)
+    {
+        validate_scalar_assignment(&unit.source, &name, expected, actual, initializer)?;
+        return Ok(());
+    }
     let inferred = initializer.and_then(|value| infer_literal_type(unit, value));
     let value_type = if let Some(type_node) = declared {
         let type_name = node_text(&unit.source, type_node).trim();
@@ -876,20 +886,9 @@ fn analyze_binding_node(
         };
         if let Some(inferred) = inferred
             && inferred != ty
+            && let Some(initializer) = initializer
         {
-            if inferred == ScalarType::Int
-                && ty.is_integer()
-                && let Some(value) = initializer.and_then(|value| constant_integer(unit, value))
-            {
-                check_integer_range(&unit.source, ty, &value, initializer.unwrap().span)?;
-            } else {
-                return Err(failure(
-                    &unit.source,
-                    "T0002",
-                    format!("cannot initialize `{name}` of type `{ty}` with `{inferred}`"),
-                    initializer.unwrap().span,
-                ));
-            }
+            validate_scalar_assignment(&unit.source, &name, ty, inferred, initializer)?;
         }
         ty
     } else if let Some(inferred) = inferred {
@@ -904,6 +903,42 @@ fn analyze_binding_node(
         value_type: ValueType::Scalar(value_type),
     });
     Ok(())
+}
+
+fn validate_scalar_assignment(
+    source: &SourceFile,
+    name: &str,
+    expected: ScalarType,
+    actual: ScalarType,
+    value: &SyntaxNode,
+) -> Result<(), SemanticFailure> {
+    if actual == ScalarType::Int
+        && expected.is_integer()
+        && let Some(integer) = constant_integer_from_source(source, value)
+    {
+        return check_integer_range(source, expected, &integer, value.span);
+    }
+    Err(failure(
+        source,
+        "T0002",
+        format!("cannot assign `{actual}` to `{name}` of type `{expected}`"),
+        value.span,
+    ))
+}
+
+fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
+    if node.kind == SyntaxKind::UnaryExpression {
+        let value = node.children.last()?;
+        let magnitude = constant_integer_from_source(source, value)?;
+        return match &source.text()[node.span.start..value.span.start] {
+            prefix if prefix.trim() == "-" => Some(-magnitude),
+            prefix if prefix.trim() == "+" => Some(magnitude),
+            _ => None,
+        };
+    }
+    (node.kind == SyntaxKind::Literal)
+        .then(|| source.text()[node.span.start..node.span.end].replace('_', ""))
+        .and_then(|text| BigInt::parse_bytes(text.as_bytes(), 10))
 }
 
 fn descriptor_scalar(symbol: &Symbol) -> Option<ScalarType> {
@@ -926,7 +961,7 @@ fn infer_literal_type(unit: &SemanticUnit, node: &SyntaxNode) -> Option<ScalarTy
     let text = node_text(&unit.source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
-        value if value.starts_with(['\'', '>']) => Some(ScalarType::String),
+        value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
         _ => Some(ScalarType::Int),
     }
 }

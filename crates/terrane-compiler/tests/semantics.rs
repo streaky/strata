@@ -599,3 +599,43 @@ fn branch_assignment_is_definite_only_when_every_path_assigns() {
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0007");
 }
+
+#[test]
+fn rejects_implicit_cross_type_reassignment() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  value = true\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0002");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "cannot assign `bool` to `value` of type `int`"
+    );
+}
+
+#[test]
+fn integer_literals_may_assign_only_when_representable() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int8\n  value = 127\n",
+        )],
+    ))
+    .unwrap();
+
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int8\n  value = 128\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0003");
+}
