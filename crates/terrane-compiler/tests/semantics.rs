@@ -758,3 +758,39 @@ fn rejects_operators_with_incompatible_scalar_operands() {
         assert_eq!(failure.diagnostics[0].code, "T0011");
     }
 }
+
+#[test]
+fn binds_positional_named_and_default_arguments() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function render; title string, count int, enabled bool = true\n",
+                "function main\n",
+                "  render; 'items', enabled=false, count=3\n",
+                "  render; 'empty', 0\n",
+            ),
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
+fn rejects_invalid_function_argument_binding() {
+    let cases = [
+        "render; enabled=true, 'items', count=3",
+        "render; 'items', count=3, count=4",
+        "render; 'items', missing=3",
+        "render; 'items'",
+        "render; 'items', 3, true, false",
+    ];
+    for call in cases {
+        let source = format!(
+            "namespace app\nfunction render; title string, count int, enabled bool = true\nfunction main\n  {call}\n"
+        );
+        let failure = analyze(&package(true, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0012", "{call}");
+    }
+}

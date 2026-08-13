@@ -221,6 +221,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         unit.typed_bindings = typed_bindings;
         unit.functions = functions;
     }
+    validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
     Ok(semantic)
 }
@@ -648,6 +649,14 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
                     visit(package, unit, child)?;
                 }
             }
+            SyntaxKind::Argument => {
+                for (index, child) in node.children.iter().enumerate() {
+                    if index == 0 && node.children.len() > 1 && child.kind == SyntaxKind::Name {
+                        continue;
+                    }
+                    visit(package, unit, child)?;
+                }
+            }
             SyntaxKind::MemberExpression => {
                 if let Some(receiver) = node.children.first() {
                     visit(package, unit, receiver)?;
@@ -671,6 +680,105 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
 }
 
 type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);
+
+fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    for unit in &package.units {
+        validate_call_nodes(unit, &unit.tree.root)?;
+    }
+    Ok(())
+}
+
+fn validate_call_nodes(unit: &SemanticUnit, node: &SyntaxNode) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::CallExpression
+        && let [callee, arguments] = node.children.as_slice()
+        && callee.kind == SyntaxKind::Name
+        && let Some(contract) = unit
+            .functions
+            .iter()
+            .find(|contract| contract.name == node_text(&unit.source, callee))
+    {
+        validate_call_arguments(unit, arguments, contract)?;
+    }
+    for child in &node.children {
+        validate_call_nodes(unit, child)?;
+    }
+    Ok(())
+}
+
+fn validate_call_arguments(
+    unit: &SemanticUnit,
+    arguments: &SyntaxNode,
+    contract: &FunctionContract,
+) -> Result<(), SemanticFailure> {
+    let mut bound = BTreeSet::new();
+    let mut positional = 0;
+    let mut named_seen = false;
+    for argument in &arguments.children {
+        let name = argument
+            .children
+            .first()
+            .filter(|child| child.kind == SyntaxKind::Name && argument.children.len() > 1);
+        let parameter = if let Some(name) = name {
+            named_seen = true;
+            let name_text = node_text(&unit.source, name);
+            contract
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == name_text)
+                .ok_or_else(|| {
+                    failure(
+                        &unit.source,
+                        "T0012",
+                        format!(
+                            "function `{}` has no parameter named `{name_text}`",
+                            contract.name
+                        ),
+                        name.span,
+                    )
+                })?
+        } else {
+            if named_seen {
+                return Err(failure(
+                    &unit.source,
+                    "T0012",
+                    "positional arguments must precede named arguments",
+                    argument.span,
+                ));
+            }
+            let parameter = contract.parameters.get(positional).ok_or_else(|| {
+                failure(
+                    &unit.source,
+                    "T0012",
+                    format!("too many arguments for function `{}`", contract.name),
+                    argument.span,
+                )
+            })?;
+            positional += 1;
+            parameter
+        };
+        if !bound.insert(parameter.name.as_str()) {
+            return Err(failure(
+                &unit.source,
+                "T0012",
+                format!("parameter `{}` is bound more than once", parameter.name),
+                argument.span,
+            ));
+        }
+    }
+    if let Some(missing) = contract
+        .parameters
+        .iter()
+        .find(|parameter| !parameter.optional && !bound.contains(parameter.name.as_str()))
+    {
+        return Err(failure(
+            &unit.source,
+            "T0012",
+            format!("missing required argument `{}`", missing.name),
+            arguments.span,
+        ));
+    }
+    Ok(())
+}
 
 fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, SemanticFailure> {
     let mut binding_units = Vec::with_capacity(package.units.len());
