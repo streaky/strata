@@ -380,9 +380,10 @@ impl Parser<'_> {
             );
             children.push(self.parse_for_clause());
             if self.at(TokenKind::Semicolon) {
-                self.error_here(
+                self.error_here_with_help(
                     "S1016",
                     "calls inside three-clause `for` clauses must be parenthesized",
+                    "parenthesize the call, for example `(next;)`",
                 );
                 self.recover_line();
             }
@@ -641,7 +642,11 @@ impl Parser<'_> {
                     vec![value, arguments],
                 );
             } else if !self.semicolon_boundary {
-                self.error_here("S1016", "nested calls must be parenthesized");
+                self.error_here_with_help(
+                    "S1016",
+                    "nested calls must be parenthesized",
+                    "parenthesize the nested call, for example `outer; (inner; value)`",
+                );
                 self.recover_expression();
             }
         }
@@ -1059,6 +1064,16 @@ impl Parser<'_> {
     fn error_here(&mut self, code: &'static str, message: impl Into<String>) {
         self.diagnostics
             .push(Diagnostic::error(code, message, self.current().span));
+    }
+
+    fn error_here_with_help(
+        &mut self,
+        code: &'static str,
+        message: impl Into<String>,
+        help: impl Into<String>,
+    ) {
+        self.diagnostics
+            .push(Diagnostic::error(code, message, self.current().span).with_help(help));
     }
     fn error_at(&mut self, index: usize, code: &'static str, message: impl Into<String>) {
         let span = self

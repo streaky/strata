@@ -323,6 +323,36 @@ Implementation status (completed on the `lossless-parser` capability branch):
 
 The temporary semantic projection below the syntax tree remains deliberately limited to the milestone-zero runnable hello program. It does not parse independently or bypass syntax diagnostics, and milestone 3 replaces it while adding package, namespace, import, and scope semantics.
 
+Parser diagnostics own the stable `S1xxx` range:
+
+```text
+S1001 unexpected layout token             S1017 malformed object lookup
+S1002 malformed namespace declaration     S1018 unclosed grouped expression
+S1003 missing binding name                S1019 missing expression
+S1004 missing binding initializer         S1020 malformed function type
+S1005 missing `function` keyword          S1021 unclosed grouped type
+S1006 invalid function header content     S1022 missing type expression
+S1007 malformed parameter                 S1023 missing block newline
+S1008 malformed three-clause `for`        S1024 unterminated indented block
+S1009 malformed collection `for`          S1025 trailing statement content
+S1011 value on a value-free statement     S1026 malformed `from` import
+S1012 chained non-associative test         S1027 malformed importer selection
+S1013 invalid member adjacency            S1028 malformed collection target
+S1014 missing member name                 S1029 invalid declaration modifier
+S1015 unclosed index expression           S1030 assignment in condition
+S1016 unparenthesized nested call         S1090 reserved unsupported syntax
+S1091 unsupported `===`                   S1092 unsupported angle generic
+```
+
+`S1010` is intentionally unassigned. Diagnostics whose correction is not
+fully expressed by the primary message carry structured help; CLI rendering
+prints that help separately from the stable code and message.
+
+The original milestone branch routed the pipeline through the parser before
+its broad coverage commit. Review follow-ups added focused regression cases
+alongside each correction. Later language work must continue to introduce its
+accepted and rejected cases in the same vertical work unit as the behavior.
+
 ### Milestone 3 — Namespaces, scopes, and bootstrap environment
 
 Deliver:

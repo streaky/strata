@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use crate::source::{SourceFile, Span};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11,6 +13,7 @@ pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
     pub primary: Option<Span>,
+    pub help: Option<String>,
 }
 
 impl Diagnostic {
@@ -21,6 +24,7 @@ impl Diagnostic {
             code,
             message: message.into(),
             primary: Some(primary),
+            help: None,
         }
     }
 
@@ -31,12 +35,19 @@ impl Diagnostic {
             code,
             message: message.into(),
             primary: None,
+            help: None,
         }
     }
 
     #[must_use]
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    #[must_use]
     pub fn render(&self, source: &SourceFile) -> String {
-        if let Some(primary) = self.primary {
+        let mut rendered = if let Some(primary) = self.primary {
             let (line, column) = source.line_column(primary.start);
             format!(
                 "{}:{}:{}: error[{}]: {}\n",
@@ -53,6 +64,10 @@ impl Diagnostic {
                 self.code,
                 self.message
             )
+        };
+        if let Some(help) = &self.help {
+            let _ = writeln!(rendered, "  help: {help}");
         }
+        rendered
     }
 }

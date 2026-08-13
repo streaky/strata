@@ -78,7 +78,25 @@ fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
     assert!(contains(&tree.root, SyntaxKind::ObjectName));
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert!(contains(&tree.root, SyntaxKind::GroupExpression));
-    rejected("value = call; convert; input\n", "S1016");
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "value = call; convert; input\n".to_owned(),
+    );
+    let diagnostic = parse(&source, lex(&source).unwrap())
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "S1016")
+        .unwrap();
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("parenthesize the nested call, for example `outer; (inner; value)`")
+    );
+    assert!(
+        diagnostic
+            .render(&source)
+            .contains("\n  help: parenthesize")
+    );
 }
 
 #[test]

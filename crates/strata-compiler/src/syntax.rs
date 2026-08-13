@@ -79,7 +79,7 @@ pub struct SyntaxTree {
 }
 
 impl SyntaxTree {
-    /// Produces a stable, whitespace-independent representation for parser goldens.
+    /// Produces a deterministic structural, token, trivia, and byte-span representation for parser goldens.
     #[must_use]
     pub fn normalized(&self) -> String {
         use std::fmt::Write as _;
