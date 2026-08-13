@@ -50,7 +50,10 @@ pub fn highlight(source: &SourceFile) -> HighlightOutput {
         .trivia
         .iter()
         .filter(|trivia| {
-            matches!(trivia.kind, TriviaKind::LineComment | TriviaKind::BlockComment)
+            matches!(
+                trivia.kind,
+                TriviaKind::LineComment | TriviaKind::BlockComment
+            )
         })
         .map(|trivia| Highlight {
             span: trivia.span,
@@ -119,12 +122,20 @@ fn classify_node(
             classify_names(node, tokens, classified, HighlightKind::Property, false);
         }
         SyntaxKind::Parameter => {
-            if let Some(name) = node.children.iter().find(|child| child.kind == SyntaxKind::Name) {
+            if let Some(name) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            {
                 classify_names(name, tokens, classified, HighlightKind::Parameter, true);
             }
         }
         SyntaxKind::FunctionDeclaration => {
-            if let Some(name) = node.children.iter().find(|child| child.kind == SyntaxKind::Name) {
+            if let Some(name) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            {
                 classify_names(name, tokens, classified, HighlightKind::Function, true);
             }
         }
@@ -143,7 +154,11 @@ fn classify_node(
             }
         }
         SyntaxKind::MemberExpression => {
-            if let Some(name) = node.children.last().filter(|child| child.kind == SyntaxKind::Name) {
+            if let Some(name) = node
+                .children
+                .last()
+                .filter(|child| child.kind == SyntaxKind::Name)
+            {
                 classify_names(name, tokens, classified, HighlightKind::Property, false);
             }
         }
@@ -173,10 +188,9 @@ fn classify_names(
 }
 
 fn last_name_token(node: &SyntaxNode, tokens: &[Token]) -> Option<usize> {
-    node.token_range
-        .clone()
-        .rev()
-        .find(|index| tokens[*index].kind == TokenKind::Identifier && !is_keyword(&tokens[*index].text))
+    node.token_range.clone().rev().find(|index| {
+        tokens[*index].kind == TokenKind::Identifier && !is_keyword(&tokens[*index].text)
+    })
 }
 
 fn is_keyword(text: &str) -> bool {

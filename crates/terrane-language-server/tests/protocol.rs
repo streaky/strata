@@ -56,10 +56,7 @@ fn serves_semantic_tokens_for_an_open_document() {
         }),
     );
     let initialized = receive_response(&mut stdout, 1);
-    assert_eq!(
-        initialized["result"]["capabilities"]["textDocumentSync"],
-        1
-    );
+    assert_eq!(initialized["result"]["capabilities"]["textDocumentSync"], 1);
     assert_eq!(
         initialized["result"]["capabilities"]["semanticTokensProvider"]["full"],
         true

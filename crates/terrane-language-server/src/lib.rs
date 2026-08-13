@@ -11,8 +11,8 @@ use tower_lsp_server::ls_types::{
     DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, MessageType,
     NumberOrString, Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType,
     SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 use tower_lsp_server::{Client, LanguageServer};
 
@@ -195,7 +195,10 @@ fn split_lines(text: &str, span: Span) -> impl Iterator<Item = Span> + '_ {
 }
 
 fn utf16_range(text: &str, span: Span) -> (u32, u32, u32) {
-    let line = text[..span.start].bytes().filter(|byte| *byte == b'\n').count();
+    let line = text[..span.start]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count();
     let line_start = text[..span.start].rfind('\n').map_or(0, |index| index + 1);
     let start = text[line_start..span.start].encode_utf16().count();
     let length = text[span.start..span.end].encode_utf16().count();
@@ -207,15 +210,16 @@ fn utf16_range(text: &str, span: Span) -> (u32, u32, u32) {
 }
 
 fn lsp_diagnostic(source: &SourceFile, diagnostic: &TerraneDiagnostic) -> Diagnostic {
-    let range = diagnostic
-        .primary
-        .map_or_else(|| Range::new(Position::new(0, 0), Position::new(0, 0)), |span| {
+    let range = diagnostic.primary.map_or_else(
+        || Range::new(Position::new(0, 0), Position::new(0, 0)),
+        |span| {
             let (line, start, length) = utf16_range(source.text(), span);
             Range::new(
                 Position::new(line, start),
                 Position::new(line, start + length),
             )
-        });
+        },
+    );
     Diagnostic {
         range,
         severity: Some(DiagnosticSeverity::ERROR),

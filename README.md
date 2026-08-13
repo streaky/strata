@@ -31,4 +31,4 @@ The [first-version compiler plan](docs/compiler-plan.md) describes the implement
 
 The `demos/` directory contains exploratory design exercises. These files deliberately stress ambitious or unfinished ideas and should not be read as examples of features already supported by a compiler.
 
-Editor support currently lives under `editors/`; a VS Code extension provides basic Terrane syntax highlighting while the language and toolchain take shape.
+Editor support lives under `editors/`. The VS Code extension launches the Rust `terrane-language-server`, which reuses the recovering compiler frontend for semantic highlighting and source diagnostics.

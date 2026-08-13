@@ -42,7 +42,10 @@ fn classifies_real_lexical_and_syntax_constructs() {
         ("print", HighlightKind::Function, false),
         ("# output", HighlightKind::Comment, false),
     ] {
-        assert!(actual.contains(&(expected.0.to_owned(), expected.1, expected.2)), "missing {expected:?} in {actual:#?}");
+        assert!(
+            actual.contains(&(expected.0.to_owned(), expected.1, expected.2)),
+            "missing {expected:?} in {actual:#?}"
+        );
     }
 }
 
@@ -52,9 +55,16 @@ fn retains_highlights_around_lexical_and_syntax_errors() {
     let file = SourceFile::new(0, "broken.trn".into(), source.to_owned());
     let output = highlight(&file);
 
-    assert!(output.diagnostics.iter().any(|diagnostic| diagnostic.code == "L0001"));
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0001")
+    );
     assert!(output.highlights.iter().any(|item| {
-        item.kind == HighlightKind::Function && item.declaration && &source[item.span.start..item.span.end] == "main"
+        item.kind == HighlightKind::Function
+            && item.declaration
+            && &source[item.span.start..item.span.end] == "main"
     }));
     assert!(output.highlights.iter().any(|item| {
         item.kind == HighlightKind::String && &source[item.span.start..item.span.end] == "'ok'"

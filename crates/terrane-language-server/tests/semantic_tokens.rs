@@ -1,5 +1,5 @@
-use terrane_compiler::{SourceFile, Span};
 use terrane_compiler::highlight::{Highlight, HighlightKind, highlight};
+use terrane_compiler::{SourceFile, Span};
 use terrane_language_server::encode_semantic_tokens;
 
 #[test]
