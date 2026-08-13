@@ -1,5 +1,5 @@
 use num_bigint::BigInt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
 use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, lexer, parser};
@@ -210,6 +210,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         unit.typed_bindings = typed_bindings;
         unit.functions = functions;
     }
+    validate_definite_assignment(&semantic)?;
     Ok(semantic)
 }
 
@@ -1098,6 +1099,7 @@ fn populate_node(
                 insert_local(unit, scopes, index, declaration.name, node.span)?;
             }
         }
+
         SyntaxKind::ImportDeclaration => {
             populate_imports(unit, namespaces, scopes, index, node)?;
         }
@@ -1117,6 +1119,156 @@ fn populate_node(
                 }
             }
         }
+    }
+    Ok(())
+}
+fn validate_definite_assignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    for unit in &package.units {
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let mut declared = BTreeSet::new();
+            let mut assigned = BTreeSet::new();
+            if let Some(parameters) = function
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::ParameterList)
+            {
+                for parameter in &parameters.children {
+                    if let Some(name) = parameter
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Name)
+                    {
+                        assigned.insert(node_text(&unit.source, name).to_owned());
+                    }
+                }
+            }
+            if let Some(block) = function
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+            {
+                validate_assignment_block(unit, block, &mut declared, &mut assigned)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_assignment_block(
+    unit: &SemanticUnit,
+    block: &SyntaxNode,
+    declared: &mut BTreeSet<String>,
+    assigned: &mut BTreeSet<String>,
+) -> Result<(), SemanticFailure> {
+    for statement in &block.children {
+        match statement.kind {
+            SyntaxKind::Binding => {
+                let name_node = statement
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::Name);
+                let Some(name_node) = name_node else {
+                    continue;
+                };
+                let name = node_text(&unit.source, name_node).to_owned();
+                let initializer = statement.children.iter().rev().find(|child| {
+                    child.span != name_node.span && child.kind != SyntaxKind::TypeExpression
+                });
+                if let Some(initializer) = initializer {
+                    validate_assigned_reads(unit, initializer, declared, assigned)?;
+                    assigned.insert(name.clone());
+                }
+                if statement
+                    .children
+                    .iter()
+                    .any(|child| child.kind == SyntaxKind::TypeExpression)
+                {
+                    declared.insert(name);
+                }
+            }
+            SyntaxKind::Assignment => {
+                if let Some(value) = statement.children.get(1) {
+                    validate_assigned_reads(unit, value, declared, assigned)?;
+                }
+                if let Some(target) = statement.children.first()
+                    && target.kind == SyntaxKind::Name
+                {
+                    assigned.insert(node_text(&unit.source, target).to_owned());
+                }
+            }
+            SyntaxKind::IfStatement => {
+                if let Some(condition) = statement.children.first() {
+                    validate_assigned_reads(unit, condition, declared, assigned)?;
+                }
+                let incoming = assigned.clone();
+                let mut branch_results = Vec::new();
+                for branch in statement.children.iter().skip(1) {
+                    let branch_block = if branch.kind == SyntaxKind::Block {
+                        Some(branch)
+                    } else {
+                        branch
+                            .children
+                            .iter()
+                            .find(|child| child.kind == SyntaxKind::Block)
+                    };
+                    if let Some(branch_block) = branch_block {
+                        let mut branch_assigned = incoming.clone();
+                        validate_assignment_block(
+                            unit,
+                            branch_block,
+                            declared,
+                            &mut branch_assigned,
+                        )?;
+                        branch_results.push(branch_assigned);
+                    }
+                }
+                let has_else = statement
+                    .children
+                    .iter()
+                    .any(|child| child.kind == SyntaxKind::ElseClause);
+                if !has_else {
+                    branch_results.push(incoming);
+                }
+                if let Some(first) = branch_results.first() {
+                    *assigned = branch_results
+                        .iter()
+                        .skip(1)
+                        .fold(first.clone(), |common, branch| {
+                            common.intersection(branch).cloned().collect()
+                        });
+                }
+            }
+            _ => validate_assigned_reads(unit, statement, declared, assigned)?,
+        }
+    }
+    Ok(())
+}
+
+fn validate_assigned_reads(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    declared: &BTreeSet<String>,
+    assigned: &BTreeSet<String>,
+) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::Name {
+        let name = node_text(&unit.source, node);
+        if declared.contains(name) && !assigned.contains(name) {
+            return Err(failure(
+                &unit.source,
+                "T0007",
+                format!("`{name}` may be read before it is assigned"),
+                node.span,
+            ));
+        }
+    }
+    for child in &node.children {
+        validate_assigned_reads(unit, child, declared, assigned)?;
     }
     Ok(())
 }

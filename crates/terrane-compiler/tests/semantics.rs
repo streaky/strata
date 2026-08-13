@@ -535,3 +535,67 @@ fn rejects_defaults_incompatible_with_parameter_types() {
 
     assert_eq!(failure.diagnostics[0].code, "T0006");
 }
+
+#[test]
+fn accepts_reads_after_unconditional_assignment() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int\n  value = 1\n  result = value\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
+fn rejects_reads_before_assignment() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int\n  result = value\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0007");
+}
+
+#[test]
+fn branch_assignment_is_definite_only_when_every_path_assigns() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function main; ready bool\n",
+                "  value int\n",
+                "  if ready\n",
+                "    value = 1\n",
+                "  else\n",
+                "    value = 2\n",
+                "  result = value\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function main; ready bool\n",
+                "  value int\n",
+                "  if ready\n",
+                "    value = 1\n",
+                "  result = value\n",
+            ),
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0007");
+}
