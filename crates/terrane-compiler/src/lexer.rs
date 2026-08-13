@@ -1,16 +1,34 @@
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind, Trivia, TriviaKind};
 use crate::{Diagnostic, SourceFile, Span};
 
+/// The token stream and diagnostics produced by a recovering lexical scan.
+#[derive(Clone, Debug)]
+pub struct LexOutput {
+    pub lexed: LexedSource,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Tokenizes one UTF-8 Terrane source file.
 ///
 /// # Errors
 ///
 /// Returns every lexical diagnostic found while scanning the source.
+pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
+    let output = lex_recovering(source);
+    if output.diagnostics.is_empty() {
+        Ok(output.lexed)
+    } else {
+        Err(output.diagnostics)
+    }
+}
+
+/// Tokenizes source while retaining useful tokens when diagnostics are present.
+#[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "top-level lexer state transitions remain visible"
 )]
-pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
+pub fn lex_recovering(source: &SourceFile) -> LexOutput {
     let text = source.text();
     let mut tokens = Vec::new();
     let mut trivia = Vec::new();
@@ -170,14 +188,13 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
         Attachment::Detached,
     );
 
-    if diagnostics.is_empty() {
-        Ok(LexedSource {
+    LexOutput {
+        lexed: LexedSource {
             tokens,
             trivia,
             logical_lines,
-        })
-    } else {
-        Err(diagnostics)
+        },
+        diagnostics,
     }
 }
 

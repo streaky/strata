@@ -7,3 +7,8 @@ AGENTS.md
 # Rust and Terrane build artifacts
 /target/
 **/.trn/
+
+# VS Code extension dependencies and packaged artifacts
+/editors/vscode/node_modules/
+/editors/vscode/server/
+/editors/vscode/*.vsix
