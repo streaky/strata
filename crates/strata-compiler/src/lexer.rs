@@ -18,6 +18,7 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
     let mut logical_lines = Vec::new();
     let mut offset = 0;
     let mut block_string: Option<(usize, usize, Option<Vec<u8>>)> = None;
+    let mut block_terminator: Option<(usize, usize)> = None;
     let mut block_comment_start = None;
     let mut indent_style = None;
     let mut indent_stack = vec![0];
@@ -26,17 +27,17 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
         logical_lines.push((offset, line.to_owned()));
         let indent = indentation_len(line);
         let in_block_string = match &mut block_string {
-            Some((marker_indent, token_index, content_prefix)) if line.trim().is_empty() => {
-                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+            Some((_, token_index, _)) if line.trim().is_empty() => {
+                extend_token(source, &mut tokens[*token_index], offset + line.len());
                 true
             }
             Some((marker_indent, token_index, prefix @ None)) if indent > *marker_indent => {
                 *prefix = Some(line.as_bytes()[..indent].to_vec());
-                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+                extend_token(source, &mut tokens[*token_index], offset + line.len());
                 true
             }
             Some((_, token_index, Some(prefix))) if line.as_bytes().starts_with(prefix) => {
-                extend_token(source, &mut tokens[*token_index], offset + raw.len());
+                extend_token(source, &mut tokens[*token_index], offset + line.len());
                 true
             }
             Some(_) => {
@@ -56,6 +57,16 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
                 || (trimmed.starts_with("/*") && !trimmed.contains("*/"))
         };
         if !in_block_string {
+            if let Some((start, end)) = block_terminator.take() {
+                push_token(
+                    source,
+                    &mut tokens,
+                    TokenKind::Newline,
+                    start,
+                    end,
+                    Attachment::Detached,
+                );
+            }
             if !comment_only {
                 check_indent(
                     source,
@@ -91,16 +102,30 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
             }
         }
         if raw.ends_with('\n') {
-            push_token(
-                source,
-                &mut tokens,
-                TokenKind::Newline,
-                offset + line.len(),
-                offset + raw.len(),
-                Attachment::Detached,
-            );
+            if block_string.is_some() {
+                block_terminator = Some((offset + line.len(), offset + raw.len()));
+            } else {
+                push_token(
+                    source,
+                    &mut tokens,
+                    TokenKind::Newline,
+                    offset + line.len(),
+                    offset + raw.len(),
+                    Attachment::Detached,
+                );
+            }
         }
         offset += raw.len();
+    }
+    if let Some((start, end)) = block_terminator {
+        push_token(
+            source,
+            &mut tokens,
+            TokenKind::Newline,
+            start,
+            end,
+            Attachment::Detached,
+        );
     }
     if text.is_empty() {
         logical_lines.push((0, String::new()));
