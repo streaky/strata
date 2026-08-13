@@ -2,11 +2,17 @@ use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind};
 use crate::{Diagnostic, SourceFile, Span};
 
+/// Parses lexer output into a lossless, formatter-ready syntax tree.
+///
+/// # Errors
+///
+/// Returns source-oriented syntax diagnostics after recovering at layout boundaries.
 pub fn parse(source: &SourceFile, lexed: LexedSource) -> Result<SyntaxTree, Vec<Diagnostic>> {
     let mut parser = Parser {
         source,
         tokens: &lexed.tokens,
         position: 0,
+        semicolon_boundary: false,
         diagnostics: Vec::new(),
     };
     let root = parser.parse_compilation_unit();
@@ -21,6 +27,7 @@ struct Parser<'source> {
     source: &'source SourceFile,
     tokens: &'source [Token],
     position: usize,
+    semicolon_boundary: bool,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -148,10 +155,7 @@ impl Parser<'_> {
         let mut children = Vec::new();
         while !self.at_line_end() {
             let parameter_start = self.position;
-            if !self.at(TokenKind::Identifier) {
-                self.error_here("S1007", "expected a parameter name");
-                self.recover_to_comma_or_line();
-            } else {
+            if self.at(TokenKind::Identifier) {
                 let mut parts = vec![self.leaf(SyntaxKind::Name)];
                 if !self.at(TokenKind::Assign) && !self.at(TokenKind::Comma) && !self.at_line_end()
                 {
@@ -166,6 +170,9 @@ impl Parser<'_> {
                     self.position,
                     parts,
                 ));
+            } else {
+                self.error_here("S1007", "expected a parameter name");
+                self.recover_to_comma_or_line();
             }
             if !self.eat(TokenKind::Comma) {
                 break;
@@ -216,13 +223,20 @@ impl Parser<'_> {
                 "S1008",
                 "expected `;` after for initializer",
             );
-            children.push(self.parse_expression(0, true));
+            children.push(self.parse_for_expression());
             self.expect(
                 TokenKind::Semicolon,
                 "S1008",
                 "expected `;` after for condition",
             );
             children.push(self.parse_for_clause());
+            if self.at(TokenKind::Semicolon) {
+                self.error_here(
+                    "S1016",
+                    "calls inside three-clause `for` clauses must be parenthesized",
+                );
+                self.recover_line();
+            }
         } else {
             children.push(self.require_expression("for target"));
             self.expect_text("in", "S1009", "expected `in` in collection for");
@@ -234,9 +248,9 @@ impl Parser<'_> {
 
     fn parse_for_clause(&mut self) -> SyntaxNode {
         let start = self.position;
-        let left = self.parse_expression(0, true);
+        let left = self.parse_for_expression();
         if self.eat(TokenKind::Assign) {
-            let right = self.parse_expression(0, true);
+            let right = self.parse_for_expression();
             self.node(
                 SyntaxKind::Assignment,
                 start,
@@ -246,6 +260,13 @@ impl Parser<'_> {
         } else {
             left
         }
+    }
+
+    fn parse_for_expression(&mut self) -> SyntaxNode {
+        self.semicolon_boundary = true;
+        let expression = self.parse_expression(0, false);
+        self.semicolon_boundary = false;
+        expression
     }
 
     fn parse_simple_value_statement(&mut self, kind: SyntaxKind, required: bool) -> SyntaxNode {
@@ -306,9 +327,34 @@ impl Parser<'_> {
     fn parse_expression(&mut self, minimum: u8, allow_call: bool) -> SyntaxNode {
         let start = self.position;
         let mut left = self.parse_prefix(allow_call);
+        if minimum <= 3
+            && self.at_text("is")
+            && self.peek_text(1) == Some("a")
+            && self.peek_kind(2) == Some(TokenKind::Identifier)
+        {
+            self.bump();
+            self.bump();
+            let type_expression = self.parse_type_expression();
+            return self.node(
+                SyntaxKind::TypeMembershipExpression,
+                start,
+                self.position,
+                vec![left, type_expression],
+            );
+        }
         loop {
             if let Some(precedence) = self.binary_precedence() {
                 if precedence < minimum {
+                    break;
+                }
+                if self.at_text("==") && self.peek_kind(1) == Some(TokenKind::Assign) {
+                    self.error_here(
+                        "S1091",
+                        "`===` is unsupported; use `==` for equality or `is` for identity",
+                    );
+                    self.bump();
+                    self.bump();
+                    self.recover_expression();
                     break;
                 }
                 let operator = self.text().to_owned();
@@ -320,7 +366,7 @@ impl Parser<'_> {
                     self.position,
                     vec![left, right],
                 );
-                if self.is_comparison(&operator) && self.binary_precedence() == Some(precedence) {
+                if Self::is_comparison(&operator) && self.binary_precedence() == Some(precedence) {
                     self.error_here(
                         "S1012",
                         "comparisons do not chain; join comparisons with `and`",
@@ -411,7 +457,7 @@ impl Parser<'_> {
                     self.position,
                     vec![value, arguments],
                 );
-            } else {
+            } else if !self.semicolon_boundary {
                 self.error_here("S1016", "nested calls must be parenthesized");
                 self.recover_expression();
             }
@@ -622,7 +668,7 @@ impl Parser<'_> {
         }
     }
 
-    fn is_comparison(&self, text: &str) -> bool {
+    fn is_comparison(text: &str) -> bool {
         matches!(text, "==" | "!=" | "<" | "<=" | ">" | ">=")
     }
     fn require_expression(&mut self, context: &str) -> SyntaxNode {

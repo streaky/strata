@@ -74,3 +74,63 @@ fn tail_strings_remain_literals_while_comparisons_and_shifts_parse_as_operators(
         SyntaxKind::BinaryExpression
     );
 }
+
+#[test]
+fn parses_control_flow_and_recovers_at_layout_boundaries() {
+    let tree = parse_source(
+        "function main\n  if ready\n    return value\n  else\n  while running\n    continue\n  for item in values\n    break\n  for i = 0; i < 3; i++\n    value = i\n",
+    );
+    assert!(contains(&tree.root, SyntaxKind::IfStatement));
+    assert!(contains(&tree.root, SyntaxKind::ElseClause));
+    assert!(contains(&tree.root, SyntaxKind::WhileStatement));
+    assert!(contains(&tree.root, SyntaxKind::ForStatement));
+    assert!(contains(&tree.root, SyntaxKind::ReturnStatement));
+    assert!(contains(&tree.root, SyntaxKind::BreakStatement));
+    assert!(contains(&tree.root, SyntaxKind::ContinueStatement));
+}
+
+#[test]
+fn three_clause_for_requires_grouping_for_calls() {
+    parse_source("for i = (next;); i < limit; i++\n");
+    rejected("for i = next; value; i < limit; i++\n", "S1016");
+}
+
+#[test]
+fn preserves_type_shapes_without_keywording_core_names() {
+    let tree = parse_source(
+        "value list of string\nmaybe int | none\ncallback function from int, string to bool\nborrowed ref bytes\n",
+    );
+    assert!(contains(&tree.root, SyntaxKind::AppliedType));
+    assert!(contains(&tree.root, SyntaxKind::UnionType));
+    assert!(contains(&tree.root, SyntaxKind::FunctionType));
+    assert!(contains(&tree.root, SyntaxKind::PrefixType));
+}
+
+#[test]
+fn distinguishes_identity_from_type_membership() {
+    let tree = parse_source("same = value is a\nmember = value is a int\n");
+    assert_eq!(
+        tree.root.children[0].children.last().unwrap().kind,
+        SyntaxKind::BinaryExpression
+    );
+    assert_eq!(
+        tree.root.children[1].children.last().unwrap().kind,
+        SyntaxKind::TypeMembershipExpression
+    );
+}
+
+#[test]
+fn deferred_spellings_receive_canonical_fixes() {
+    rejected("same = left === right\n", "S1091");
+    rejected("items list<string>\n", "S1092");
+    rejected("items list<string>= value\n", "S1092");
+}
+
+#[test]
+fn normalized_tree_retains_tokens_and_trivia() {
+    let normalized = parse_source("value = 1 # note\n").normalized();
+    assert!(normalized.contains("tokens\n"));
+    assert!(normalized.contains("Number"));
+    assert!(normalized.contains("trivia\n"));
+    assert!(normalized.contains("LineComment"));
+}
