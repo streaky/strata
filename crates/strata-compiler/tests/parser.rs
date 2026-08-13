@@ -143,8 +143,17 @@ fn three_clause_for_requires_grouping_for_calls() {
     parse_source("for i = (next;); i < limit; i++\n");
     rejected("for i = next; value; i < limit; i++\n", "S1016");
     parse_source("for item in (values; a, (b; c))\n  break\n");
-    rejected("for item.member in values\n  break\n", "S1009");
-    rejected("for item + other in values\n  break\n", "S1009");
+    for text in [
+        "for item.member in values\n  break\n",
+        "for item + other in values\n  break\n",
+    ] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let parsed = parse(&source, lex(&source).unwrap());
+        assert_eq!(parsed.diagnostics.len(), 1, "{:#?}", parsed.diagnostics);
+        assert_eq!(parsed.diagnostics[0].code, "S1009");
+        assert!(contains(&parsed.tree.root, SyntaxKind::Block));
+        assert!(contains(&parsed.tree.root, SyntaxKind::BreakStatement));
+    }
 }
 
 #[test]

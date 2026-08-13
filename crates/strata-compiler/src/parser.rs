@@ -390,8 +390,12 @@ impl Parser<'_> {
             }
         } else {
             children.push(self.parse_for_target());
-            self.expect_text("in", "S1009", "expected `in` in collection for");
-            children.push(self.require_expression("for collection"));
+            if self.eat_text("in") {
+                children.push(self.require_expression("for collection"));
+            } else {
+                self.error_here("S1009", "expected `in` in collection for");
+                self.recover_line();
+            }
         }
         children.push(self.parse_block());
         self.node(SyntaxKind::ForStatement, start, self.position, children)
