@@ -45,6 +45,14 @@ fn implicit_source_has_stable_package_contract() {
 }
 
 #[test]
+fn bare_implicit_source_uses_current_directory_as_root() {
+    let package = Package::implicit("hello.strata", "namespace hello\n".to_owned());
+
+    assert_eq!(package.root, Path::new("."));
+    assert_eq!(package.units[0].relative_path, Path::new("hello.strata"));
+}
+
+#[test]
 fn manifest_enumerates_sources_in_deterministic_path_order() {
     let package = TempPackage::new();
     package.write(
