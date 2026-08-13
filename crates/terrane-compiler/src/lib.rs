@@ -8,6 +8,7 @@ pub mod semantics;
 pub mod source;
 pub mod syntax;
 pub mod tokens;
+pub mod types;
 
 pub use compiler::{Compilation, CompilationFailure, Program, compile, compile_package};
 pub use diagnostic::{Diagnostic, Severity};
@@ -17,5 +18,6 @@ pub use semantics::{
     Visibility, analyze,
 };
 pub use source::{SourceFile, Span};
+pub use types::ScalarType;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
