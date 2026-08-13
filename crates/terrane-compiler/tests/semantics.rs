@@ -639,3 +639,66 @@ fn integer_literals_may_assign_only_when_representable() {
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0003");
 }
+
+#[test]
+fn types_explicit_integer_coercion_families() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .int8, .int16, .uint8\n",
+                "int8 = .int8\n",
+                "int16 = .int16\n",
+                "uint8 = .uint8\n",
+                "function main\n",
+                "  value int = 300\n",
+                "  exact = value.coerce; int16\n",
+                "  checked = value.checked-coerce; int8\n",
+                "  wrapped = value.wrapping-coerce; uint8\n",
+                "  saturated = value.saturating-coerce; uint8\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    let bindings = &analyzed.units[0].typed_bindings;
+    let type_of = |name| {
+        bindings
+            .iter()
+            .find(|binding| binding.name == name)
+            .unwrap()
+            .value_type
+    };
+
+    assert_eq!(type_of("exact"), ValueType::Scalar(ScalarType::Int16));
+    assert_eq!(
+        type_of("checked"),
+        ValueType::ScalarOrNone(ScalarType::Int8)
+    );
+    assert_eq!(type_of("wrapped"), ValueType::Scalar(ScalarType::Uint8));
+    assert_eq!(type_of("saturated"), ValueType::Scalar(ScalarType::Uint8));
+}
+
+#[test]
+fn rejects_unsupported_integer_coercion_destinations() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  converted = value.coerce; float\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0008");
+
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  converted = value.wrapping-coerce; int\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0010");
+}

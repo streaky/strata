@@ -51,7 +51,18 @@ pub struct SemanticPackage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValueType {
     Scalar(ScalarType),
+    ScalarOrNone(ScalarType),
     TypeDescriptor(ScalarType),
+}
+
+impl std::fmt::Display for ValueType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scalar(ty) => ty.fmt(formatter),
+            Self::ScalarOrNone(ty) => write!(formatter, "{ty}|none"),
+            Self::TypeDescriptor(ty) => write!(formatter, "type descriptor `{ty}`"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -868,12 +879,15 @@ fn analyze_binding_node(
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
-        && let Some(actual) = infer_literal_type(unit, initializer)
+        && let Some(actual) = infer_value_type(unit, initializer, aliases, bindings)?
     {
-        validate_scalar_assignment(&unit.source, &name, expected, actual, initializer)?;
+        validate_value_assignment(&unit.source, &name, expected, actual, initializer)?;
         return Ok(());
     }
-    let inferred = initializer.and_then(|value| infer_literal_type(unit, value));
+    let inferred = initializer
+        .map(|value| infer_value_type(unit, value, aliases, bindings))
+        .transpose()?
+        .flatten();
     let value_type = if let Some(type_node) = declared {
         let type_name = node_text(&unit.source, type_node).trim();
         let Some(ty) = aliases.get(type_name).copied() else {
@@ -885,12 +899,12 @@ fn analyze_binding_node(
             ));
         };
         if let Some(inferred) = inferred
-            && inferred != ty
+            && inferred != ValueType::Scalar(ty)
             && let Some(initializer) = initializer
         {
-            validate_scalar_assignment(&unit.source, &name, ty, inferred, initializer)?;
+            validate_value_assignment(&unit.source, &name, ty, inferred, initializer)?;
         }
-        ty
+        ValueType::Scalar(ty)
     } else if let Some(inferred) = inferred {
         inferred
     } else {
@@ -900,23 +914,28 @@ fn analyze_binding_node(
     bindings.push(TypedBinding {
         name,
         span: node.span,
-        value_type: ValueType::Scalar(value_type),
+        value_type,
     });
     Ok(())
 }
 
-fn validate_scalar_assignment(
+fn validate_value_assignment(
     source: &SourceFile,
     name: &str,
     expected: ScalarType,
-    actual: ScalarType,
+    actual: ValueType,
     value: &SyntaxNode,
 ) -> Result<(), SemanticFailure> {
-    if actual == ScalarType::Int
-        && expected.is_integer()
-        && let Some(integer) = constant_integer_from_source(source, value)
-    {
-        return check_integer_range(source, expected, &integer, value.span);
+    if let ValueType::Scalar(actual) = actual {
+        if actual == expected {
+            return Ok(());
+        }
+        if actual == ScalarType::Int
+            && expected.is_integer()
+            && let Some(integer) = constant_integer_from_source(source, value)
+        {
+            return check_integer_range(source, expected, &integer, value.span);
+        }
     }
     Err(failure(
         source,
@@ -939,6 +958,108 @@ fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Optio
     (node.kind == SyntaxKind::Literal)
         .then(|| source.text()[node.span.start..node.span.end].replace('_', ""))
         .and_then(|text| BigInt::parse_bytes(text.as_bytes(), 10))
+}
+fn infer_value_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    if let Some(scalar) = infer_literal_type(unit, node) {
+        return Ok(Some(ValueType::Scalar(scalar)));
+    }
+    if node.kind == SyntaxKind::Name {
+        let name = node_text(&unit.source, node);
+        return Ok(bindings
+            .iter()
+            .rev()
+            .find(|binding| binding.name == name)
+            .map(|binding| binding.value_type));
+    }
+    if node.kind != SyntaxKind::CallExpression {
+        return Ok(None);
+    }
+    let Some(member) = node.children.first() else {
+        return Ok(None);
+    };
+    if member.kind != SyntaxKind::MemberExpression {
+        return Ok(None);
+    }
+    let Some(operation_node) = member.children.get(1) else {
+        return Ok(None);
+    };
+    let operation = node_text(&unit.source, operation_node);
+    if !matches!(
+        operation,
+        "coerce" | "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
+    ) {
+        return Ok(None);
+    }
+    let source_node = &member.children[0];
+    let Some(ValueType::Scalar(source_type)) =
+        infer_value_type(unit, source_node, aliases, bindings)?
+    else {
+        return Err(failure(
+            &unit.source,
+            "T0009",
+            format!("`{operation}` requires an integer source"),
+            source_node.span,
+        ));
+    };
+    if !source_type.is_integer() {
+        return Err(failure(
+            &unit.source,
+            "T0009",
+            format!("`{operation}` requires an integer source"),
+            source_node.span,
+        ));
+    }
+    let destination_node = node
+        .children
+        .get(1)
+        .and_then(|arguments| arguments.children.first())
+        .and_then(|argument| argument.children.last())
+        .ok_or_else(|| {
+            failure(
+                &unit.source,
+                "T0008",
+                format!("`{operation}` requires one integer destination"),
+                node.span,
+            )
+        })?;
+    let destination_name = node_text(&unit.source, destination_node);
+    let destination = aliases.get(destination_name).copied().ok_or_else(|| {
+        failure(
+            &unit.source,
+            "T0008",
+            format!("`{destination_name}` is not a supported integer coercion destination"),
+            destination_node.span,
+        )
+    })?;
+    if !destination.is_integer() {
+        return Err(failure(
+            &unit.source,
+            "T0008",
+            format!("`{destination}` is not a supported integer coercion destination"),
+            destination_node.span,
+        ));
+    }
+    if destination == ScalarType::Int
+        && matches!(operation, "wrapping-coerce" | "saturating-coerce")
+    {
+        return Err(failure(
+            &unit.source,
+            "T0010",
+            format!("`{operation}` requires a fixed-width integer destination"),
+            destination_node.span,
+        ));
+    }
+    let result = if operation == "checked-coerce" {
+        ValueType::ScalarOrNone(destination)
+    } else {
+        ValueType::Scalar(destination)
+    };
+    Ok(Some(result))
 }
 
 fn descriptor_scalar(symbol: &Symbol) -> Option<ScalarType> {
