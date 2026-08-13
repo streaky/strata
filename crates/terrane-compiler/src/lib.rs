@@ -1,5 +1,6 @@
 mod compiler;
 pub mod diagnostic;
+pub mod display;
 pub mod highlight;
 pub mod lexer;
 pub mod package;
