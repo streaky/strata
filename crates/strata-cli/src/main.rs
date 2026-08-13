@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -82,16 +81,10 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     } else {
         strata_compiler::Package::load(&input_path).map_err(|errors| CliFailure {
             code: 3,
-            message: errors.into_iter().fold(String::new(), |mut output, error| {
-                writeln!(
-                    output,
-                    "{}: error[S2001]: {}",
-                    error.path.display(),
-                    error.message
-                )
-                .expect("writing to a string cannot fail");
-                output
-            }),
+            message: errors
+                .into_iter()
+                .map(|error| error.diagnostic.render(&error.source))
+                .collect(),
         })?
     };
     let compilation = match strata_compiler::compile_package(&package) {

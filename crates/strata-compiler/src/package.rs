@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::SourceFile;
+use crate::{Diagnostic, SourceFile, Span};
 
 pub const MANIFEST_FILE_NAME: &str = "package.toml";
 pub const IMPLICIT_PACKAGE_ID: &str = "single-file";
@@ -21,10 +21,23 @@ pub struct Package {
     pub units: Vec<SourceUnit>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PackageLoadError {
-    pub path: PathBuf,
-    pub message: String,
+    pub source: SourceFile,
+    pub diagnostic: Diagnostic,
+}
+
+impl PackageLoadError {
+    fn new(path: PathBuf, text: String, message: impl Into<String>, span: Option<Span>) -> Self {
+        let source = SourceFile::new(0, path, text);
+        let mut diagnostic = Diagnostic::unlocated_error("S2001", message);
+        diagnostic.primary = span;
+        Self { source, diagnostic }
+    }
+
+    fn unreadable(path: PathBuf, message: impl Into<String>) -> Self {
+        Self::new(path, String::new(), message, None)
+    }
 }
 
 impl Package {
@@ -67,12 +80,12 @@ impl Package {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         let text = fs::read_to_string(&manifest_path).map_err(|error| {
-            vec![PackageLoadError {
-                path: manifest_path.clone(),
-                message: format!("cannot read package manifest: {error}"),
-            }]
+            vec![PackageLoadError::unreadable(
+                manifest_path.clone(),
+                format!("cannot read package manifest: {error}"),
+            )]
         })?;
-        let manifest = parse_manifest(&manifest_path, &text)?;
+        let manifest = parse_manifest(&manifest_path, text)?;
         let units = load_source_units(&root, manifest.paths)?;
         Ok(Self {
             identity: manifest.identity,
@@ -91,47 +104,60 @@ struct ParsedManifest {
 
 fn parse_manifest(
     manifest_path: &Path,
-    text: &str,
+    text: String,
 ) -> Result<ParsedManifest, Vec<PackageLoadError>> {
     let table = text.parse::<toml::Table>().map_err(|error| {
-        vec![PackageLoadError {
-            path: manifest_path.to_path_buf(),
-            message: format!("invalid TOML: {error}"),
-        }]
+        let span = error
+            .span()
+            .map(|range| Span::new(0, range.start, range.end));
+        vec![PackageLoadError::new(
+            manifest_path.to_path_buf(),
+            text.clone(),
+            format!("invalid TOML: {error}"),
+            span,
+        )]
     })?;
     let mut errors = Vec::new();
     for key in table.keys() {
         if !matches!(key.as_str(), "package" | "prelude" | "sources") {
-            errors.push(PackageLoadError {
-                path: manifest_path.to_path_buf(),
-                message: format!("unknown manifest field `{key}`"),
-            });
+            errors.push(manifest_error(
+                manifest_path,
+                &text,
+                format!("unknown manifest field `{key}`"),
+                Some(key),
+            ));
         }
     }
     let identity = match table.get("package") {
         Some(toml::Value::String(value)) if !value.is_empty() => Some(value.clone()),
         Some(_) => {
-            errors.push(PackageLoadError {
-                path: manifest_path.to_path_buf(),
-                message: "`package` must be a non-empty string".to_owned(),
-            });
+            errors.push(manifest_error(
+                manifest_path,
+                &text,
+                "`package` must be a non-empty string",
+                Some("package"),
+            ));
             None
         }
         None => {
-            errors.push(PackageLoadError {
-                path: manifest_path.to_path_buf(),
-                message: "missing `package` identity".to_owned(),
-            });
+            errors.push(manifest_error(
+                manifest_path,
+                &text,
+                "missing `package` identity",
+                None,
+            ));
             None
         }
     };
     let prelude = match table.get("prelude") {
         Some(toml::Value::Boolean(value)) => *value,
         Some(_) => {
-            errors.push(PackageLoadError {
-                path: manifest_path.to_path_buf(),
-                message: "`prelude` must be a boolean".to_owned(),
-            });
+            errors.push(manifest_error(
+                manifest_path,
+                &text,
+                "`prelude` must be a boolean",
+                Some("prelude"),
+            ));
             true
         }
         None => true,
@@ -141,33 +167,43 @@ fn parse_manifest(
         Some(toml::Value::Array(values)) if !values.is_empty() => {
             for value in values {
                 let Some(value) = value.as_str() else {
-                    errors.push(PackageLoadError {
-                        path: manifest_path.to_path_buf(),
-                        message: "every `sources` entry must be a string".to_owned(),
-                    });
+                    errors.push(manifest_error(
+                        manifest_path,
+                        &text,
+                        "every `sources` entry must be a string",
+                        Some("sources"),
+                    ));
                     continue;
                 };
                 if !valid_relative_source(value) {
-                    errors.push(PackageLoadError {
-                        path: manifest_path.to_path_buf(),
-                        message: format!("source `{value}` must be a relative `.strata` path"),
-                    });
+                    errors.push(manifest_error(
+                        manifest_path,
+                        &text,
+                        format!("source `{value}` must be a relative `.strata` path"),
+                        Some(value),
+                    ));
                 } else if !paths.insert(PathBuf::from(value)) {
-                    errors.push(PackageLoadError {
-                        path: manifest_path.to_path_buf(),
-                        message: format!("duplicate source `{value}`"),
-                    });
+                    errors.push(manifest_error(
+                        manifest_path,
+                        &text,
+                        format!("duplicate source `{value}`"),
+                        Some(value),
+                    ));
                 }
             }
         }
-        Some(_) => errors.push(PackageLoadError {
-            path: manifest_path.to_path_buf(),
-            message: "`sources` must be a non-empty array".to_owned(),
-        }),
-        None => errors.push(PackageLoadError {
-            path: manifest_path.to_path_buf(),
-            message: "package must enumerate at least one source".to_owned(),
-        }),
+        Some(_) => errors.push(manifest_error(
+            manifest_path,
+            &text,
+            "`sources` must be a non-empty array",
+            Some("sources"),
+        )),
+        None => errors.push(manifest_error(
+            manifest_path,
+            &text,
+            "package must enumerate at least one source",
+            None,
+        )),
     }
     if errors.is_empty() {
         Ok(ParsedManifest {
@@ -180,6 +216,19 @@ fn parse_manifest(
     }
 }
 
+fn manifest_error(
+    path: &Path,
+    text: &str,
+    message: impl Into<String>,
+    needle: Option<&str>,
+) -> PackageLoadError {
+    let span = needle.and_then(|needle| {
+        text.find(needle)
+            .map(|start| Span::new(0, start, start + needle.len()))
+    });
+    PackageLoadError::new(path.to_path_buf(), text.to_owned(), message, span)
+}
+
 fn load_source_units(
     root: &Path,
     paths: BTreeSet<PathBuf>,
@@ -189,10 +238,10 @@ fn load_source_units(
     for (id, relative_path) in paths.into_iter().enumerate() {
         let source_path = root.join(&relative_path);
         let Ok(source_id) = u32::try_from(id) else {
-            errors.push(PackageLoadError {
-                path: source_path,
-                message: "package has too many source units".to_owned(),
-            });
+            errors.push(PackageLoadError::unreadable(
+                source_path,
+                "package has too many source units",
+            ));
             continue;
         };
         match fs::read_to_string(&source_path) {
@@ -200,10 +249,10 @@ fn load_source_units(
                 relative_path,
                 source: SourceFile::new(source_id, source_path, source_text),
             }),
-            Err(error) => errors.push(PackageLoadError {
-                path: source_path,
-                message: format!("cannot read package source: {error}"),
-            }),
+            Err(error) => errors.push(PackageLoadError::unreadable(
+                source_path,
+                format!("cannot read package source: {error}"),
+            )),
         }
     }
     if errors.is_empty() {

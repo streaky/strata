@@ -161,7 +161,7 @@ fn malformed_manifests_report_all_manifest_errors() {
     let errors = Package::load(&package.0).unwrap_err();
     let messages = errors
         .iter()
-        .map(|error| error.message.as_str())
+        .map(|error| error.diagnostic.message.as_str())
         .collect::<Vec<_>>();
 
     assert!(messages.iter().any(|message| message.contains("prelude")));
@@ -251,5 +251,10 @@ fn missing_enumerated_sources_are_package_errors() {
     let errors = Package::load(package.0.join("package.toml")).unwrap_err();
 
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].message.contains("cannot read package source"));
+    assert!(
+        errors[0]
+            .diagnostic
+            .message
+            .contains("cannot read package source")
+    );
 }
