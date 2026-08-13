@@ -211,13 +211,26 @@ fn rejects_tighter_operators_after_type_membership() {
 
 #[test]
 fn deferred_spellings_receive_canonical_fixes() {
-    rejected("same = left === right\n", "S1091");
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "same = left === right\n".to_owned(),
+    );
+    let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+    assert_eq!(
+        diagnostics[0].help.as_deref(),
+        Some("use `==` for equality or `is` for identity")
+    );
     for text in ["items list<string>\n", "items list<string>= value\n"] {
         let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
         let lexed = lex(&source).unwrap();
         let diagnostics = parse(&source, lexed).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, "S1092");
+        assert_eq!(
+            diagnostics[0].help.as_deref(),
+            Some("write `list of string`")
+        );
     }
 }
 
@@ -281,7 +294,7 @@ fn parses_structural_import_forms_and_named_arguments() {
 #[test]
 fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
-    rejected("value =\n", "S1004");
+    rejected("value =\n", "S1019");
     rejected("function main; ,\n", "S1007");
     let source = SourceFile::new(
         0,
@@ -345,6 +358,17 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, code);
     }
+
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "if a = b\n    value = 1\n".to_owned(),
+    );
+    let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+    assert_eq!(
+        diagnostics[0].help.as_deref(),
+        Some("use `==` for equality")
+    );
 
     let source = SourceFile::new(
         0,

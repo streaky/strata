@@ -562,9 +562,10 @@ impl Parser<'_> {
                     break;
                 }
                 if self.at_text("==") && self.peek_kind(1) == Some(TokenKind::Assign) {
-                    self.error_here(
+                    self.error_here_with_help(
                         "S1091",
-                        "`===` is unsupported; use `==` for equality or `is` for identity",
+                        "`===` is unsupported",
+                        "use `==` for equality or `is` for identity",
                     );
                     self.bump();
                     self.bump();
@@ -796,9 +797,10 @@ impl Parser<'_> {
         let mut base = if self.at(TokenKind::Identifier) {
             let angle_generic = self.text().contains('<');
             if angle_generic {
-                self.error_here(
+                self.error_here_with_help(
                     "S1092",
-                    "angle-bracket generic syntax is unsupported; write `list of string`",
+                    "angle-bracket generic syntax is unsupported",
+                    "write `list of string`",
                 );
             }
             let name = self.leaf(SyntaxKind::Name);
@@ -914,9 +916,10 @@ impl Parser<'_> {
 
     fn reject_assignment_in_condition(&mut self) {
         if self.at(TokenKind::Assign) {
-            self.error_here(
+            self.error_here_with_help(
                 "S1030",
-                "assignment is not allowed in a condition; use `==` for equality",
+                "assignment is not allowed in a condition",
+                "use `==` for equality",
             );
             self.recover_line();
         }
@@ -949,25 +952,29 @@ impl Parser<'_> {
 
     fn looks_like_binding(&self) -> bool {
         let mut offset = 0usize;
+        let mut has_prefix = false;
         while self.peek_kind(offset) == Some(TokenKind::Dot)
             && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
         {
+            has_prefix = true;
             offset += 2;
         }
         if matches!(
             self.peek_text(offset),
             Some("public" | "private" | "protected")
         ) {
+            has_prefix = true;
             offset += 1;
         }
         if matches!(self.peek_text(offset), Some("global" | "constant")) {
+            has_prefix = true;
             offset += 1;
         }
         self.peek_kind(offset) == Some(TokenKind::Identifier)
-            && matches!(
+            && (matches!(
                 self.peek_kind(offset + 1),
-                Some(TokenKind::Identifier | TokenKind::Assign | TokenKind::Newline)
-            )
+                Some(TokenKind::Identifier | TokenKind::Newline)
+            ) || (has_prefix && self.peek_kind(offset + 1) == Some(TokenKind::Assign)))
             && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
     }
 
