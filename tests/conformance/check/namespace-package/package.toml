@@ -1,0 +1,3 @@
+package = "namespace-package"
+prelude = false
+sources = ["support.strata", "main.strata"]
