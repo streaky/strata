@@ -50,6 +50,15 @@ pub struct SemanticUnit {
     pub source: SourceFile,
     pub tree: SyntaxTree,
     pub namespace: String,
+    pub scopes: Vec<LexicalScope>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LexicalScope {
+    pub span: Span,
+    pub parent: Option<usize>,
+    pub ordinary: BTreeMap<String, Symbol>,
+    pub objects: BTreeMap<String, Symbol>,
 }
 
 #[derive(Clone)]
@@ -90,6 +99,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             source: source.clone(),
             tree: parsed.tree,
             namespace,
+            scopes: Vec::new(),
         });
     }
 
@@ -104,6 +114,9 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         collect_unit(unit, &mut namespaces, &mut globals, &mut imports)?;
     }
     resolve_imports(imports, &mut namespaces)?;
+    for unit in &mut units {
+        unit.scopes = collect_lexical_scopes(unit, &namespaces)?;
+    }
     let prelude_bindings = if package.prelude {
         bootstrap_prelude()
     } else {
@@ -153,6 +166,30 @@ impl SemanticPackage {
             self.object(&path, name)
                 .filter(|symbol| visible_from(symbol, namespace))
         })
+    }
+
+    #[must_use]
+    pub fn resolve_ordinary_at<'a>(
+        &'a self,
+        unit: &'a SemanticUnit,
+        offset: usize,
+        name: &str,
+    ) -> Option<&'a Symbol> {
+        lexical_scope_chain(unit, offset)
+            .find_map(|scope| scope.ordinary.get(name))
+            .or_else(|| self.resolve_ordinary(&unit.namespace, name))
+    }
+
+    #[must_use]
+    pub fn resolve_object_at<'a>(
+        &'a self,
+        unit: &'a SemanticUnit,
+        offset: usize,
+        name: &str,
+    ) -> Option<&'a Symbol> {
+        lexical_scope_chain(unit, offset)
+            .find_map(|scope| scope.objects.get(name))
+            .or_else(|| self.resolve_object(&unit.namespace, name))
     }
 }
 
@@ -381,6 +418,240 @@ fn resolve_imports(
         destination.objects.insert(import.alias, export);
     }
     Ok(())
+}
+fn collect_lexical_scopes(
+    unit: &SemanticUnit,
+    namespaces: &BTreeMap<String, Namespace>,
+) -> Result<Vec<LexicalScope>, SemanticFailure> {
+    fn add_scope(
+        unit: &SemanticUnit,
+        namespaces: &BTreeMap<String, Namespace>,
+        scopes: &mut Vec<LexicalScope>,
+        node: &SyntaxNode,
+        parent: Option<usize>,
+        function_body: bool,
+    ) -> Result<usize, SemanticFailure> {
+        let index = scopes.len();
+        scopes.push(LexicalScope {
+            span: node.span,
+            parent,
+            ordinary: BTreeMap::new(),
+            objects: BTreeMap::new(),
+        });
+
+        if node.kind == SyntaxKind::FunctionDeclaration {
+            if let Some(parameters) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::ParameterList)
+            {
+                for parameter in &parameters.children {
+                    if let Some(name) = declaration_name(parameter, &unit.source) {
+                        insert_local(unit, scopes, index, name, parameter.span)?;
+                    }
+                }
+            }
+        }
+
+        for child in &node.children {
+            match child.kind {
+                SyntaxKind::ParameterList => {}
+                SyntaxKind::Block if node.kind == SyntaxKind::FunctionDeclaration => {
+                    populate_scope(unit, namespaces, scopes, index, child)?;
+                }
+                SyntaxKind::Block => {
+                    add_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                }
+                _ if function_body => {
+                    populate_node(unit, namespaces, scopes, index, child)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(index)
+    }
+
+    fn populate_scope(
+        unit: &SemanticUnit,
+        namespaces: &BTreeMap<String, Namespace>,
+        scopes: &mut Vec<LexicalScope>,
+        index: usize,
+        block: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        for node in &block.children {
+            populate_node(unit, namespaces, scopes, index, node)?;
+        }
+        Ok(())
+    }
+
+    fn populate_node(
+        unit: &SemanticUnit,
+        namespaces: &BTreeMap<String, Namespace>,
+        scopes: &mut Vec<LexicalScope>,
+        index: usize,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        match node.kind {
+            SyntaxKind::Binding => {
+                if let Some(name) = declaration_name(node, &unit.source) {
+                    if !name.starts_with('.') {
+                        insert_local(unit, scopes, index, name, node.span)?;
+                    }
+                }
+            }
+            SyntaxKind::Assignment => {
+                if let Some(name) = declaration_name(node, &unit.source) {
+                    if !name.starts_with('.')
+                        && !local_or_namespace_binding_exists(
+                            scopes,
+                            index,
+                            namespaces,
+                            &unit.namespace,
+                            &name,
+                        )
+                    {
+                        insert_local(unit, scopes, index, name, node.span)?;
+                    }
+                }
+            }
+            SyntaxKind::ImportDeclaration => {
+                for import in parse_import(unit, node)? {
+                    let export = namespaces
+                        .get(&import.target)
+                        .and_then(|namespace| namespace.objects.get(&import.object))
+                        .filter(|symbol| visible_from(symbol, &unit.namespace))
+                        .cloned()
+                        .ok_or_else(|| {
+                            failure(
+                                &unit.source,
+                                "S2009",
+                                format!(
+                                    "unresolved object `.{}` in `{}`",
+                                    import.object, import.target
+                                ),
+                                import.span,
+                            )
+                        })?;
+                    if let Some(existing) = scopes[index].objects.get(&import.alias) {
+                        if existing.identity == export.identity {
+                            continue;
+                        }
+                        return Err(failure(
+                            &unit.source,
+                            "S2011",
+                            format!(
+                                "object-form import `.{}` collides; use an alias",
+                                import.alias
+                            ),
+                            import.span,
+                        ));
+                    }
+                    scopes[index].objects.insert(import.alias, export);
+                }
+            }
+            SyntaxKind::FunctionDeclaration => {
+                if let Some(name) = declaration_name(node, &unit.source) {
+                    insert_local(unit, scopes, index, name, node.span)?;
+                }
+                add_scope(unit, namespaces, scopes, node, Some(index), true)?;
+            }
+            SyntaxKind::Block => {
+                add_scope(unit, namespaces, scopes, node, Some(index), false)?;
+            }
+            _ => {
+                for child in &node.children {
+                    if child.kind == SyntaxKind::Block {
+                        add_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn local_or_namespace_binding_exists(
+        scopes: &[LexicalScope],
+        mut index: usize,
+        namespaces: &BTreeMap<String, Namespace>,
+        namespace: &str,
+        name: &str,
+    ) -> bool {
+        loop {
+            let scope = &scopes[index];
+            if scope.ordinary.contains_key(name) {
+                return true;
+            }
+            let Some(parent) = scope.parent else {
+                break;
+            };
+            index = parent;
+        }
+        namespace_chain(namespace).any(|path| {
+            namespaces
+                .get(&path)
+                .is_some_and(|scope| scope.ordinary.contains_key(name))
+        })
+    }
+
+    fn insert_local(
+        unit: &SemanticUnit,
+        scopes: &mut [LexicalScope],
+        index: usize,
+        name: String,
+        span: Span,
+    ) -> Result<(), SemanticFailure> {
+        let scope = &mut scopes[index];
+        if scope.ordinary.contains_key(&name) {
+            return Err(failure(
+                &unit.source,
+                "S2012",
+                format!("duplicate binding `{name}` in the same lexical scope"),
+                span,
+            ));
+        }
+        scope.ordinary.insert(
+            name.clone(),
+            Symbol {
+                identity: format!("{}::scope{index}::{name}", unit.namespace),
+                name,
+                namespace: unit.namespace.clone(),
+                object_form: false,
+                visibility: Visibility::Private,
+                global: false,
+            },
+        );
+        Ok(())
+    }
+
+    let mut scopes = Vec::new();
+    for node in &unit.tree.root.children {
+        match node.kind {
+            SyntaxKind::FunctionDeclaration => {
+                add_scope(unit, namespaces, &mut scopes, node, None, true)?;
+            }
+            SyntaxKind::Block => {
+                add_scope(unit, namespaces, &mut scopes, node, None, false)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(scopes)
+}
+
+fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item = &LexicalScope> {
+    let mut current = unit
+        .scopes
+        .iter()
+        .enumerate()
+        .filter(|(_, scope)| scope.span.start <= offset && offset < scope.span.end)
+        .min_by_key(|(_, scope)| scope.span.end - scope.span.start)
+        .map(|(index, _)| index);
+    std::iter::from_fn(move || {
+        let index = current?;
+        let scope = &unit.scopes[index];
+        current = scope.parent;
+        Some(scope)
+    })
 }
 
 fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {

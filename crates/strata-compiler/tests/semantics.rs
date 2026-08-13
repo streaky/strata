@@ -235,3 +235,51 @@ fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
     assert!(analyzed.resolve_ordinary("/peer", "shared").is_some());
     assert!(analyzed.resolve_ordinary("/peer", "print").is_some());
 }
+
+#[test]
+fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
+    let source = concat!(
+        "namespace app\n",
+        "function render; argument int\n",
+        "  from /core output import .print as .local-print\n",
+        "  value = argument\n",
+        "  if true\n",
+        "    inner = value\n",
+    );
+    let analyzed = analyze(&package(false, &[("main.strata", source)])).unwrap();
+    let unit = &analyzed.units[0];
+    let inner_offset = source.find("inner =").unwrap();
+    let value_offset = source.find("value =").unwrap();
+
+    assert!(
+        analyzed
+            .resolve_ordinary_at(unit, value_offset, "argument")
+            .is_some()
+    );
+    assert!(
+        analyzed
+            .resolve_ordinary_at(unit, inner_offset, "value")
+            .is_some()
+    );
+    assert!(
+        analyzed
+            .resolve_ordinary_at(unit, value_offset, "inner")
+            .is_none()
+    );
+    assert!(
+        analyzed
+            .resolve_object_at(unit, inner_offset, "local-print")
+            .is_some()
+    );
+}
+
+#[test]
+fn duplicate_parameters_and_same_scope_bindings_are_rejected() {
+    for source in [
+        "namespace app\nfunction run; value int, value int\n",
+        "namespace app\nfunction run\n  private value = 1\n  private value = 2\n",
+    ] {
+        let failure = analyze(&package(false, &[("main.strata", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "S2012");
+    }
+}
