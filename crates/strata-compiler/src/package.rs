@@ -86,7 +86,7 @@ impl Package {
                 format!("cannot read package manifest: {error}"),
             )]
         })?;
-        let manifest = parse_manifest(&manifest_path, text)?;
+        let manifest = parse_manifest(&manifest_path, &text)?;
         let units = load_source_units(&root, manifest.paths)?;
         Ok(Self {
             identity: manifest.identity,
@@ -105,7 +105,7 @@ struct ParsedManifest {
 
 fn parse_manifest(
     manifest_path: &Path,
-    text: String,
+    text: &str,
 ) -> Result<ParsedManifest, Vec<PackageLoadError>> {
     let table = text.parse::<toml::Table>().map_err(|error| {
         let span = error
@@ -113,7 +113,7 @@ fn parse_manifest(
             .map(|range| Span::new(0, range.start, range.end));
         vec![PackageLoadError::new(
             manifest_path.to_path_buf(),
-            text.clone(),
+            text.to_owned(),
             format!("invalid TOML: {error}"),
             span,
         )]
@@ -123,7 +123,7 @@ fn parse_manifest(
         if !matches!(key.as_str(), "package" | "prelude" | "sources") {
             errors.push(manifest_error(
                 manifest_path,
-                &text,
+                text,
                 format!("unknown manifest field `{key}`"),
                 Some(key),
             ));
@@ -134,7 +134,7 @@ fn parse_manifest(
         Some(_) => {
             errors.push(manifest_error(
                 manifest_path,
-                &text,
+                text,
                 "`package` must be a non-empty string",
                 Some("package"),
             ));
@@ -143,7 +143,7 @@ fn parse_manifest(
         None => {
             errors.push(manifest_error(
                 manifest_path,
-                &text,
+                text,
                 "missing `package` identity",
                 None,
             ));
@@ -155,7 +155,7 @@ fn parse_manifest(
         Some(_) => {
             errors.push(manifest_error(
                 manifest_path,
-                &text,
+                text,
                 "`prelude` must be a boolean",
                 Some("prelude"),
             ));
@@ -163,49 +163,7 @@ fn parse_manifest(
         }
         None => true,
     };
-    let mut paths = BTreeSet::new();
-    match table.get("sources") {
-        Some(toml::Value::Array(values)) if !values.is_empty() => {
-            for value in values {
-                let Some(value) = value.as_str() else {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        &text,
-                        "every `sources` entry must be a string",
-                        Some("sources"),
-                    ));
-                    continue;
-                };
-                if !valid_relative_source(value) {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        &text,
-                        format!("source `{value}` must be a relative `.strata` path"),
-                        Some(value),
-                    ));
-                } else if !paths.insert(PathBuf::from(value)) {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        &text,
-                        format!("duplicate source `{value}`"),
-                        Some(value),
-                    ));
-                }
-            }
-        }
-        Some(_) => errors.push(manifest_error(
-            manifest_path,
-            &text,
-            "`sources` must be a non-empty array",
-            Some("sources"),
-        )),
-        None => errors.push(manifest_error(
-            manifest_path,
-            &text,
-            "package must enumerate at least one source",
-            None,
-        )),
-    }
+    let paths = parse_source_paths(manifest_path, text, &table, &mut errors);
     if errors.is_empty() {
         Ok(ParsedManifest {
             identity: identity.expect("validated package identity"),
@@ -215,6 +173,58 @@ fn parse_manifest(
     } else {
         Err(errors)
     }
+}
+
+fn parse_source_paths(
+    manifest_path: &Path,
+    text: &str,
+    table: &toml::Table,
+    errors: &mut Vec<PackageLoadError>,
+) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    match table.get("sources") {
+        Some(toml::Value::Array(values)) if !values.is_empty() => {
+            for value in values {
+                let Some(value) = value.as_str() else {
+                    errors.push(manifest_error(
+                        manifest_path,
+                        text,
+                        "every `sources` entry must be a string",
+                        Some("sources"),
+                    ));
+                    continue;
+                };
+                if !valid_relative_source(value) {
+                    errors.push(manifest_error(
+                        manifest_path,
+                        text,
+                        format!("source `{value}` must be a relative `.strata` path"),
+                        Some(value),
+                    ));
+                } else if !paths.insert(PathBuf::from(value)) {
+                    errors.push(manifest_error(
+                        manifest_path,
+                        text,
+                        format!("duplicate source `{value}`"),
+                        Some(value),
+                    ));
+                }
+            }
+        }
+        Some(_) => errors.push(manifest_error(
+            manifest_path,
+            text,
+            "`sources` must be a non-empty array",
+            Some("sources"),
+        )),
+        None => errors.push(manifest_error(
+            manifest_path,
+            text,
+            "package must enumerate at least one source",
+            None,
+        )),
+    }
+    paths
 }
 
 fn manifest_error(
