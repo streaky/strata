@@ -15,8 +15,9 @@ pub use compiler::{Compilation, CompilationFailure, Program, compile, compile_pa
 pub use diagnostic::{Diagnostic, Severity};
 pub use package::{IMPLICIT_PACKAGE_ID, MANIFEST_FILE_NAME, Package, PackageLoadError, SourceUnit};
 pub use semantics::{
-    BOOTSTRAP_VERSION, FunctionContract, Namespace, ParameterContract, SemanticFailure,
-    SemanticPackage, SemanticUnit, Symbol, TypedBinding, ValueType, Visibility, analyze,
+    BOOTSTRAP_VERSION, EvaluationKind, EvaluationStep, FunctionContract, Namespace,
+    ParameterContract, SemanticFailure, SemanticPackage, SemanticUnit, Symbol, TypedBinding,
+    ValueType, Visibility, analyze,
 };
 pub use source::{SourceFile, Span};
 pub use types::ScalarType;

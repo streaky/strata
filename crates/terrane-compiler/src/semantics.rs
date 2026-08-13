@@ -88,6 +88,20 @@ pub struct ParameterContract {
     pub optional: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvaluationKind {
+    Call,
+    ShortCircuitRhs,
+    PostfixUpdate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvaluationStep {
+    pub kind: EvaluationKind,
+    pub span: Span,
+    pub conditional: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct SemanticFailure {
     pub source: SourceFile,
@@ -103,6 +117,7 @@ pub struct SemanticUnit {
     pub typed_bindings: Vec<TypedBinding>,
     pub functions: Vec<FunctionContract>,
     pub unreachable_spans: Vec<Span>,
+    pub evaluation_steps: Vec<EvaluationStep>,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +174,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             typed_bindings: Vec::new(),
             functions: Vec::new(),
             unreachable_spans: Vec::new(),
+            evaluation_steps: Vec::new(),
         });
     }
 
@@ -228,6 +244,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     let unreachable_units = validate_control_flow(&semantic)?;
     for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
         unit.unreachable_spans = unreachable_spans;
+        unit.evaluation_steps = collect_evaluation_steps(&unit.source, &unit.tree.root);
     }
     Ok(semantic)
 }
@@ -683,6 +700,51 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
         }
     }
     Ok(())
+}
+
+fn collect_evaluation_steps(source: &SourceFile, root: &SyntaxNode) -> Vec<EvaluationStep> {
+    fn visit(
+        source: &SourceFile,
+        node: &SyntaxNode,
+        conditional: bool,
+        steps: &mut Vec<EvaluationStep>,
+    ) {
+        if node.kind == SyntaxKind::BinaryExpression
+            && let [left, right] = node.children.as_slice()
+        {
+            visit(source, left, conditional, steps);
+            let operator = source.text()[left.span.end..right.span.start].trim();
+            let short_circuit = matches!(operator, "and" | "or");
+            if short_circuit {
+                steps.push(EvaluationStep {
+                    kind: EvaluationKind::ShortCircuitRhs,
+                    span: right.span,
+                    conditional: true,
+                });
+            }
+            visit(source, right, conditional || short_circuit, steps);
+        } else {
+            for child in &node.children {
+                visit(source, child, conditional, steps);
+            }
+        }
+        let kind = match node.kind {
+            SyntaxKind::CallExpression => Some(EvaluationKind::Call),
+            SyntaxKind::PostfixExpression => Some(EvaluationKind::PostfixUpdate),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            steps.push(EvaluationStep {
+                kind,
+                span: node.span,
+                conditional,
+            });
+        }
+    }
+
+    let mut steps = Vec::new();
+    visit(source, root, false, &mut steps);
+    steps
 }
 
 type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);

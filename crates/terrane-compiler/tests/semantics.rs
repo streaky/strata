@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use terrane_compiler::semantics::SymbolKind;
 use terrane_compiler::syntax::SyntaxKind;
-use terrane_compiler::{Package, ScalarType, SourceFile, SourceUnit, ValueType, analyze};
+use terrane_compiler::{
+    EvaluationKind, Package, ScalarType, SourceFile, SourceUnit, ValueType, analyze,
+};
 
 fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
     Package {
@@ -872,6 +874,49 @@ fn rejects_invalid_control_flow_contracts() {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, code, "{source}");
     }
+}
+
+#[test]
+fn records_left_to_right_calls_and_short_circuit_boundaries() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function first bool\n",
+                "  return true\n",
+                "function second bool\n",
+                "  return false\n",
+                "function main\n",
+                "  first;\n",
+                "  second;\n",
+                "  ready bool = true and false\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    let unit = &analyzed.units[0];
+    let calls = unit
+        .evaluation_steps
+        .iter()
+        .filter(|step| step.kind == EvaluationKind::Call)
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    assert!(unit.source.text()[calls[0].span.start..calls[0].span.end].contains("first"));
+    assert!(!calls[0].conditional);
+    assert!(unit.source.text()[calls[1].span.start..calls[1].span.end].contains("second"));
+    assert!(!calls[1].conditional);
+    let boundary = unit
+        .evaluation_steps
+        .iter()
+        .find(|step| step.kind == EvaluationKind::ShortCircuitRhs)
+        .unwrap();
+    assert_eq!(
+        &unit.source.text()[boundary.span.start..boundary.span.end],
+        "false"
+    );
+    assert!(boundary.conditional);
 }
 
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
