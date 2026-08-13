@@ -64,6 +64,9 @@ impl Parser<'_> {
     fn parse_statement(&mut self) -> SyntaxNode {
         match self.text() {
             "namespace" => self.parse_namespace(),
+            "global" | "constant" if self.peek_text(1) == Some("function") => {
+                self.parse_invalid_function_qualifier()
+            }
             _ if self.looks_like_function_declaration() => self.parse_function(),
             "if" => self.parse_if(),
             "while" => self.parse_while(),
@@ -78,6 +81,17 @@ impl Parser<'_> {
             _ if self.looks_like_binding() => self.parse_binding(),
             _ => self.parse_expression_statement(),
         }
+    }
+
+    fn parse_invalid_function_qualifier(&mut self) -> SyntaxNode {
+        let start = self.position;
+        self.error_here(
+            "S1029",
+            format!("`{}` cannot modify a function declaration", self.text()),
+        );
+        self.bump();
+        let function = self.parse_function();
+        self.node(SyntaxKind::Error, start, self.position, vec![function])
     }
 
     fn parse_namespace(&mut self) -> SyntaxNode {

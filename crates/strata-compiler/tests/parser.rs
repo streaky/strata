@@ -298,6 +298,12 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, "S1029");
     }
+    for text in ["global function main\n", "constant function main\n"] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "S1029");
+    }
     rejected("async async function work\n", "S1029");
     rejected("function map of T; value T\n", "S1090");
     rejected("function main; values int ...\n", "S1090");
