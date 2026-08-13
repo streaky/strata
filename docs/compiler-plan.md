@@ -336,7 +336,7 @@ S1007 malformed parameter                 S1023 missing block newline
 S1008 malformed three-clause `for`        S1024 unterminated indented block
 S1009 malformed collection `for`          S1025 trailing statement content
 S1011 value on a value-free statement     S1026 malformed `from` import
-S1012 chained non-associative test         S1027 malformed importer selection
+S1012 chained non-associative test        S1027 malformed importer selection
 S1013 invalid member adjacency            S1028 malformed collection target
 S1014 missing member name                 S1029 invalid declaration prefix
 S1015 unclosed index expression           S1030 assignment in condition
