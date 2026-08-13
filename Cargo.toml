@@ -4,6 +4,7 @@ members = [
     "crates/terrane-compiler",
     "crates/terrane-int-support",
     "crates/terrane-language-server",
+    "crates/terrane-string-support",
 ]
 resolver = "2"
 

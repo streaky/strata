@@ -1,0 +1,12 @@
+[package]
+name = "terrane-string-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+unicode-segmentation = "1"
+
+[lints]
+workspace = true
