@@ -50,6 +50,7 @@ impl Parser<'_> {
                 self.bump();
             } else if self.at(TokenKind::Indent) {
                 self.error_here("S1001", "unexpected indentation outside a block");
+                self.bump();
                 self.recover_nested_block();
             } else {
                 children.push(self.parse_statement());
