@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, Package, SourceFile, Span, lexer, parser, syntax::SyntaxTree};
+use crate::{Diagnostic, Package, SourceFile, Span, semantics, syntax::SyntaxTree};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -60,32 +60,20 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
 /// Returns diagnostics from the first source unit that fails. All units are
 /// parsed before semantic projection, in deterministic package order.
 pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFailure> {
-    let mut parsed_units = Vec::with_capacity(package.units.len());
-    for unit in &package.units {
-        let source = &unit.source;
-        let lexed = lexer::lex(source).map_err(|diagnostics| CompilationFailure {
-            source: source.clone(),
-            diagnostics,
-        })?;
-        let parsed = parser::parse(source, lexed);
-        if !parsed.diagnostics.is_empty() {
-            return Err(CompilationFailure {
-                source: source.clone(),
-                diagnostics: parsed.diagnostics,
-            });
-        }
-        parsed_units.push((source, parsed.tree));
-    }
-
-    let Some((source, syntax)) = parsed_units
+    let semantic = semantics::analyze(package).map_err(|failure| CompilationFailure {
+        source: failure.source,
+        diagnostics: failure.diagnostics,
+    })?;
+    let Some(unit) = semantic
+        .units
         .iter()
-        .find(|(source, _)| {
-            source
+        .find(|unit| {
+            unit.source
                 .text()
                 .lines()
                 .any(|line| line.trim() == "function main")
         })
-        .or_else(|| parsed_units.first())
+        .or_else(|| semantic.units.first())
     else {
         let source = SourceFile::new(0, package.root.clone(), String::new());
         return Err(CompilationFailure {
@@ -96,11 +84,13 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
             )],
         });
     };
-    let program =
-        project_bootstrap_program(source, syntax).map_err(|diagnostics| CompilationFailure {
-            source: (*source).clone(),
+    let source = &unit.source;
+    let program = project_bootstrap_program(source, &unit.tree).map_err(|diagnostics| {
+        CompilationFailure {
+            source: source.clone(),
             diagnostics,
-        })?;
+        }
+    })?;
     let program = resolve(program);
     let ir = lower(&program);
     let rust = emit_rust(&ir, source);

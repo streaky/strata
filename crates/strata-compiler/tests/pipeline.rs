@@ -17,18 +17,28 @@ fn hello_lowers_deterministically() {
 #[test]
 fn rejects_every_repeated_milestone_construct() {
     let cases = [
-        ("namespace hello", "namespace declaration"),
-        ("from /core output import .print", "output import"),
-        ("print = .print", "print binding"),
-        ("function main", "`main` function"),
+        (
+            "namespace hello",
+            "S0005",
+            "duplicate namespace declaration",
+        ),
+        (
+            "from /core output import .print",
+            "S0005",
+            "duplicate output import",
+        ),
+        ("print = .print", "S2005", "duplicate declaration `print`"),
+        ("function main", "S2005", "duplicate declaration `main`"),
     ];
 
-    for (construct, description) in cases {
+    for (construct, code, message) in cases {
         let source = HELLO.replacen(construct, &format!("{construct}\n{construct}"), 1);
         let diagnostics = strata_compiler::compile("duplicate.strata", source).unwrap_err();
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "S0005" && diagnostic.message == format!("duplicate {description}")
-        }));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == code && diagnostic.message == message)
+        );
     }
 
     let source = HELLO.replace("print; >>", "print; >first\n  print; >>");
