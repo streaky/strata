@@ -62,7 +62,7 @@ impl Parser<'_> {
             "from" => self.parse_import_declaration(),
             "import" => self.parse_import_selection(),
             "class" | "try" | "throw" | "yield" | "match" | "unsafe" | "rust" | "label"
-            | "goto" | "when" | "use" => self.parse_unsupported(),
+            | "goto" | "when" | "use" | "catch" | "finally" | "case" => self.parse_unsupported(),
             _ if self.looks_like_binding() => self.parse_binding(),
             _ => self.parse_expression_statement(),
         }
@@ -246,6 +246,13 @@ impl Parser<'_> {
         self.expect_text("function", "S1005", "expected `function`");
         if self.at(TokenKind::Identifier) && !self.at_text("from") && !self.at_text("to") {
             children.push(self.leaf(SyntaxKind::Name));
+            if self.at_text("of") {
+                self.error_here(
+                    "S1090",
+                    "source-declared type parameters are not supported by this compiler milestone",
+                );
+                self.recover_line();
+            }
             if !self.at(TokenKind::Semicolon) && !self.at_line_end() {
                 children.push(self.parse_type_expression());
             }
@@ -279,6 +286,18 @@ impl Parser<'_> {
                 }
                 if self.eat(TokenKind::Assign) {
                     parts.push(self.parse_expression(0, false));
+                }
+                if self.at(TokenKind::Dot)
+                    && self.peek_kind(1) == Some(TokenKind::Dot)
+                    && self.peek_kind(2) == Some(TokenKind::Dot)
+                {
+                    self.error_here(
+                        "S1090",
+                        "variadic parameters are not supported by this compiler milestone",
+                    );
+                    self.bump();
+                    self.bump();
+                    self.bump();
                 }
                 children.push(self.node(
                     SyntaxKind::Parameter,
@@ -520,6 +539,14 @@ impl Parser<'_> {
         {
             let start = self.position;
             let restricted = matches!(self.text(), "ref" | "move" | "await");
+            if restricted {
+                let feature = self.text().to_owned();
+                self.diagnostics.push(Diagnostic::error(
+                    "S1090",
+                    format!("`{feature}` expressions are not supported by this compiler milestone"),
+                    self.current().span,
+                ));
+            }
             self.bump();
             let operand = if restricted {
                 self.parse_postfix(false)

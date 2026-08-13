@@ -206,6 +206,14 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("public private value int\n", "S1029");
     rejected("constant global value int\n", "S1029");
     rejected("async async function work\n", "S1029");
+    rejected("function map of T; value T\n", "S1090");
+    rejected("function main; values int ...\n", "S1090");
+    rejected("value = await thing\n", "S1090");
+    rejected("value = move thing\n", "S1090");
+    rejected("value = ref thing\n", "S1090");
+    rejected("catch problem\n", "S1090");
+    rejected("finally\n", "S1090");
+    rejected("case value\n", "S1090");
     rejected("from import .thing\n", "S1026");
     rejected("import .thing\n", "S1027");
     rejected("from /core output import print\n", "S1026");
