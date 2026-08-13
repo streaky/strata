@@ -551,7 +551,24 @@ multiline = >>
   from Strata!
 ```
 
-### 6.8 Newlines and continuation
+### 6.8 Numeric literals
+
+A numeric literal is a run of decimal digits with an optional single `.` fraction, or a `0x` hexadecimal run:
+
+```text
+count = 42
+ratio = 3.14
+mask = 0xff
+population = 1_000_000
+```
+
+`_` may separate digits within a run. It may not begin or end a run, appear twice consecutively, or stand beside the fraction point. A hexadecimal literal requires at least one hex digit after its prefix; `0X` is the same form.
+
+Version one defines no exponent, no radix prefix other than `0x`, and no type suffix. A digit run followed immediately by identifier characters is one malformed literal rather than a literal beside a name, so `1e9`, `0b101`, and `123abc` are lexical errors reported across the whole run. Write the intended value explicitly instead.
+
+A `.` is part of a literal only when a digit follows it. Otherwise it remains ordinary punctuation, so `1.type` is a member expression on a literal and `..` retains its namespace meaning.
+
+### 6.9 Newlines and continuation
 
 A newline normally terminates a statement.
 
@@ -564,7 +581,7 @@ A logical statement may continue after:
 
 The formatter should prefer one statement per line and use indented continuation rather than backslash escapes.
 
-### 6.9 Punctuation roles
+### 6.10 Punctuation roles
 
 The core punctuation has rigid jobs:
 

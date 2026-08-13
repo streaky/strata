@@ -290,41 +290,26 @@ fn lex_line(
                 );
             }
             byte if byte.is_ascii_digit() => {
-                index += 1;
-                while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'_')
-                {
-                    index += 1;
+                index = scan_number(bytes, index);
+                let text = &line[start..index];
+                if is_number(text) {
+                    push_token(
+                        source,
+                        tokens,
+                        TokenKind::Number,
+                        base + start,
+                        base + index,
+                        attachment(line, start, index),
+                    );
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        "L0009",
+                        format!(
+                            "invalid numeric literal `{text}`; version one accepts decimal digits, one `.` fraction, `0x` hexadecimal, and `_` between digits"
+                        ),
+                        Span::new(source.id(), base + start, base + index),
+                    ));
                 }
-                if bytes.get(index) == Some(&b'.')
-                    && bytes.get(index + 1).is_some_and(u8::is_ascii_digit)
-                {
-                    index += 1;
-                    while index < bytes.len()
-                        && (bytes[index].is_ascii_digit() || bytes[index] == b'_')
-                    {
-                        index += 1;
-                    }
-                } else if index == start + 1
-                    && bytes[start] == b'0'
-                    && bytes
-                        .get(index)
-                        .is_some_and(|byte| matches!(byte, b'x' | b'X'))
-                {
-                    index += 1;
-                    while index < bytes.len()
-                        && (bytes[index].is_ascii_hexdigit() || bytes[index] == b'_')
-                    {
-                        index += 1;
-                    }
-                }
-                push_token(
-                    source,
-                    tokens,
-                    TokenKind::Number,
-                    base + start,
-                    base + index,
-                    attachment(line, start, index),
-                );
             }
             b'.' => {
                 index += 1;
@@ -662,6 +647,44 @@ fn carries_code(line: &str, indent: usize, in_block_comment: bool) -> bool {
         };
         rest = &after[end + 2..];
     }
+}
+
+/// Consumes the maximal run a numeric literal could occupy, so a malformed
+/// spelling is reported as one literal instead of splitting into a name.
+fn scan_number(bytes: &[u8], start: usize) -> usize {
+    let index = digit_run(bytes, start);
+    if bytes.get(index) == Some(&b'.') && bytes.get(index + 1).is_some_and(u8::is_ascii_digit) {
+        return digit_run(bytes, index + 1);
+    }
+    index
+}
+
+fn digit_run(bytes: &[u8], start: usize) -> usize {
+    let mut index = start;
+    while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') {
+        index += 1;
+    }
+    index
+}
+
+fn is_number(text: &str) -> bool {
+    if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return is_digit_run(digits, u8::is_ascii_hexdigit);
+    }
+    match text.split_once('.') {
+        Some((whole, fraction)) => {
+            is_digit_run(whole, u8::is_ascii_digit) && is_digit_run(fraction, u8::is_ascii_digit)
+        }
+        None => is_digit_run(text, u8::is_ascii_digit),
+    }
+}
+
+fn is_digit_run(text: &str, admitted: fn(&u8) -> bool) -> bool {
+    !text.is_empty()
+        && !text.starts_with('_')
+        && !text.ends_with('_')
+        && !text.contains("__")
+        && text.bytes().all(|byte| admitted(&byte) || byte == b'_')
 }
 
 fn is_joiner(byte: u8) -> bool {
