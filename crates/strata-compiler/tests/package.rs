@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, compile_package, semantics::analyze};
+use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, analyze, compile_package};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
