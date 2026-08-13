@@ -212,6 +212,17 @@ fn a_block_string_body_terminates_exactly_one_statement() {
 }
 
 #[test]
+fn a_comment_only_terminator_line_stays_out_of_indentation() {
+    let lexed = lex_source("function main\n  /* c\n  */ # still a comment\nnext\n");
+    assert!(
+        !lexed
+            .tokens
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::Indent | TokenKind::Dedent))
+    );
+}
+
+#[test]
 fn comments_and_shift_operators_do_not_open_block_strings() {
     for source in [
         "x = 1 # use >>\n  kept = 2\nafter = 3\n",

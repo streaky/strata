@@ -46,16 +46,6 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
             }
             None => false,
         };
-        let trimmed = line[indent..].trim_start();
-        let comment_only = if block_comment_start.is_some() {
-            line.find("*/")
-                .is_none_or(|end| line[end + 2..].trim().is_empty())
-        } else {
-            trimmed.is_empty()
-                || trimmed.starts_with('#')
-                || trimmed.starts_with("//")
-                || (trimmed.starts_with("/*") && !trimmed.contains("*/"))
-        };
         if !in_block_string {
             if let Some((start, end)) = block_terminator.take() {
                 push_token(
@@ -67,7 +57,7 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
                     Attachment::Detached,
                 );
             }
-            if !comment_only {
+            if carries_code(line, indent, block_comment_start.is_some()) {
                 check_indent(
                     source,
                     offset,
@@ -646,6 +636,31 @@ fn emit_indentation(
                 Span::new(source.id(), offset, offset + indent),
             ));
         }
+    }
+}
+
+/// Reports whether a line contributes source outside comments, which is the only
+/// case where it participates in indentation.
+fn carries_code(line: &str, indent: usize, in_block_comment: bool) -> bool {
+    let mut rest = if in_block_comment { line } else { &line[indent..] };
+    if in_block_comment {
+        let Some(end) = rest.find("*/") else {
+            return false;
+        };
+        rest = &rest[end + 2..];
+    }
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() || rest.starts_with('#') || rest.starts_with("//") {
+            return false;
+        }
+        let Some(after) = rest.strip_prefix("/*") else {
+            return true;
+        };
+        let Some(end) = after.find("*/") else {
+            return false;
+        };
+        rest = &after[end + 2..];
     }
 }
 
