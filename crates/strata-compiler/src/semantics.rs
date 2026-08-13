@@ -451,18 +451,15 @@ fn imports_from_syntax(
     }
     Ok(result)
 }
-
-fn resolve_imports(
-    imports: Vec<Import>,
-    namespaces: &mut BTreeMap<String, Namespace>,
-) -> Result<(), SemanticFailure> {
-    for import in imports {
-        let Some(export) = namespaces
-            .get(&import.target)
-            .and_then(|namespace| namespace.objects.get(&import.object))
-            .cloned()
-        else {
-            return Err(failure(
+fn imported_object(
+    import: &Import,
+    namespaces: &BTreeMap<String, Namespace>,
+) -> Result<Symbol, SemanticFailure> {
+    let export = namespaces
+        .get(&import.target)
+        .and_then(|namespace| namespace.objects.get(&import.object))
+        .ok_or_else(|| {
+            failure(
                 &import.source,
                 "S2009",
                 format!(
@@ -470,16 +467,25 @@ fn resolve_imports(
                     import.object, import.target
                 ),
                 import.span,
-            ));
-        };
-        if export.visibility == Visibility::Private && export.namespace != import.namespace {
-            return Err(failure(
-                &import.source,
-                "S2010",
-                format!("object `.{}` is private", import.object),
-                import.span,
-            ));
-        }
+            )
+        })?;
+    if !visible_from(export, &import.namespace) {
+        return Err(failure(
+            &import.source,
+            "S2010",
+            format!("object `.{}` is inaccessible", import.object),
+            import.span,
+        ));
+    }
+    Ok(export.clone())
+}
+
+fn resolve_imports(
+    imports: Vec<Import>,
+    namespaces: &mut BTreeMap<String, Namespace>,
+) -> Result<(), SemanticFailure> {
+    for import in imports {
+        let export = imported_object(&import, namespaces)?;
         let destination = namespaces.get_mut(&import.namespace).unwrap();
         if let Some(existing) = destination.objects.get(&import.alias) {
             if existing.identity == export.identity {
@@ -677,22 +683,7 @@ fn collect_lexical_scopes(
             }
             SyntaxKind::ImportDeclaration => {
                 for import in imports_from_syntax(unit, node)? {
-                    let export = namespaces
-                        .get(&import.target)
-                        .and_then(|namespace| namespace.objects.get(&import.object))
-                        .filter(|symbol| visible_from(symbol, &unit.namespace))
-                        .cloned()
-                        .ok_or_else(|| {
-                            failure(
-                                &unit.source,
-                                "S2009",
-                                format!(
-                                    "unresolved object `.{}` in `{}`",
-                                    import.object, import.target
-                                ),
-                                import.span,
-                            )
-                        })?;
+                    let export = imported_object(&import, namespaces)?;
                     if let Some(existing) = scopes[index].objects.get(&import.alias) {
                         if existing.identity == export.identity {
                             continue;

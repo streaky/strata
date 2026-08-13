@@ -313,3 +313,21 @@ fn nested_object_form_declarations_are_rejected_explicitly() {
 
     assert_eq!(failure.diagnostics[0].code, "S2017");
 }
+
+#[test]
+fn imports_report_inaccessible_exports_consistently_at_every_scope() {
+    for consumer in [
+        "namespace unrelated\nfrom /hidden import .item\n",
+        "namespace unrelated\nfunction run\n  from /hidden import .item\n",
+    ] {
+        let failure = analyze(&package(
+            false,
+            &[
+                ("hidden.strata", "namespace hidden\nprotected .item = 1\n"),
+                ("consumer.strata", consumer),
+            ],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "S2010");
+    }
+}
