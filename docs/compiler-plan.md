@@ -264,7 +264,7 @@ Implementation status (completed on the `indentation-lexer` capability branch):
 - only lines carrying source outside comments participate in indentation, so blank lines, comment-only lines, and multiline comment terminators never open or close a block;
 - §6.8 numeric literals, `&`/`^`/`~`, and the identifier joiner set are lexed as declared, and a malformed literal is reported across its whole run instead of splitting into a name;
 - lexer contracts cover every token class, each required boundary spelling, all four indentation cases, and byte-accurate diagnostics including multibyte input;
-- the milestone-zero logical-line parser remains as a temporary consumer view over authoritative lexer output and is replaced by the lossless token parser in milestone 2.
+- the milestone-zero logical-line parser remains only as a temporary semantic projection for the runnable hello slice; milestone 2 replaces it as the authoritative syntax parser.
 
 Lexical diagnostics own the `L` code range and are the sole reporter of every condition listed here; the bootstrap parser keeps the `S` range for the value-level rules it still owns:
 
@@ -276,7 +276,7 @@ L0004 inconsistent dedent             L0009 invalid numeric literal
 L0005 joiner-introduced digit unit
 ```
 
-Known remaining boundaries, owned by milestone 2 rather than repaired here: the parser's quoted-string and block-marker recovery paths are shadowed by lexer diagnostics and are deleted with that parser; grammar-defined continuation lines still receive indentation transitions; and blank or comment-only lines still emit a terminator each.
+The parser now owns grammar-defined continuation and recovery decisions. Blank and comment-only lines continue to emit terminators as part of the lossless lexical contract.
 
 ### Milestone 2 — Lossless parser and formatter-ready tree
 
@@ -310,6 +310,18 @@ Invalid adjacency and missing grouping must produce source-oriented diagnostics 
 The parser must implement the normative §34 precedence and associativity table, including non-associative comparisons, and mechanically expand the call-free-expression variant used by argument grammar rather than maintaining a second expression grammar.
 
 Exit criterion: every first-version construct has accepted and rejected parse cases; no semantic decision is required merely to recover the intended tree shape.
+
+Implementation status (completed on the `lossless-parser` capability branch):
+
+- the shared `check`, `rust`, `build`, and `run` pipeline now parses authoritative lexer output through one recursive-descent parser before the temporary hello semantic projection;
+- compiler-owned syntax nodes retain byte spans, token ranges, child structure, the complete token stream, and trivia, with a deterministic normalized serializer suitable for reviewed goldens;
+- declarations, imports, bindings, functions, parameters, legal empty blocks, control flow, assignment clauses, names, object lookup, literals, member/index/postfix expressions, calls, grouping, and the normative unary/binary precedence ladder have dedicated tree shapes;
+- the same expression parser implements call-permitted and call-free contexts, including named arguments and grouped nested calls, without a second grammar;
+- type nodes preserve unions, prefix forms, constructor application, function types, and ordinary descriptor names for later semantic resolution;
+- newline and dedent recovery keeps subsequent statements structurally available, while invalid member adjacency, chained comparisons, ungrouped nested calls, `===`, and angle-bracket generic intent produce source-oriented `S` diagnostics;
+- focused accepted and rejected cases cover the milestone grammar, highest-risk ambiguities, structural imports, malformed declarations, recovery boundaries, and exact normalized output; the full workspace suite and a real CLI hello run verify the shared pipeline.
+
+The temporary semantic projection below the syntax tree remains deliberately limited to the milestone-zero runnable hello program. It does not parse independently or bypass syntax diagnostics, and milestone 3 replaces it while adding package, namespace, import, and scope semantics.
 
 ### Milestone 3 — Namespaces, scopes, and bootstrap environment
 
