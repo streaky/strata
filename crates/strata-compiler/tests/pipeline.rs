@@ -100,7 +100,7 @@ fn compilation_failure_owns_the_original_source() {
         failure.source.path(),
         PathBuf::from("owned.strata").as_path()
     );
-    assert!(failure.iter().any(|diagnostic| diagnostic.code == "S0003"));
+    assert!(failure.iter().any(|diagnostic| diagnostic.code == "S2014"));
 }
 
 #[test]
@@ -166,12 +166,12 @@ fn rejects_unresolved_object() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "S0003")
+            .any(|diagnostic| diagnostic.code == "S2014")
     );
 }
 
 #[test]
-fn rejects_wrong_call() {
+fn rejects_unresolved_call_argument() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; hello",
@@ -180,7 +180,7 @@ fn rejects_wrong_call() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "S0004")
+            .any(|diagnostic| diagnostic.code == "S2013")
     );
 }
 

@@ -123,7 +123,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         BTreeMap::new()
     };
 
-    Ok(SemanticPackage {
+    let semantic = SemanticPackage {
         identity: package.identity.clone(),
         prelude: package.prelude,
         namespaces,
@@ -131,7 +131,9 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         prelude_bindings,
         units,
         bootstrap_version: BOOTSTRAP_VERSION,
-    })
+    };
+    validate_references(&semantic)?;
+    Ok(semantic)
 }
 
 impl SemanticPackage {
@@ -419,6 +421,86 @@ fn resolve_imports(
     }
     Ok(())
 }
+
+fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn visit(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        match node.kind {
+            SyntaxKind::Name => {
+                let name = node_text(&unit.source, node);
+                if !matches!(name, "true" | "false")
+                    && package
+                        .resolve_ordinary_at(unit, node.span.start, name)
+                        .is_none()
+                {
+                    return Err(failure(
+                        &unit.source,
+                        "S2013",
+                        format!("unresolved name `{name}`"),
+                        node.span,
+                    ));
+                }
+            }
+            SyntaxKind::ObjectName => {
+                let name = node_text(&unit.source, node).trim_start_matches('.');
+                if package
+                    .resolve_object_at(unit, node.span.start, name)
+                    .is_none()
+                {
+                    return Err(failure(
+                        &unit.source,
+                        "S2014",
+                        format!("unresolved object `.{name}`"),
+                        node.span,
+                    ));
+                }
+            }
+            SyntaxKind::NamespaceDeclaration
+            | SyntaxKind::ImportDeclaration
+            | SyntaxKind::ParameterList
+            | SyntaxKind::Parameter
+            | SyntaxKind::TypeExpression
+            | SyntaxKind::UnionType
+            | SyntaxKind::PrefixType
+            | SyntaxKind::AppliedType
+            | SyntaxKind::FunctionType => {}
+            SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::FunctionDeclaration => {
+                let mut declaration_name_skipped = false;
+                for child in &node.children {
+                    if !declaration_name_skipped
+                        && matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
+                    {
+                        declaration_name_skipped = true;
+                        continue;
+                    }
+                    visit(package, unit, child)?;
+                }
+            }
+            SyntaxKind::MemberExpression => {
+                if let Some(receiver) = node.children.first() {
+                    visit(package, unit, receiver)?;
+                }
+            }
+            _ => {
+                for child in &node.children {
+                    visit(package, unit, child)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            visit(package, unit, node)?;
+        }
+    }
+    Ok(())
+}
+
 fn collect_lexical_scopes(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
