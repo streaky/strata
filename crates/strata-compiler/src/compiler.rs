@@ -55,15 +55,19 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
         source: source.clone(),
         diagnostics,
     })?;
-    let syntax = parser::parse(&source, lexed).map_err(|diagnostics| CompilationFailure {
-        source: source.clone(),
-        diagnostics,
-    })?;
-    let program =
-        project_bootstrap_program(&source, &syntax).map_err(|diagnostics| CompilationFailure {
+    let parsed = parser::parse(&source, lexed);
+    if !parsed.diagnostics.is_empty() {
+        return Err(CompilationFailure {
+            source,
+            diagnostics: parsed.diagnostics,
+        });
+    }
+    let program = project_bootstrap_program(&source, &parsed.tree).map_err(|diagnostics| {
+        CompilationFailure {
             source: source.clone(),
             diagnostics,
-        })?;
+        }
+    })?;
     let program = resolve(program);
     let ir = lower(&program);
     let rust = emit_rust(&ir, &source);

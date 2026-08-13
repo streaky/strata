@@ -2,12 +2,19 @@ use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind};
 use crate::{Diagnostic, SourceFile, Span};
 
+/// The recovered syntax tree and any source-oriented syntax diagnostics.
+#[derive(Clone, Debug)]
+pub struct ParseOutput {
+    pub tree: SyntaxTree,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Parses lexer output into a lossless, formatter-ready syntax tree.
 ///
-/// # Errors
-///
-/// Returns source-oriented syntax diagnostics after recovering at layout boundaries.
-pub fn parse(source: &SourceFile, lexed: LexedSource) -> Result<SyntaxTree, Vec<Diagnostic>> {
+/// Parsing always returns the recovered tree and token stream. Callers that
+/// require valid syntax must gate later phases on an empty diagnostic list.
+#[must_use]
+pub fn parse(source: &SourceFile, lexed: LexedSource) -> ParseOutput {
     let mut parser = Parser {
         source,
         tokens: &lexed.tokens,
@@ -16,10 +23,11 @@ pub fn parse(source: &SourceFile, lexed: LexedSource) -> Result<SyntaxTree, Vec<
         diagnostics: Vec::new(),
     };
     let root = parser.parse_compilation_unit();
-    if parser.diagnostics.is_empty() {
-        Ok(SyntaxTree { lexed, root })
-    } else {
-        Err(parser.diagnostics)
+    let diagnostics = std::mem::take(&mut parser.diagnostics);
+    drop(parser);
+    ParseOutput {
+        tree: SyntaxTree { lexed, root },
+        diagnostics,
     }
 }
 

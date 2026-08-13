@@ -3,17 +3,40 @@ use strata_compiler::{SourceFile, lexer::lex, parser::parse, syntax::SyntaxKind}
 fn parse_source(text: &str) -> strata_compiler::syntax::SyntaxTree {
     let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
     let lexed = lex(&source).unwrap();
-    parse(&source, lexed)
-        .unwrap_or_else(|diagnostics| panic!("unexpected parser diagnostics: {diagnostics:#?}"))
+    let parsed = parse(&source, lexed);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "unexpected parser diagnostics: {:#?}",
+        parsed.diagnostics
+    );
+    parsed.tree
 }
 
 fn rejected(text: &str, code: &str) {
     let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
     let lexed = lex(&source).unwrap();
-    let diagnostics = parse(&source, lexed).unwrap_err();
+    let diagnostics = parse(&source, lexed).diagnostics;
     assert!(
         diagnostics.iter().any(|diagnostic| diagnostic.code == code),
         "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn returns_recovered_tree_and_tokens_with_diagnostics() {
+    let source = SourceFile::new(0, "case.strata".into(), "value =\nnext = 1\n".to_owned());
+    let lexed = lex(&source).unwrap();
+    let parsed = parse(&source, lexed);
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "S1019")
+    );
+    assert_eq!(parsed.tree.root.children.len(), 2);
+    assert_eq!(
+        parsed.tree.lexed.tokens.last().unwrap().kind,
+        strata_compiler::tokens::TokenKind::Eof
     );
 }
 
