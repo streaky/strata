@@ -30,5 +30,6 @@ fn every_native_scalar_has_the_contract_preserving_rust_representation() {
 #[test]
 fn adaptive_int_cannot_be_lowered_to_a_bounded_rust_primitive() {
     assert_eq!(ScalarType::Int.rust_type(), None);
+    assert_eq!(ScalarType::Int.lowering_type(), "terrane_int_support::Int");
     assert!(ScalarType::Int.is_integer());
 }

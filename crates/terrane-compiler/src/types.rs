@@ -89,6 +89,15 @@ impl ScalarType {
             Self::None => Some("()"),
         }
     }
+    /// Returns the Rust type used by generated code, including compiler support
+    /// components for contracts a native primitive cannot preserve.
+    #[must_use]
+    pub const fn lowering_type(self) -> &'static str {
+        match self.rust_type() {
+            Some(native) => native,
+            None => "terrane_int_support::Int",
+        }
+    }
 
     #[must_use]
     pub fn from_source_name(name: &str) -> Option<Self> {
