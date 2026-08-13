@@ -235,22 +235,30 @@ fn normalized_tree_retains_tokens_and_trivia() {
 #[test]
 fn parses_structural_import_forms_and_named_arguments() {
     let tree = parse_source(
-        "from /core output import .print, .debug as .trace\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
+        "from /core output import .print, .debug as .trace\nfrom .. sibling import .item\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
     );
     let import = &tree.root.children[0];
     assert_eq!(import.kind, SyntaxKind::ImportDeclaration);
     assert_eq!(import.children[0].kind, SyntaxKind::NamespacePath);
-    assert_eq!(import.children[0].children.len(), 2);
+    assert_eq!(import.children[0].children.len(), 3);
+    assert_eq!(
+        import.children[0].children[0].kind,
+        SyntaxKind::NamespaceAnchor
+    );
+    assert_eq!(
+        tree.root.children[1].children[0].children[0].kind,
+        SyntaxKind::NamespaceAnchor
+    );
     assert_eq!(import.children[1].kind, SyntaxKind::ObjectImport);
     assert_eq!(import.children[2].kind, SyntaxKind::ObjectImport);
     assert_eq!(import.children[2].children[1].kind, SyntaxKind::ImportAlias);
     assert_eq!(
-        tree.root.children[1].children[0].kind,
+        tree.root.children[2].children[0].kind,
         SyntaxKind::ObjectName
     );
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert_eq!(
-        tree.root.children[2].children.last().unwrap().children[1]
+        tree.root.children[3].children.last().unwrap().children[1]
             .children
             .len(),
         2

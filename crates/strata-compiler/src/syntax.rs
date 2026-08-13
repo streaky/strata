@@ -7,6 +7,7 @@ pub enum SyntaxKind {
     ImportDeclaration,
     ImportSelection,
     NamespacePath,
+    NamespaceAnchor,
     ObjectImport,
     ImportAlias,
     DeclarationModifier,

@@ -134,11 +134,18 @@ impl Parser<'_> {
         let start = self.position;
         let mut children = Vec::new();
         if self.at_text("/") {
-            self.bump();
+            children.push(self.leaf(SyntaxKind::NamespaceAnchor));
         } else {
             while self.at(TokenKind::Dot) && self.peek_kind(1) == Some(TokenKind::Dot) {
+                let anchor_start = self.position;
                 self.bump();
                 self.bump();
+                children.push(self.node(
+                    SyntaxKind::NamespaceAnchor,
+                    anchor_start,
+                    self.position,
+                    Vec::new(),
+                ));
             }
         }
         while !self.at_text("import") && !self.at_line_end() {
