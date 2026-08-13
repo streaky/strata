@@ -61,6 +61,22 @@ pub struct TypedBinding {
     pub value_type: ValueType,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FunctionContract {
+    pub name: String,
+    pub span: Span,
+    pub parameters: Vec<ParameterContract>,
+    pub return_type: Option<ScalarType>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParameterContract {
+    pub name: String,
+    pub span: Span,
+    pub value_type: Option<ScalarType>,
+    pub optional: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct SemanticFailure {
     pub source: SourceFile,
@@ -74,6 +90,7 @@ pub struct SemanticUnit {
     pub namespace: String,
     pub scopes: Vec<LexicalScope>,
     pub typed_bindings: Vec<TypedBinding>,
+    pub functions: Vec<FunctionContract>,
 }
 
 #[derive(Clone, Debug)]
@@ -128,6 +145,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             namespace,
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
+            functions: Vec::new(),
         });
     }
 
@@ -182,9 +200,15 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_references(&semantic)?;
-    let typed_units = analyze_binding_types(&semantic)?;
-    for (unit, typed_bindings) in semantic.units.iter_mut().zip(typed_units) {
+    let (typed_units, function_units) = analyze_types(&semantic)?;
+    for ((unit, typed_bindings), functions) in semantic
+        .units
+        .iter_mut()
+        .zip(typed_units)
+        .zip(function_units)
+    {
         unit.typed_bindings = typed_bindings;
+        unit.functions = functions;
     }
     Ok(semantic)
 }
@@ -634,40 +658,156 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
     Ok(())
 }
 
-fn analyze_binding_types(
-    package: &SemanticPackage,
-) -> Result<Vec<Vec<TypedBinding>>, SemanticFailure> {
-    package
-        .units
-        .iter()
-        .map(|unit| {
-            let mut aliases = BTreeMap::new();
-            if package.prelude {
-                for ty in ScalarType::ALL {
-                    aliases.insert(ty.source_name().to_owned(), ty);
-                }
+type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);
+
+fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, SemanticFailure> {
+    let mut binding_units = Vec::with_capacity(package.units.len());
+    let mut function_units = Vec::with_capacity(package.units.len());
+    for unit in &package.units {
+        let mut aliases = BTreeMap::new();
+        if package.prelude {
+            for ty in ScalarType::ALL {
+                aliases.insert(ty.source_name().to_owned(), ty);
             }
-            let mut bindings = Vec::new();
-            analyze_binding_nodes(package, unit, &unit.tree.root, &mut aliases, &mut bindings)?;
-            Ok(bindings)
-        })
-        .collect()
+        }
+        let mut bindings = Vec::new();
+        let mut functions = Vec::new();
+        analyze_type_nodes(
+            package,
+            unit,
+            &unit.tree.root,
+            &mut aliases,
+            &mut bindings,
+            &mut functions,
+        )?;
+        binding_units.push(bindings);
+        function_units.push(functions);
+    }
+    Ok((binding_units, function_units))
 }
 
-fn analyze_binding_nodes(
+fn analyze_type_nodes(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
     aliases: &mut BTreeMap<String, ScalarType>,
     bindings: &mut Vec<TypedBinding>,
+    functions: &mut Vec<FunctionContract>,
 ) -> Result<(), SemanticFailure> {
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         analyze_binding_node(package, unit, node, aliases, bindings)?;
+    } else if node.kind == SyntaxKind::FunctionDeclaration {
+        functions.push(analyze_function_contract(unit, node, aliases)?);
     }
     for child in &node.children {
-        analyze_binding_nodes(package, unit, child, aliases, bindings)?;
+        analyze_type_nodes(package, unit, child, aliases, bindings, functions)?;
     }
     Ok(())
+}
+
+fn analyze_function_contract(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Result<FunctionContract, SemanticFailure> {
+    let name_node = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::Name)
+        .ok_or_else(|| failure(&unit.source, "T0004", "function requires a name", node.span))?;
+    let return_type = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::TypeExpression)
+        .map(|type_node| resolve_scalar_type(&unit.source, type_node, aliases))
+        .transpose()?;
+    let mut parameters = Vec::new();
+    let mut optional_seen = false;
+    if let Some(parameter_list) = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::ParameterList)
+    {
+        for parameter in &parameter_list.children {
+            let Some(parameter_name) = parameter
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            else {
+                continue;
+            };
+            let type_node = parameter
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::TypeExpression);
+            let value_type = type_node
+                .map(|node| resolve_scalar_type(&unit.source, node, aliases))
+                .transpose()?;
+            let default = parameter.children.iter().rev().find(|child| {
+                child.span != parameter_name.span && child.kind != SyntaxKind::TypeExpression
+            });
+            let optional = default.is_some();
+            if optional {
+                optional_seen = true;
+            } else if optional_seen {
+                return Err(failure(
+                    &unit.source,
+                    "T0005",
+                    "required parameters must precede optional parameters",
+                    parameter.span,
+                ));
+            }
+            if let (Some(expected), Some(default)) = (value_type, default)
+                && let Some(actual) = infer_literal_type(unit, default)
+                && actual != expected
+            {
+                if actual == ScalarType::Int
+                    && expected.is_integer()
+                    && let Some(value) = constant_integer(unit, default)
+                {
+                    check_integer_range(&unit.source, expected, &value, default.span)?;
+                } else {
+                    return Err(failure(
+                        &unit.source,
+                        "T0006",
+                        format!(
+                            "default for parameter `{}` has type `{actual}`, expected `{expected}`",
+                            node_text(&unit.source, parameter_name)
+                        ),
+                        default.span,
+                    ));
+                }
+            }
+            parameters.push(ParameterContract {
+                name: node_text(&unit.source, parameter_name).to_owned(),
+                span: parameter.span,
+                value_type,
+                optional,
+            });
+        }
+    }
+    Ok(FunctionContract {
+        name: node_text(&unit.source, name_node).to_owned(),
+        span: node.span,
+        parameters,
+        return_type,
+    })
+}
+
+fn resolve_scalar_type(
+    source: &SourceFile,
+    type_node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Result<ScalarType, SemanticFailure> {
+    let name = node_text(source, type_node).trim();
+    aliases.get(name).copied().ok_or_else(|| {
+        failure(
+            source,
+            "T0001",
+            format!("`{name}` does not resolve to a scalar type descriptor"),
+            type_node.span,
+        )
+    })
 }
 
 fn analyze_binding_node(

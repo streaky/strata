@@ -304,7 +304,7 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
         "  if true\n",
         "    inner = value\n",
     );
-    let analyzed = analyze(&package(false, &[("main.trn", source)])).unwrap();
+    let analyzed = analyze(&package(true, &[("main.trn", source)])).unwrap();
     let unit = &analyzed.units[0];
     let inner_offset = source.find("inner =").unwrap();
     let value_offset = source.find("value =").unwrap();
@@ -482,4 +482,56 @@ fn rejects_out_of_range_integer_constants_at_the_initializer() {
         failure.diagnostics[0].message,
         "constant `128` is outside the range of `int8`"
     );
+}
+
+#[test]
+fn records_typed_parameters_defaults_and_return_contracts() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function connect bool; host string, retries int = 2\n",
+                "  return true\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    let contract = &analyzed.units[0].functions[0];
+    assert_eq!(contract.name, "connect");
+    assert_eq!(contract.return_type, Some(ScalarType::Bool));
+    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::String));
+    assert!(!contract.parameters[0].optional);
+    assert_eq!(contract.parameters[1].value_type, Some(ScalarType::Int));
+    assert!(contract.parameters[1].optional);
+}
+
+#[test]
+fn rejects_required_parameters_after_optional_parameters() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction connect; timeout int = 2, host string\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0005");
+}
+
+#[test]
+fn rejects_defaults_incompatible_with_parameter_types() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction connect; timeout bool = 2\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0006");
 }
