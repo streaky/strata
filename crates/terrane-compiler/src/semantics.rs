@@ -31,6 +31,17 @@ pub struct Symbol {
     pub declaration_span: Option<Span>,
 }
 
+impl Symbol {
+    /// Returns the compiler-owned scalar represented by this canonical type descriptor.
+    #[must_use]
+    pub fn descriptor_type(&self) -> Option<ScalarType> {
+        (self.kind == SymbolKind::TypeDescriptor)
+            .then(|| self.identity.strip_prefix("/core/types::"))
+            .flatten()
+            .and_then(ScalarType::from_source_name)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
     pub ordinary: BTreeMap<String, Symbol>,
@@ -1038,8 +1049,7 @@ fn analyze_binding_node(
     {
         let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
         if let Some(symbol) = package.resolve_object_at(unit, initializer.span.start, object_name)
-            && symbol.kind == SymbolKind::TypeDescriptor
-            && let Some(ty) = descriptor_scalar(symbol)
+            && let Some(ty) = symbol.descriptor_type()
         {
             aliases.insert(name.clone(), ty);
             bindings.push(TypedBinding {
@@ -1370,13 +1380,6 @@ fn operator_failure(
     message: impl Into<String>,
 ) -> SemanticFailure {
     failure(&unit.source, "T0011", message, node.span)
-}
-
-fn descriptor_scalar(symbol: &Symbol) -> Option<ScalarType> {
-    symbol
-        .identity
-        .strip_prefix("/core/types::")
-        .and_then(ScalarType::from_source_name)
 }
 
 fn infer_literal_type(unit: &SemanticUnit, node: &SyntaxNode) -> Option<ScalarType> {

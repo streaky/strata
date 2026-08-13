@@ -408,6 +408,10 @@ fn imported_fixed_width_objects_remain_canonical_type_descriptors() {
         let descriptor = analyzed.object("/app", name).unwrap();
         assert_eq!(descriptor.kind, SymbolKind::TypeDescriptor);
         assert_eq!(descriptor.identity, format!("/core/types::{name}"));
+        assert_eq!(
+            descriptor.descriptor_type(),
+            ScalarType::from_source_name(name)
+        );
     }
 }
 
