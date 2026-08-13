@@ -1157,6 +1157,9 @@ fn infer_value_type(
     if node.kind == SyntaxKind::BinaryExpression {
         return infer_binary_type(unit, node, aliases, bindings).map(Some);
     }
+    if node.kind == SyntaxKind::TypeMembershipExpression {
+        return Ok(Some(ValueType::Scalar(ScalarType::Bool)));
+    }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
         return Ok(bindings
@@ -1323,7 +1326,7 @@ fn infer_binary_type(
     let left = infer_value_type(unit, left_node, aliases, bindings)?;
     let right = infer_value_type(unit, right_node, aliases, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
-    if matches!(operator, "is" | "is a") {
+    if operator == "is" {
         return Ok(ValueType::Scalar(ScalarType::Bool));
     }
     let (Some(ValueType::Scalar(left)), Some(ValueType::Scalar(right))) = (left, right) else {

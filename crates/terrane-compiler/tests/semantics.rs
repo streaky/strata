@@ -462,12 +462,21 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
     ))
     .unwrap();
 
+    let bindings = &analyzed.units[0].typed_bindings;
     assert_eq!(
-        analyzed.units[0].typed_bindings[0].value_type,
+        bindings
+            .iter()
+            .find(|binding| binding.name == "byte")
+            .unwrap()
+            .value_type,
         ValueType::TypeDescriptor(ScalarType::Uint8)
     );
     assert_eq!(
-        analyzed.units[0].typed_bindings[1].value_type,
+        bindings
+            .iter()
+            .find(|binding| binding.name == "maximum")
+            .unwrap()
+            .value_type,
         ValueType::Scalar(ScalarType::Uint8)
     );
 }
@@ -740,6 +749,66 @@ fn types_valid_unary_binary_and_comparison_operators() {
     for name in ["ordered", "selected"] {
         assert_eq!(
             bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap()
+                .value_type,
+            ValueType::Scalar(ScalarType::Bool)
+        );
+    }
+}
+
+#[test]
+fn type_membership_is_boolean_in_bindings_and_conditions() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function main\n",
+                "  value = 1\n",
+                "  selected = value is a int\n",
+                "  if value is a int\n",
+                "    return\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    assert_eq!(
+        analyzed.units[0]
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.name == "selected")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Bool)
+    );
+}
+
+#[test]
+fn identity_accepts_typed_scalars_and_canonical_descriptors() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .int8\n",
+                "function produce\n",
+                "byte = .int8\n",
+                "same-type = byte is byte\n",
+                "value = 1\n",
+                "same-value = value is value\n",
+                "same-result = (produce;) is (produce;)\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    for name in ["same-type", "same-value", "same-result"] {
+        assert_eq!(
+            analyzed.units[0]
+                .typed_bindings
                 .iter()
                 .find(|binding| binding.name == name)
                 .unwrap()
