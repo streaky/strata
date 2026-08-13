@@ -208,6 +208,30 @@ fn block_string_token_covers_body_and_uses_its_selected_prefix() {
 }
 
 #[test]
+fn tokens_and_trivia_cover_every_source_byte_once() {
+    for source in [
+        "function main\n  value\n\n  # note\nafter\n",
+        "x = >>\n  a\n\n  b\nafter = 1\n",
+        "function main\n  /* c\n  */ value\nnext\n",
+        "x = 'text' # trailing\n",
+    ] {
+        let lexed = lex_source(source);
+        let covered: usize = lexed
+            .tokens
+            .iter()
+            .filter(|token| token.kind != TokenKind::Eof)
+            .map(|token| token.span.end - token.span.start)
+            .sum::<usize>()
+            + lexed
+                .trivia
+                .iter()
+                .map(|item| item.span.end - item.span.start)
+                .sum::<usize>();
+        assert_eq!(covered, source.len(), "{source:?}");
+    }
+}
+
+#[test]
 fn a_block_string_body_terminates_exactly_one_statement() {
     let lexed = lex_source("x = >>\n  a\n\n  b\nafter = 1\n");
     let block = lexed
