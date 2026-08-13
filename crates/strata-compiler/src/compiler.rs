@@ -90,13 +90,12 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         [_, ambiguous, ..] => {
             let span = ambiguous
                 .declaration_span
-                .expect("source declarations carry their source span");
-            let source = &semantic
+                .unwrap_or_else(|| Span::new(semantic.units[0].source.id(), 0, 0));
+            let source = semantic
                 .units
                 .iter()
                 .find(|unit| unit.source.id() == span.file)
-                .expect("entry declaration belongs to an analyzed source unit")
-                .source;
+                .map_or(&semantic.units[0].source, |unit| &unit.source);
             return Err(CompilationFailure {
                 source: source.clone(),
                 diagnostics: vec![Diagnostic::error(
@@ -109,12 +108,12 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
     };
     let entry_span = entry
         .declaration_span
-        .expect("source declarations carry their source span");
+        .unwrap_or_else(|| Span::new(semantic.units[0].source.id(), 0, 0));
     let unit = semantic
         .units
         .iter()
         .find(|unit| unit.source.id() == entry_span.file)
-        .expect("entry declaration belongs to an analyzed source unit");
+        .unwrap_or(&semantic.units[0]);
     let source = &unit.source;
     let program = project_bootstrap_program(source, &unit.tree).map_err(|diagnostics| {
         CompilationFailure {

@@ -12,7 +12,11 @@ fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
             .enumerate()
             .map(|(id, (path, text))| SourceUnit {
                 relative_path: PathBuf::from(path),
-                source: SourceFile::new(id as u32, PathBuf::from(path), (*text).to_owned()),
+                source: SourceFile::new(
+                    u32::try_from(id).unwrap(),
+                    PathBuf::from(path),
+                    (*text).to_owned(),
+                ),
             })
             .collect(),
     }
