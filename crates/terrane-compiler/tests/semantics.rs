@@ -877,6 +877,25 @@ fn rejects_invalid_control_flow_contracts() {
 }
 
 #[test]
+fn limits_collection_iteration_to_single_target_strings() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  text string = 'abc'\n  for character in text\n    continue\n",
+        )],
+    ))
+    .unwrap();
+    for source in [
+        "namespace app\nfunction main\n  count int = 3\n  for value in count\n    continue\n",
+        "namespace app\nfunction main\n  text string = 'abc'\n  for index, character in text\n    continue\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0016");
+    }
+}
+
+#[test]
 fn records_left_to_right_calls_and_short_circuit_boundaries() {
     let analyzed = analyze(&package(
         true,

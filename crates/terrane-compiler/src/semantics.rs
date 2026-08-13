@@ -655,6 +655,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
             | SyntaxKind::ImportDeclaration
             | SyntaxKind::ParameterList
             | SyntaxKind::Parameter
+            | SyntaxKind::ForTarget
             | SyntaxKind::TypeExpression
             | SyntaxKind::UnionType
             | SyntaxKind::PrefixType
@@ -1858,6 +1859,25 @@ fn validate_flow_statement(
         SyntaxKind::ForStatement => {
             if statement.children.len() == 4 {
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
+            } else if let [target, collection, _block] = statement.children.as_slice() {
+                let collection_type =
+                    infer_value_type(unit, collection, &BTreeMap::new(), bindings)?;
+                if collection_type != Some(ValueType::Scalar(ScalarType::String)) {
+                    return Err(failure(
+                        &unit.source,
+                        "T0016",
+                        "version-one collection iteration supports `string` only",
+                        collection.span,
+                    ));
+                }
+                if target.children.len() != 1 {
+                    return Err(failure(
+                        &unit.source,
+                        "T0016",
+                        "string iteration requires exactly one target",
+                        target.span,
+                    ));
+                }
             }
             if let Some(block) = statement
                 .children
