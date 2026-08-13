@@ -612,7 +612,7 @@ fn emit_indentation(
             source,
             tokens,
             TokenKind::Indent,
-            offset,
+            offset + indent,
             offset + indent,
             Attachment::Detached,
         );
