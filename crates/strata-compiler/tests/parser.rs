@@ -305,4 +305,15 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
     let parsed = parse(&source, lex(&source).unwrap());
     assert_eq!(parsed.diagnostics.len(), 1, "{:#?}", parsed.diagnostics);
     assert_eq!(parsed.tree.root.children.len(), 2);
+
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "function main\n  value = 1\n    deeper = 2\n  after = 3\n".to_owned(),
+    );
+    let parsed = parse(&source, lex(&source).unwrap());
+    assert_eq!(parsed.diagnostics.len(), 1, "{:#?}", parsed.diagnostics);
+    assert_eq!(parsed.diagnostics[0].code, "S1001");
+    let block = parsed.tree.root.children[0].children.last().unwrap();
+    assert_eq!(block.children.len(), 2);
 }

@@ -807,8 +807,14 @@ impl Parser<'_> {
         if self.eat(TokenKind::Indent) {
             self.skip_newlines();
             while !self.at(TokenKind::Dedent) && !self.at(TokenKind::Eof) {
-                children.push(self.parse_statement());
-                self.finish_statement();
+                if self.at(TokenKind::Indent) {
+                    self.error_here("S1001", "unexpected indentation inside a block");
+                    self.bump();
+                    self.recover_nested_block();
+                } else {
+                    children.push(self.parse_statement());
+                    self.finish_statement();
+                }
                 self.skip_newlines();
             }
             self.expect(
