@@ -260,10 +260,16 @@ fn parses_structural_import_forms_and_named_arguments() {
 #[test]
 fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
-    rejected("value =\n", "S1019");
+    rejected("value =\n", "S1004");
     rejected("function main; ,\n", "S1007");
     rejected("public private value int\n", "S1029");
     rejected("constant global value int\n", "S1029");
+    for text in ["constant public value int\n", "global private value int\n"] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "S1029");
+    }
     rejected("async async function work\n", "S1029");
     rejected("function map of T; value T\n", "S1090");
     rejected("function main; values int ...\n", "S1090");

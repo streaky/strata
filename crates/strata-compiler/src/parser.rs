@@ -218,6 +218,10 @@ impl Parser<'_> {
             qualifier_seen = true;
             children.push(self.leaf(SyntaxKind::DeclarationQualifier));
         }
+        if matches!(self.text(), "public" | "private" | "protected") {
+            self.error_here("S1029", "visibility must precede `global` or `constant`");
+            children.push(self.leaf(SyntaxKind::Visibility));
+        }
         if self.at(TokenKind::Identifier) {
             children.push(self.leaf(SyntaxKind::Name));
         } else {
