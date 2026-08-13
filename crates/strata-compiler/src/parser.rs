@@ -531,6 +531,17 @@ impl Parser<'_> {
                     self.recover_expression();
                     break;
                 }
+                if self
+                    .binary_precedence()
+                    .is_some_and(|precedence| precedence > 2)
+                {
+                    self.error_here(
+                        "S1012",
+                        "a type-membership expression may only be joined with `and` or `or`",
+                    );
+                    self.recover_expression();
+                    break;
+                }
                 continue;
             }
             if let Some(precedence) = self.binary_precedence() {

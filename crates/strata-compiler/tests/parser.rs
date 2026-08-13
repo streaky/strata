@@ -197,6 +197,19 @@ fn distinguishes_identity_from_type_membership() {
 }
 
 #[test]
+fn rejects_tighter_operators_after_type_membership() {
+    for text in [
+        "value = thing is a int + 1\n",
+        "value = thing is a int == other\n",
+    ] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "S1012");
+    }
+}
+
+#[test]
 fn deferred_spellings_receive_canonical_fixes() {
     rejected("same = left === right\n", "S1091");
     for text in ["items list<string>\n", "items list<string>= value\n"] {
