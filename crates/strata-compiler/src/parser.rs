@@ -916,8 +916,9 @@ impl Parser<'_> {
     fn parse_visibility(&mut self, children: &mut Vec<SyntaxNode>) {
         if matches!(self.text(), "public" | "private" | "protected") {
             children.push(self.leaf(SyntaxKind::Visibility));
-            if matches!(self.text(), "public" | "private" | "protected") {
+            while matches!(self.text(), "public" | "private" | "protected") {
                 self.error_here("S1029", "a declaration may have only one visibility");
+                children.push(self.leaf(SyntaxKind::Visibility));
             }
         }
     }

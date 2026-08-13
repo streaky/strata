@@ -270,7 +270,14 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
     rejected("value =\n", "S1004");
     rejected("function main; ,\n", "S1007");
-    rejected("public private value int\n", "S1029");
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "public private value int\n".to_owned(),
+    );
+    let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "S1029");
     rejected("constant global value int\n", "S1029");
     for text in ["constant public value int\n", "global private value int\n"] {
         let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
