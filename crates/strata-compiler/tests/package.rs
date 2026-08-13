@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, compile_package};
+use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, compile_package, semantics::analyze};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -143,6 +143,61 @@ fn malformed_manifests_report_all_manifest_errors() {
         messages
             .iter()
             .any(|message| message.contains("missing `package`"))
+    );
+}
+
+#[test]
+fn manifest_package_drives_complete_namespace_and_scope_resolution() {
+    let package = TempPackage::new();
+    package.write(
+        "strata.package",
+        concat!(
+            "package namespace-contract\n",
+            "prelude false\n",
+            "source consumer.strata\n",
+            "source exports.strata\n",
+            "source parent.strata\n",
+        ),
+    );
+    package.write("exports.strata", "namespace shared\npublic .item = 1\n");
+    package.write(
+        "parent.strata",
+        "namespace app support\npublic .parent = 1\n",
+    );
+    package.write(
+        "consumer.strata",
+        concat!(
+            "namespace app child\n",
+            "from /shared import .item\n",
+            "from .. support import .parent\n",
+            "function run; argument int\n",
+            "  from /core output import .print as .local-print\n",
+            "  value = argument\n",
+        ),
+    );
+
+    let loaded = Package::load(&package.0).unwrap();
+    let analyzed = analyze(&loaded).unwrap();
+    let consumer = analyzed
+        .units
+        .iter()
+        .find(|unit| unit.namespace == "/app/child")
+        .unwrap();
+    let body_offset = consumer.source.text().find("value =").unwrap();
+
+    assert_eq!(analyzed.identity, "namespace-contract");
+    assert!(!analyzed.prelude);
+    assert!(analyzed.object("/app/child", "item").is_some());
+    assert!(analyzed.object("/app/child", "parent").is_some());
+    assert!(
+        analyzed
+            .resolve_ordinary_at(consumer, body_offset, "argument")
+            .is_some()
+    );
+    assert!(
+        analyzed
+            .resolve_object_at(consumer, body_offset, "local-print")
+            .is_some()
     );
 }
 
