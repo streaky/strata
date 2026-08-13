@@ -641,7 +641,11 @@ fn emit_indentation(
 /// Reports whether a line contributes source outside comments, which is the only
 /// case where it participates in indentation.
 fn carries_code(line: &str, indent: usize, in_block_comment: bool) -> bool {
-    let mut rest = if in_block_comment { line } else { &line[indent..] };
+    let mut rest = if in_block_comment {
+        line
+    } else {
+        &line[indent..]
+    };
     if in_block_comment {
         let Some(end) = rest.find("*/") else {
             return false;
