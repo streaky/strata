@@ -98,12 +98,14 @@ fn three_clause_for_requires_grouping_for_calls() {
 #[test]
 fn preserves_type_shapes_without_keywording_core_names() {
     let tree = parse_source(
-        "value list of string\nmaybe int | none\ncallback function from int, string to bool\nborrowed ref bytes\n",
+        "value list of string\nmaybe int | none\ncallback function from int, string to bool\npublic visible-callback function from int to bool\nconstant stable-callback function to bool\nborrowed ref bytes\n",
     );
     assert!(contains(&tree.root, SyntaxKind::AppliedType));
     assert!(contains(&tree.root, SyntaxKind::UnionType));
     assert!(contains(&tree.root, SyntaxKind::FunctionType));
     assert!(contains(&tree.root, SyntaxKind::PrefixType));
+    assert_eq!(tree.root.children[3].kind, SyntaxKind::Binding);
+    assert!(contains(&tree.root.children[3], SyntaxKind::FunctionType));
 }
 
 #[test]

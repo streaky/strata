@@ -54,7 +54,7 @@ impl Parser<'_> {
             "namespace" => self.parse_namespace(),
             "function" | "public" | "private" | "protected" | "static" | "async" | "mutating"
             | "throws"
-                if self.header_contains("function") =>
+                if self.looks_like_function_declaration() =>
             {
                 self.parse_function()
             }
@@ -797,11 +797,18 @@ impl Parser<'_> {
             && !matches!(self.peek_text(1), Some("in" | "is" | "and" | "or"))
     }
 
-    fn header_contains(&self, word: &str) -> bool {
+    fn looks_like_function_declaration(&self) -> bool {
         self.tokens[self.position..]
             .iter()
             .take_while(|token| token.kind != TokenKind::Newline)
-            .any(|token| token.text == word)
+            .skip_while(|token| {
+                matches!(
+                    token.text.as_str(),
+                    "public" | "private" | "protected" | "static" | "async" | "mutating" | "throws"
+                )
+            })
+            .next()
+            .is_some_and(|token| token.text == "function")
     }
     fn line_has_semicolons(&self, count: usize) -> bool {
         self.tokens[self.position..]
