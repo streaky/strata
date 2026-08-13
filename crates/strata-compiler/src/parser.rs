@@ -809,12 +809,22 @@ impl Parser<'_> {
             .is_some_and(|token| token.text == "function")
     }
     fn line_has_semicolons(&self, count: usize) -> bool {
-        self.tokens[self.position..]
+        let mut depth = 0usize;
+        let mut semicolons = 0usize;
+        for token in self.tokens[self.position..]
             .iter()
             .take_while(|token| token.kind != TokenKind::Newline)
-            .filter(|token| token.kind == TokenKind::Semicolon)
-            .count()
-            >= count
+        {
+            match token.kind {
+                TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::OpenBrace => depth += 1,
+                TokenKind::CloseParen | TokenKind::CloseBracket | TokenKind::CloseBrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokenKind::Semicolon if depth == 0 => semicolons += 1,
+                _ => {}
+            }
+        }
+        semicolons >= count
     }
     fn recover_line(&mut self) {
         while !self.at_line_end() {

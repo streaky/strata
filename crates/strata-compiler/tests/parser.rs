@@ -93,6 +93,7 @@ fn parses_control_flow_and_recovers_at_layout_boundaries() {
 fn three_clause_for_requires_grouping_for_calls() {
     parse_source("for i = (next;); i < limit; i++\n");
     rejected("for i = next; value; i < limit; i++\n", "S1016");
+    parse_source("for item in (values; a, (b; c))\n  break\n");
 }
 
 #[test]
