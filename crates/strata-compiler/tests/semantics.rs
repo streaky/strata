@@ -240,6 +240,34 @@ fn global_replacement_is_distinct_from_namespace_local_assignment() {
 }
 
 #[test]
+fn namespace_local_bindings_may_shadow_program_globals() {
+    let analyzed = analyze(&package(
+        false,
+        &[
+            ("global.strata", "namespace owner\nglobal shared = 1\n"),
+            ("local.strata", "namespace consumer\nshared = 2\n"),
+            ("peer.strata", "namespace peer\n"),
+        ],
+    ))
+    .unwrap();
+
+    assert_eq!(
+        analyzed
+            .resolve_ordinary("/consumer", "shared")
+            .unwrap()
+            .namespace,
+        "/consumer"
+    );
+    assert_eq!(
+        analyzed
+            .resolve_ordinary("/peer", "shared")
+            .unwrap()
+            .namespace,
+        "/owner"
+    );
+}
+
+#[test]
 fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
     let analyzed = analyze(&package(
         true,
