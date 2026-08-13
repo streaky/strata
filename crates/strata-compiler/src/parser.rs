@@ -99,46 +99,101 @@ impl Parser<'_> {
     fn parse_import_declaration(&mut self) -> SyntaxNode {
         let start = self.position;
         self.bump();
-        let mut saw_path = false;
-        while !self.at_text("import") && !self.at_line_end() {
-            saw_path = true;
-            self.bump();
-        }
-        if !saw_path {
-            self.error_here("S1026", "expected a namespace path after `from`");
-        }
+        let mut children = vec![self.parse_namespace_path()];
         self.expect_text("import", "S1026", "expected `import` after namespace path");
-        let mut saw_object = false;
-        while !self.at_line_end() {
-            saw_object = true;
-            self.bump();
-        }
-        if !saw_object {
+        if self.at_line_end() {
             self.error_here("S1026", "expected an object name after `import`");
+        } else {
+            loop {
+                children.push(self.parse_object_import());
+                if !self.eat(TokenKind::Comma) {
+                    break;
+                }
+                if self.at_line_end() {
+                    self.error_here("S1026", "expected an object name after `,`");
+                    break;
+                }
+            }
         }
         self.node(
             SyntaxKind::ImportDeclaration,
             start,
             self.position,
-            Vec::new(),
+            children,
         )
+    }
+
+    fn parse_namespace_path(&mut self) -> SyntaxNode {
+        let start = self.position;
+        let mut children = Vec::new();
+        if self.at_text("/") {
+            self.bump();
+        } else {
+            while self.at(TokenKind::Dot) && self.peek_kind(1) == Some(TokenKind::Dot) {
+                self.bump();
+                self.bump();
+            }
+        }
+        while !self.at_text("import") && !self.at_line_end() {
+            if self.at(TokenKind::Identifier) {
+                children.push(self.leaf(SyntaxKind::Name));
+            } else {
+                self.error_here("S1026", "expected a namespace path component");
+                self.bump();
+            }
+        }
+        if children.is_empty() {
+            self.error_at(start, "S1026", "expected a namespace path after `from`");
+        }
+        self.node(SyntaxKind::NamespacePath, start, self.position, children)
+    }
+
+    fn parse_object_import(&mut self) -> SyntaxNode {
+        let start = self.position;
+        let mut children = Vec::new();
+        children.push(self.parse_object_name("S1026", "expected an object name"));
+        if self.eat_text("as") {
+            let alias_start = self.position.saturating_sub(1);
+            let alias = self.parse_object_name("S1026", "expected an object alias after `as`");
+            children.push(self.node(
+                SyntaxKind::ImportAlias,
+                alias_start,
+                self.position,
+                vec![alias],
+            ));
+        }
+        self.node(SyntaxKind::ObjectImport, start, self.position, children)
     }
 
     fn parse_import_selection(&mut self) -> SyntaxNode {
         let start = self.position;
         self.bump();
         self.expect_text("with", "S1027", "expected `with` after `import`");
-        if self.at_line_end() {
-            self.error_here("S1027", "expected an importer object after `with`");
-        } else {
-            self.recover_line();
-        }
+        let importer = self.parse_object_name("S1027", "expected an importer object after `with`");
         self.node(
             SyntaxKind::ImportSelection,
             start,
             self.position,
-            Vec::new(),
+            vec![importer],
         )
+    }
+
+    fn parse_object_name(&mut self, code: &'static str, message: &str) -> SyntaxNode {
+        let start = self.position;
+        if !self.eat(TokenKind::Dot) {
+            self.error_here(code, message);
+            if !self.at_line_end() {
+                self.bump();
+            }
+            return self.node(SyntaxKind::Error, start, self.position, Vec::new());
+        }
+        if self.at(TokenKind::Identifier) {
+            let name = self.leaf(SyntaxKind::Name);
+            self.node(SyntaxKind::ObjectName, start, self.position, vec![name])
+        } else {
+            self.error_here(code, message);
+            self.node(SyntaxKind::Error, start, self.position, Vec::new())
+        }
     }
 
     fn parse_binding(&mut self) -> SyntaxNode {

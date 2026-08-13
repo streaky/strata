@@ -155,8 +155,17 @@ fn parses_structural_import_forms_and_named_arguments() {
     let tree = parse_source(
         "from /core output import .print, .debug as .trace\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
     );
-    assert!(contains(&tree.root, SyntaxKind::ImportDeclaration));
-    assert!(contains(&tree.root, SyntaxKind::ImportSelection));
+    let import = &tree.root.children[0];
+    assert_eq!(import.kind, SyntaxKind::ImportDeclaration);
+    assert_eq!(import.children[0].kind, SyntaxKind::NamespacePath);
+    assert_eq!(import.children[0].children.len(), 2);
+    assert_eq!(import.children[1].kind, SyntaxKind::ObjectImport);
+    assert_eq!(import.children[2].kind, SyntaxKind::ObjectImport);
+    assert_eq!(import.children[2].children[1].kind, SyntaxKind::ImportAlias);
+    assert_eq!(
+        tree.root.children[1].children[0].kind,
+        SyntaxKind::ObjectName
+    );
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert_eq!(
         tree.root.children[2].children.last().unwrap().children[1]
@@ -173,6 +182,9 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("function main; ,\n", "S1007");
     rejected("from import .thing\n", "S1026");
     rejected("import .thing\n", "S1027");
+    rejected("from /core output import print\n", "S1026");
+    rejected("from /core output import .print, , ]\n", "S1026");
+    rejected("import with anything at all\n", "S1027");
     rejected("class thing\n", "S1090");
 }
 
