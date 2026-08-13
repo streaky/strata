@@ -1,0 +1,21 @@
+[package]
+name = "terrane-language-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "terrane-language-server"
+path = "src/main.rs"
+
+[dependencies]
+terrane-compiler = { path = "../terrane-compiler" }
+tokio = { version = "1.48", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+tower-lsp-server = "0.23"
+[dev-dependencies]
+serde_json = "1"
+
+
+[lints]
+workspace = true
