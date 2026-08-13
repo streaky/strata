@@ -112,7 +112,10 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
 
     let mut namespaces = bootstrap_namespaces();
     for unit in &units {
-        if namespaces.contains_key(&unit.namespace) {
+        if matches!(
+            unit.namespace.as_str(),
+            "/core/output" | "/core/types" | "/core/errors" | "/collections"
+        ) {
             let span = unit
                 .tree
                 .root
@@ -535,10 +538,9 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
         match node.kind {
             SyntaxKind::Name => {
                 let name = node_text(&unit.source, node);
-                if !matches!(name, "true" | "false")
-                    && package
-                        .resolve_ordinary_at(unit, node.span.start, name)
-                        .is_none()
+                if package
+                    .resolve_ordinary_at(unit, node.span.start, name)
+                    .is_none()
                 {
                     return Err(failure(
                         &unit.source,

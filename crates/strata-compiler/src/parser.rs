@@ -724,6 +724,9 @@ impl Parser<'_> {
 
     fn parse_primary(&mut self) -> SyntaxNode {
         match self.current().kind {
+            TokenKind::Identifier if self.at_text("true") || self.at_text("false") => {
+                self.leaf(SyntaxKind::Literal)
+            }
             TokenKind::Identifier => self.leaf(SyntaxKind::Name),
             TokenKind::Number
             | TokenKind::String

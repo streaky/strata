@@ -92,6 +92,15 @@ fn bare_names_are_expression_statements() {
 }
 
 #[test]
+fn boolean_words_are_literals_not_names() {
+    let tree = parse_source("enabled = true\ndisabled = false\n");
+
+    for binding in &tree.root.children {
+        assert_eq!(binding.children.last().unwrap().kind, SyntaxKind::Literal);
+    }
+}
+
+#[test]
 fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
     let tree = parse_source(
         ".print; 'hello'\n.thing\nresult = .thing;\nvalue = call; first, (convert; second)\n",
