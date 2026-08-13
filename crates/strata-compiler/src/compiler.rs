@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, SourceFile, Span};
+use crate::{Diagnostic, SourceFile, Span, lexer, tokens::LexedSource};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -16,10 +16,6 @@ struct SyntaxProgram {
     output_path: String,
     print_binding: String,
     message: String,
-}
-
-struct LexedSource<'source> {
-    logical_lines: Vec<(usize, &'source str)>,
 }
 
 struct RustIr<'program> {
@@ -55,7 +51,10 @@ impl std::ops::Deref for CompilationFailure {
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
     let source = SourceFile::new(0, path.into(), text);
-    let tokens = lex(&source);
+    let tokens = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
+        source: source.clone(),
+        diagnostics,
+    })?;
     let syntax = parse(&source, &tokens).map_err(|diagnostics| CompilationFailure {
         source: source.clone(),
         diagnostics,
@@ -70,21 +69,12 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
     })
 }
 
-fn lex(source: &SourceFile) -> LexedSource<'_> {
-    let logical_lines = source
-        .text()
-        .split_inclusive('\n')
-        .scan(0, |offset, raw| {
-            let start = *offset;
-            *offset += raw.len();
-            Some((start, raw.trim_end_matches(['\n', '\r'])))
-        })
-        .collect();
-    LexedSource { logical_lines }
-}
-
-fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram, Vec<Diagnostic>> {
-    let mut lines = tokens.logical_lines.iter().copied().peekable();
+fn parse(source: &SourceFile, tokens: &LexedSource) -> Result<SyntaxProgram, Vec<Diagnostic>> {
+    let mut lines = tokens
+        .logical_lines
+        .iter()
+        .map(|(offset, line)| (*offset, line.as_str()))
+        .peekable();
     let mut errors = Vec::new();
     let mut namespace = None;
     let mut output_path = None;
@@ -92,7 +82,6 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
     let mut in_main = false;
     let mut message = None;
     let mut main_statement_seen = false;
-    let mut indent_style: Option<u8> = None;
 
     while let Some((offset, line)) = lines.next() {
         let indent_len = indentation_len(line);
@@ -101,13 +90,6 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
         if content.is_empty() || content.starts_with('#') || content.starts_with("//") {
             continue;
         }
-        check_indentation(
-            source,
-            offset,
-            &line.as_bytes()[..indent_len],
-            &mut indent_style,
-            &mut errors,
-        );
         if content.starts_with("namespace ") && indent_len == 0 {
             if namespace.is_some() {
                 errors.push(duplicate(source, offset, line, "namespace declaration"));
@@ -151,7 +133,6 @@ fn parse(source: &SourceFile, tokens: &LexedSource<'_>) -> Result<SyntaxProgram,
                     line,
                     indent_len,
                 },
-                &mut indent_style,
                 &mut errors,
             );
         } else if content.contains("= .") {
@@ -262,7 +243,6 @@ fn parse_print_value<'source>(
     lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, &'source str)>>,
     value: &str,
     context: LineContext<'_>,
-    indent_style: &mut Option<u8>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<String> {
     let LineContext {
@@ -271,7 +251,7 @@ fn parse_print_value<'source>(
         indent_len,
     } = context;
     if value == ">>" {
-        parse_block_string(source, lines, indent_len, indent_style, errors)
+        parse_block_string(source, lines, indent_len, errors)
     } else if value.starts_with(">>") {
         errors.push(Diagnostic::error(
             "S0004",
@@ -354,44 +334,15 @@ fn indentation_len(line: &str) -> usize {
         .count()
 }
 
-fn check_indentation(
-    source: &SourceFile,
-    offset: usize,
-    indent: &[u8],
-    indent_style: &mut Option<u8>,
-    errors: &mut Vec<Diagnostic>,
-) {
-    if indent.contains(&b' ') && indent.contains(&b'\t') {
-        errors.push(Diagnostic::error(
-            "S0001",
-            "mixed tabs and spaces in indentation",
-            Span::new(source.id(), offset, offset + indent.len()),
-        ));
-        return;
-    }
-    if let Some(first) = indent.first().copied() {
-        match *indent_style {
-            Some(style) if style != first => errors.push(Diagnostic::error(
-                "S0001",
-                "indentation style changes within the file",
-                Span::new(source.id(), offset, offset + indent.len()),
-            )),
-            None => *indent_style = Some(first),
-            _ => {}
-        }
-    }
-}
-
 fn parse_block_string<'source>(
     source: &SourceFile,
     lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, &'source str)>>,
     statement_indent: usize,
-    indent_style: &mut Option<u8>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<String> {
     let mut block_indent = None;
     let mut content_lines = Vec::new();
-    while let Some((offset, line)) = lines.peek().copied() {
+    while let Some((_, line)) = lines.peek().copied() {
         let indent_len = indentation_len(line);
         if line.trim().is_empty() {
             lines.next();
@@ -412,13 +363,6 @@ fn parse_block_string<'source>(
             break;
         }
         lines.next();
-        check_indentation(
-            source,
-            offset,
-            &line.as_bytes()[..indent_len],
-            indent_style,
-            errors,
-        );
         content_lines.push(line[required..].to_owned());
     }
     if block_indent.is_none() {

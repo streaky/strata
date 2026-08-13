@@ -256,6 +256,28 @@ Indentation cases must cover consistently space-indented and consistently tab-in
 
 Exit criterion: lexer corpus covers every token class and malformed boundary; all diagnostics point to the originating bytes and remain correct for multibyte UTF-8.
 
+Implementation status (completed on the `indentation-lexer` capability branch):
+
+- the shared compiler pipeline uses compiler-owned tokens, trivia, byte spans, and lexical diagnostics before the bootstrap parser;
+- the lexer emits structural newline and indentation transitions, retains whitespace and all three comment forms, and decides text markers, comparisons, and shifts from the preceding token rather than from line text;
+- tokens, trivia, and indentation transitions cover every source byte exactly once: a block string token spans its marker and body, and one terminator ends the statement it completes;
+- only lines carrying source outside comments participate in indentation, so blank lines, comment-only lines, and multiline comment terminators never open or close a block;
+- §6.8 numeric literals, `&`/`^`/`~`, and the identifier joiner set are lexed as declared, and a malformed literal is reported across its whole run instead of splitting into a name;
+- lexer contracts cover every token class, each required boundary spelling, all four indentation cases, and byte-accurate diagnostics including multibyte input;
+- the milestone-zero logical-line parser remains as a temporary consumer view over authoritative lexer output and is replaced by the lossless token parser in milestone 2.
+
+Lexical diagnostics own the `L` code range and are the sole reporter of every condition listed here; the bootstrap parser keeps the `S` range for the value-level rules it still owns:
+
+```text
+L0001 invalid source character        L0006 illegal left-attached operator
+L0002 unterminated block comment      L0007 unterminated string literal
+L0003 indentation style               L0008 block string marker not final
+L0004 inconsistent dedent             L0009 invalid numeric literal
+L0005 joiner-introduced digit unit
+```
+
+Known remaining boundaries, owned by milestone 2 rather than repaired here: the parser's quoted-string and block-marker recovery paths are shadowed by lexer diagnostics and are deleted with that parser; grammar-defined continuation lines still receive indentation transitions; and blank or comment-only lines still emit a terminator each.
+
 ### Milestone 2 — Lossless parser and formatter-ready tree
 
 Deliver:

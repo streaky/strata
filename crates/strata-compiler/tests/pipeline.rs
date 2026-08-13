@@ -48,7 +48,7 @@ fn rejects_mixed_indentation() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "S0001")
+            .any(|diagnostic| diagnostic.code == "L0003")
     );
 }
 
@@ -145,7 +145,7 @@ fn rejects_trailing_content_after_block_marker() {
     let source = HELLO.replace("print; >>", "print; >> ");
     let diagnostics = strata_compiler::compile("marker.strata", source).unwrap_err();
     assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "S0004" && diagnostic.message.contains("final content")
+        diagnostic.code == "L0008" && diagnostic.message.contains("final content")
     }));
 }
 
