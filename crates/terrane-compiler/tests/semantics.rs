@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use terrane_compiler::semantics::SymbolKind;
+use terrane_compiler::syntax::SyntaxKind;
 use terrane_compiler::{Package, ScalarType, SourceFile, SourceUnit, ValueType, analyze};
 
 fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
@@ -793,4 +794,46 @@ fn rejects_invalid_function_argument_binding() {
         let failure = analyze(&package(true, &[("main.trn", &source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "T0012", "{call}");
     }
+}
+
+#[test]
+fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core output import .print as .renderer\n",
+                "function consume; item\n",
+                "function main\n",
+                "  text = 'hello'\n",
+                "  text.clear;\n",
+                "  consume; .renderer\n",
+                "  .renderer;\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    let root = &analyzed.units[0].tree.root;
+    assert!(contains_kind(root, SyntaxKind::MemberExpression));
+    assert!(contains_kind(root, SyntaxKind::ObjectName));
+    assert_eq!(
+        count_kind(root, SyntaxKind::CallExpression),
+        3,
+        "member, ordinary, and dot-object calls remain explicit call nodes"
+    );
+}
+
+fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
+    node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
+}
+
+fn count_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> usize {
+    usize::from(node.kind == kind)
+        + node
+            .children
+            .iter()
+            .map(|child| count_kind(child, kind))
+            .sum::<usize>()
 }
