@@ -49,7 +49,7 @@ fn manifest_enumerates_sources_in_deterministic_path_order() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "# complete source set\npackage example.tools\nprelude false\nsource zed.strata\nsource nested/alpha.strata\n",
+        "# complete source set\npackage = \"example.tools\"\nprelude = false\nsources = [\"zed.strata\", \"nested/alpha.strata\"]\n",
     );
     package.write("zed.strata", "namespace zed\n");
     package.write("nested/alpha.strata", "namespace alpha\n");
@@ -75,7 +75,7 @@ fn package_compilation_parses_every_enumerated_unit() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package example.multi\nsource support.strata\nsource main.strata\n",
+        "package = \"example.multi\"\nsources = [\"support.strata\", \"main.strata\"]\n",
     );
     package.write("support.strata", "namespace hello helpers\nvalue = 1\n");
     package.write(
@@ -95,7 +95,7 @@ fn package_entry_point_comes_from_resolved_function_declarations() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package example.entry\nsource decoy.strata\nsource main.strata\n",
+        "package = \"example.entry\"\nsources = [\"decoy.strata\", \"main.strata\"]\n",
     );
     package.write(
         "decoy.strata",
@@ -117,7 +117,7 @@ fn package_requires_one_unambiguous_main_function() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package example.entry\nsource first.strata\nsource second.strata\n",
+        "package = \"example.entry\"\nsources = [\"first.strata\", \"second.strata\"]\n",
     );
     package.write("first.strata", "namespace first\nvalue = 1\n");
     package.write("second.strata", "namespace second\nvalue = 2\n");
@@ -136,7 +136,7 @@ fn syntax_failure_in_non_main_unit_stops_package_compilation() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package example.invalid\nsource main.strata\nsource support.strata\n",
+        "package = \"example.invalid\"\nsources = [\"main.strata\", \"support.strata\"]\n",
     );
     package.write(
         "main.strata",
@@ -155,7 +155,7 @@ fn malformed_manifests_report_all_manifest_errors() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "prelude perhaps\nsource ../escape.strata\nsource repeated.strata\nsource repeated.strata\nunknown field\n",
+        "prelude = \"perhaps\"\nsources = [\"../escape.strata\", \"repeated.strata\", \"repeated.strata\"]\nunknown = \"field\"\n",
     );
 
     let errors = Package::load(&package.0).unwrap_err();
@@ -193,11 +193,9 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
     package.write(
         "package.toml",
         concat!(
-            "package namespace-contract\n",
-            "prelude false\n",
-            "source consumer.strata\n",
-            "source exports.strata\n",
-            "source parent.strata\n",
+            "package = \"namespace-contract\"\n",
+            "prelude = false\n",
+            "sources = [\"consumer.strata\", \"exports.strata\", \"parent.strata\"]\n",
         ),
     );
     package.write("exports.strata", "namespace shared\npublic .item = 1\n");
@@ -247,7 +245,7 @@ fn missing_enumerated_sources_are_package_errors() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package missing-source\nsource absent.strata\n",
+        "package = \"missing-source\"\nsources = [\"absent.strata\"]\n",
     );
 
     let errors = Package::load(package.0.join("package.toml")).unwrap_err();

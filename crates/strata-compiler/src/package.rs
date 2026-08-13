@@ -49,11 +49,8 @@ impl Package {
         }
     }
 
-    /// Loads a package from a `package.toml` file or a directory containing one.
-    ///
-    /// The compact manifest is line-oriented:
-    /// `package <identity>`, `prelude <true|false>`, and one or more
-    /// `source <relative-path>` entries. Source units are assembled in sorted path order.
+    /// The manifest is TOML with required `package` and `sources` fields and
+    /// an optional `prelude` boolean. Source units are assembled in sorted path order.
     ///
     /// # Errors
     ///
@@ -96,75 +93,81 @@ fn parse_manifest(
     manifest_path: &Path,
     text: &str,
 ) -> Result<ParsedManifest, Vec<PackageLoadError>> {
-    let mut identity = None;
-    let mut prelude = true;
-    let mut prelude_seen = false;
-    let mut paths = BTreeSet::new();
+    let table = text.parse::<toml::Table>().map_err(|error| {
+        vec![PackageLoadError {
+            path: manifest_path.to_path_buf(),
+            message: format!("invalid TOML: {error}"),
+        }]
+    })?;
     let mut errors = Vec::new();
-    for (line_index, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+    for key in table.keys() {
+        if !matches!(key.as_str(), "package" | "prelude" | "sources") {
+            errors.push(PackageLoadError {
+                path: manifest_path.to_path_buf(),
+                message: format!("unknown manifest field `{key}`"),
+            });
         }
-        let Some((key, value)) = line.split_once(char::is_whitespace) else {
-            errors.push(manifest_error(
-                manifest_path,
-                line_index,
-                "expected a manifest value",
-            ));
-            continue;
-        };
-        let value = value.trim();
-        match key {
-            "package" if identity.is_none() && !value.is_empty() => {
-                identity = Some(value.to_owned());
-            }
-            "package" => errors.push(manifest_error(
-                manifest_path,
-                line_index,
-                "duplicate or empty package identity",
-            )),
-            "prelude" if !prelude_seen && matches!(value, "true" | "false") => {
-                prelude_seen = true;
-                prelude = value == "true";
-            }
-            "prelude" => errors.push(manifest_error(
-                manifest_path,
-                line_index,
-                "prelude must be `true` or `false` and appear once",
-            )),
-            "source" if valid_relative_source(value) => {
-                if !paths.insert(PathBuf::from(value)) {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        line_index,
-                        format!("duplicate source `{value}`"),
-                    ));
+    }
+    let identity = match table.get("package") {
+        Some(toml::Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        Some(_) => {
+            errors.push(PackageLoadError {
+                path: manifest_path.to_path_buf(),
+                message: "`package` must be a non-empty string".to_owned(),
+            });
+            None
+        }
+        None => {
+            errors.push(PackageLoadError {
+                path: manifest_path.to_path_buf(),
+                message: "missing `package` identity".to_owned(),
+            });
+            None
+        }
+    };
+    let prelude = match table.get("prelude") {
+        Some(toml::Value::Boolean(value)) => *value,
+        Some(_) => {
+            errors.push(PackageLoadError {
+                path: manifest_path.to_path_buf(),
+                message: "`prelude` must be a boolean".to_owned(),
+            });
+            true
+        }
+        None => true,
+    };
+    let mut paths = BTreeSet::new();
+    match table.get("sources") {
+        Some(toml::Value::Array(values)) if !values.is_empty() => {
+            for value in values {
+                let Some(value) = value.as_str() else {
+                    errors.push(PackageLoadError {
+                        path: manifest_path.to_path_buf(),
+                        message: "every `sources` entry must be a string".to_owned(),
+                    });
+                    continue;
+                };
+                if !valid_relative_source(value) {
+                    errors.push(PackageLoadError {
+                        path: manifest_path.to_path_buf(),
+                        message: format!("source `{value}` must be a relative `.strata` path"),
+                    });
+                } else if !paths.insert(PathBuf::from(value)) {
+                    errors.push(PackageLoadError {
+                        path: manifest_path.to_path_buf(),
+                        message: format!("duplicate source `{value}`"),
+                    });
                 }
             }
-            "source" => errors.push(manifest_error(
-                manifest_path,
-                line_index,
-                "source must be a relative `.strata` path",
-            )),
-            _ => errors.push(manifest_error(
-                manifest_path,
-                line_index,
-                format!("unknown manifest field `{key}`"),
-            )),
         }
-    }
-    if identity.is_none() {
-        errors.push(PackageLoadError {
+        Some(_) => errors.push(PackageLoadError {
             path: manifest_path.to_path_buf(),
-            message: "missing `package` identity".to_owned(),
-        });
-    }
-    if paths.is_empty() {
-        errors.push(PackageLoadError {
+            message: "`sources` must be a non-empty array".to_owned(),
+        }),
+        None => errors.push(PackageLoadError {
             path: manifest_path.to_path_buf(),
             message: "package must enumerate at least one source".to_owned(),
-        });
+        }),
     }
     if errors.is_empty() {
         Ok(ParsedManifest {
@@ -174,13 +177,6 @@ fn parse_manifest(
         })
     } else {
         Err(errors)
-    }
-}
-
-fn manifest_error(path: &Path, line_index: usize, message: impl Into<String>) -> PackageLoadError {
-    PackageLoadError {
-        path: path.to_path_buf(),
-        message: format!("line {}: {}", line_index + 1, message.into()),
     }
 }
 

@@ -2960,6 +2960,23 @@ tests/
 package manifest
 ```
 
+The first-version authored manifest is `package.toml`. It is a TOML document with
+the following minimal contract:
+
+```toml
+package = "example.tools"
+prelude = true
+sources = ["src/main.strata", "src/support.strata"]
+```
+
+`package` is a required non-empty package identity. `sources` is a required,
+non-empty array that enumerates the complete set of relative `.strata` source
+paths; absolute paths and paths containing `..` are invalid. Duplicate paths are
+an error. `prelude` is an optional boolean and defaults to `true`. Unknown fields
+are rejected. Source units receive stable file identities in sorted path order,
+independent of the array order. A single `.strata` CLI input is instead an
+implicit one-unit package with identity `single-file` and the default prelude.
+
 A package may expose one coherent object namespace regardless of which implementation language supplies each object.
 
 Consumers should not need to know whether `.resize` is implemented in source, generated Rust, handwritten Rust, or a C library wrapper.
