@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, Package, SourceFile, Span, semantics, syntax::SyntaxTree};
+use crate::{
+    Diagnostic, Package, SourceFile, Span,
+    semantics::{self, SymbolKind},
+    syntax::SyntaxTree,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -64,26 +68,53 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         source: failure.source,
         diagnostics: failure.diagnostics,
     })?;
-    let Some(unit) = semantic
+    let entry_points = semantic
+        .namespaces
+        .values()
+        .filter_map(|namespace| namespace.ordinary.get("main"))
+        .filter(|symbol| symbol.kind == SymbolKind::Function)
+        .collect::<Vec<_>>();
+    let entry = match entry_points.as_slice() {
+        [] => {
+            let source = &semantic.units[0].source;
+            return Err(CompilationFailure {
+                source: source.clone(),
+                diagnostics: vec![Diagnostic::error(
+                    "S2015",
+                    "package has no `main` function",
+                    Span::new(source.id(), 0, 0),
+                )],
+            });
+        }
+        [entry] => *entry,
+        [_, ambiguous, ..] => {
+            let span = ambiguous
+                .declaration_span
+                .expect("source declarations carry their source span");
+            let source = &semantic
+                .units
+                .iter()
+                .find(|unit| unit.source.id() == span.file)
+                .expect("entry declaration belongs to an analyzed source unit")
+                .source;
+            return Err(CompilationFailure {
+                source: source.clone(),
+                diagnostics: vec![Diagnostic::error(
+                    "S2016",
+                    "package has more than one `main` function",
+                    span,
+                )],
+            });
+        }
+    };
+    let entry_span = entry
+        .declaration_span
+        .expect("source declarations carry their source span");
+    let unit = semantic
         .units
         .iter()
-        .find(|unit| {
-            unit.source
-                .text()
-                .lines()
-                .any(|line| line.trim() == "function main")
-        })
-        .or_else(|| semantic.units.first())
-    else {
-        let source = SourceFile::new(0, package.root.clone(), String::new());
-        return Err(CompilationFailure {
-            source,
-            diagnostics: vec![Diagnostic::unlocated_error(
-                "S2000",
-                "package contains no source units",
-            )],
-        });
-    };
+        .find(|unit| unit.source.id() == entry_span.file)
+        .expect("entry declaration belongs to an analyzed source unit");
     let source = &unit.source;
     let program = project_bootstrap_program(source, &unit.tree).map_err(|diagnostics| {
         CompilationFailure {

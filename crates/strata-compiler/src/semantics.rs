@@ -11,6 +11,11 @@ pub enum Visibility {
     Protected,
     Private,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SymbolKind {
+    Binding,
+    Function,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Symbol {
@@ -20,6 +25,8 @@ pub struct Symbol {
     pub object_form: bool,
     pub visibility: Visibility,
     pub global: bool,
+    pub kind: SymbolKind,
+    pub declaration_span: Option<Span>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -255,6 +262,7 @@ struct Declaration {
     object_form: bool,
     visibility: Visibility,
     global: bool,
+    kind: SymbolKind,
 }
 
 fn declaration_from_syntax(unit: &SemanticUnit, node: &SyntaxNode) -> Option<Declaration> {
@@ -279,11 +287,17 @@ fn declaration_from_syntax(unit: &SemanticUnit, node: &SyntaxNode) -> Option<Dec
     let global = node.children.iter().any(|child| {
         child.kind == SyntaxKind::DeclarationQualifier && node_text(&unit.source, child) == "global"
     });
+    let kind = if node.kind == SyntaxKind::FunctionDeclaration {
+        SymbolKind::Function
+    } else {
+        SymbolKind::Binding
+    };
     Some(Declaration {
         name,
         object_form,
         visibility,
         global,
+        kind,
     })
 }
 
@@ -313,6 +327,8 @@ fn collect_declaration(
         object_form: declaration.object_form,
         visibility: declaration.visibility,
         global: declaration.global,
+        kind: declaration.kind,
+        declaration_span: Some(node.span),
     };
     if declaration.global {
         globals.insert(declaration.name, symbol);
@@ -732,6 +748,8 @@ fn collect_lexical_scopes(
                 object_form: false,
                 visibility: Visibility::Private,
                 global: false,
+                kind: SymbolKind::Binding,
+                declaration_span: Some(span),
             },
         );
         Ok(())
@@ -819,6 +837,8 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     object_form: false,
                     visibility: Visibility::Public,
                     global: false,
+                    kind: SymbolKind::Binding,
+                    declaration_span: None,
                 },
             )
         })
@@ -881,6 +901,8 @@ fn namespace_with_objects<'a>(path: &str, names: impl IntoIterator<Item = &'a st
                     object_form: true,
                     visibility: Visibility::Public,
                     global: false,
+                    kind: SymbolKind::Binding,
+                    declaration_span: None,
                 },
             )
         })

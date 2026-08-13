@@ -91,6 +91,47 @@ fn package_compilation_parses_every_enumerated_unit() {
 }
 
 #[test]
+fn package_entry_point_comes_from_resolved_function_declarations() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package example.entry\nsource decoy.strata\nsource main.strata\n",
+    );
+    package.write(
+        "decoy.strata",
+        "namespace decoy\ntext = >>\n  function main\n",
+    );
+    package.write(
+        "main.strata",
+        "namespace actual\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >real entry\n",
+    );
+
+    let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
+
+    assert_eq!(compilation.program.namespace, "actual");
+    assert_eq!(compilation.program.message, "real entry");
+}
+
+#[test]
+fn package_requires_one_unambiguous_main_function() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package example.entry\nsource first.strata\nsource second.strata\n",
+    );
+    package.write("first.strata", "namespace first\nvalue = 1\n");
+    package.write("second.strata", "namespace second\nvalue = 2\n");
+
+    let missing = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
+    assert_eq!(missing.diagnostics[0].code, "S2015");
+
+    package.write("first.strata", "namespace first\nfunction main\n");
+    package.write("second.strata", "namespace second\nfunction main\n");
+    let ambiguous = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
+    assert_eq!(ambiguous.diagnostics[0].code, "S2016");
+}
+
+#[test]
 fn syntax_failure_in_non_main_unit_stops_package_compilation() {
     let package = TempPackage::new();
     package.write(
