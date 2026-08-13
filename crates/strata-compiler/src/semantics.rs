@@ -80,8 +80,12 @@ struct Import {
 
 /// Builds the complete namespace tree, then resolves declarations and imports.
 ///
+/// Semantic phases fail at the first diagnostic in deterministic package and source
+/// order. Unlike independently discoverable manifest errors, later semantic errors can
+/// depend on declarations or imports that an earlier error prevented from assembling.
+///
 /// # Errors
-/// Returns source-oriented lexer, parser, namespace, scope, and import diagnostics.
+/// Returns the first source-oriented lexer, parser, namespace, scope, or import failure.
 pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     let mut units = Vec::with_capacity(package.units.len());
     for unit in &package.units {

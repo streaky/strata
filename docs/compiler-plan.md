@@ -380,11 +380,13 @@ imports, keeps ordinary and object-form namespaces separate, and records lexical
 for parameters, local bindings, assignments, and block-local object imports. Its fixed
 bootstrap table and exact default prelude are versioned compiler-owned data. Focused
 accepted and rejected cases cover explicit object-to-ordinary binding, visibility,
-duplicate and collision rules, idempotent reimports, `global` assignment, unresolved
-references, and ordinary bindings named `import`; a manifest-driven multi-source
-contract test exercises package assembly and cross-unit resolution. Shadowing behavior
-is implemented in the semantic model but is not yet part of the executable conformance
-corpus.
+duplicate and collision rules, idempotent reimports, `global` assignment, legal
+namespace-local shadowing of program globals, unresolved references, and ordinary
+bindings named `import`; a manifest-driven multi-source contract test exercises package
+assembly and cross-unit resolution. Semantic phases report the first failure in
+deterministic package and source order because subsequent resolution failures can depend
+on declarations or imports that the first failure prevented from assembling; manifest
+loading instead accumulates its independently discoverable diagnostics.
 
 ### Milestone 4 — Types, calls, and control-flow semantics
 
