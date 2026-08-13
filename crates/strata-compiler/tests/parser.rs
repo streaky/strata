@@ -168,8 +168,13 @@ fn distinguishes_identity_from_type_membership() {
 #[test]
 fn deferred_spellings_receive_canonical_fixes() {
     rejected("same = left === right\n", "S1091");
-    rejected("items list<string>\n", "S1092");
-    rejected("items list<string>= value\n", "S1092");
+    for text in ["items list<string>\n", "items list<string>= value\n"] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let lexed = lex(&source).unwrap();
+        let diagnostics = parse(&source, lexed).diagnostics;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "S1092");
+    }
 }
 
 #[test]

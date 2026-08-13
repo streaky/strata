@@ -735,13 +735,19 @@ impl Parser<'_> {
             return self.node(SyntaxKind::FunctionType, start, self.position, children);
         }
         let mut base = if self.at(TokenKind::Identifier) {
-            if self.text().contains('<') {
+            let angle_generic = self.text().contains('<');
+            if angle_generic {
                 self.error_here(
                     "S1092",
                     "angle-bracket generic syntax is unsupported; write `list of string`",
                 );
             }
-            self.leaf(SyntaxKind::Name)
+            let name = self.leaf(SyntaxKind::Name);
+            if angle_generic {
+                self.recover_line();
+                return name;
+            }
+            name
         } else if self.eat(TokenKind::OpenParen) {
             let inner = self.parse_type_expression();
             self.expect(TokenKind::CloseParen, "S1021", "expected `)` after type");
@@ -765,13 +771,6 @@ impl Parser<'_> {
                 }
             }
             base = self.node(SyntaxKind::AppliedType, start, self.position, args);
-        }
-        if matches!(self.text(), ">" | ">=") {
-            self.error_here(
-                "S1092",
-                "angle-bracket generic syntax is unsupported; write `list of string`",
-            );
-            self.bump();
         }
         base
     }
