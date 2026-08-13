@@ -509,7 +509,9 @@ fn resolve_imports(
 ) -> Result<(), SemanticFailure> {
     for import in imports {
         let export = imported_object(&import, namespaces)?;
-        let destination = namespaces.get_mut(&import.namespace).unwrap();
+        let destination = namespaces
+            .get_mut(&import.namespace)
+            .expect("every import destination is a preassembled source-unit namespace");
         if let Some(existing) = destination.objects.get(&import.alias) {
             if existing.identity == export.identity {
                 continue;
