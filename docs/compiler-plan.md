@@ -348,10 +348,8 @@ S1091 unsupported `===`                   S1092 unsupported angle generic
 fully expressed by the primary message carry structured help; CLI rendering
 prints that help separately from the stable code and message.
 
-The original milestone branch routed the pipeline through the parser before
-its broad coverage commit. Review follow-ups added focused regression cases
-alongside each correction. Later language work must continue to introduce its
-accepted and rejected cases in the same vertical work unit as the behavior.
+Language work must introduce its accepted and rejected cases in the same
+vertical work unit as the behavior.
 
 ### Milestone 3 — Namespaces, scopes, and bootstrap environment
 
