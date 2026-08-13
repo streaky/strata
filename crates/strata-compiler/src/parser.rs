@@ -791,9 +791,7 @@ impl Parser<'_> {
             return true;
         }
         self.at(TokenKind::Identifier)
-            && self
-                .peek_kind(1)
-                .is_some_and(|kind| matches!(kind, TokenKind::Identifier | TokenKind::Assign))
+            && self.peek_kind(1) == Some(TokenKind::Identifier)
             && !matches!(self.peek_text(1), Some("in" | "is" | "and" | "or"))
     }
 

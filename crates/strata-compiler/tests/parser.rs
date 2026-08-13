@@ -38,7 +38,7 @@ fn parses_lossless_declarations_and_legal_empty_blocks() {
 fn expression_tree_respects_precedence_and_postfix_binding() {
     let tree = parse_source("result = -left + thing.member * values[1]\n");
     let assignment = &tree.root.children[0];
-    assert_eq!(assignment.kind, SyntaxKind::Binding);
+    assert_eq!(assignment.kind, SyntaxKind::Assignment);
     let expression = assignment.children.last().unwrap();
     assert_eq!(expression.kind, SyntaxKind::BinaryExpression);
     assert!(contains(expression, SyntaxKind::UnaryExpression));
@@ -148,7 +148,7 @@ fn normalized_tree_retains_tokens_and_trivia() {
         parse_source("value = 1 # note\n").normalized(),
         concat!(
             "CompilationUnit 0..17\n",
-            "  Binding 0..9\n",
+            "  Assignment 0..9\n",
             "    Name 0..5\n",
             "    Literal 8..9\n",
             "tokens\n",
@@ -194,7 +194,7 @@ fn parses_structural_import_forms_and_named_arguments() {
 #[test]
 fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
-    rejected("value =\n", "S1004");
+    rejected("value =\n", "S1019");
     rejected("function main; ,\n", "S1007");
     rejected("from import .thing\n", "S1026");
     rejected("import .thing\n", "S1027");
