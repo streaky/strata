@@ -12,6 +12,25 @@ pub enum Int {
     Big(BigInt),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArithmeticError {
+    DivisionByZero,
+    NegativeShiftCount,
+    ShiftCountTooLarge,
+}
+
+impl fmt::Display for ArithmeticError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::DivisionByZero => "integer division by zero",
+            Self::NegativeShiftCount => "negative integer shift count",
+            Self::ShiftCountTooLarge => "integer shift count cannot be represented on this target",
+        })
+    }
+}
+
+impl std::error::Error for ArithmeticError {}
+
 impl Int {
     #[must_use]
     pub fn from_big(value: BigInt) -> Self {
@@ -45,6 +64,68 @@ impl Int {
     fn binary_big(&self, rhs: &Self, operation: impl FnOnce(BigInt, BigInt) -> BigInt) -> Self {
         Self::from_big(operation(self.as_big(), rhs.as_big()))
     }
+
+    /// Exact flooring division, matching Terrane's signed integer contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArithmeticError::DivisionByZero`] for a zero divisor.
+    pub fn floor_div(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
+        let rhs = rhs.as_big();
+        if rhs == BigInt::from(0_u8) {
+            return Err(ArithmeticError::DivisionByZero);
+        }
+        let left = self.as_big();
+        let quotient = &left / &rhs;
+        let remainder = &left % &rhs;
+        let floors_down = remainder != BigInt::from(0_u8)
+            && ((remainder < BigInt::from(0_u8)) != (rhs < BigInt::from(0_u8)));
+        Ok(Self::from_big(if floors_down {
+            quotient - 1
+        } else {
+            quotient
+        }))
+    }
+
+    /// Remainder paired with [`Self::floor_div`], carrying the divisor's sign.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArithmeticError::DivisionByZero`] for a zero divisor.
+    pub fn modulo(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
+        let quotient = self.floor_div(rhs)?;
+        Ok(Self::from_big(
+            self.as_big() - quotient.as_big() * rhs.as_big(),
+        ))
+    }
+
+    /// Exact left shift.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable error for a negative or target-unrepresentable count.
+    pub fn shift_left(&self, count: &Self) -> Result<Self, ArithmeticError> {
+        let count = shift_count(count)?;
+        Ok(Self::from_big(self.as_big() << count))
+    }
+
+    /// Arithmetic/flooring right shift over infinite two's-complement integers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable error for a negative or target-unrepresentable count.
+    pub fn shift_right(&self, count: &Self) -> Result<Self, ArithmeticError> {
+        let count = shift_count(count)?;
+        Ok(Self::from_big(self.as_big() >> count))
+    }
+}
+
+fn shift_count(count: &Int) -> Result<usize, ArithmeticError> {
+    let count = count.as_big();
+    if count < BigInt::from(0_u8) {
+        return Err(ArithmeticError::NegativeShiftCount);
+    }
+    count.to_usize().ok_or(ArithmeticError::ShiftCountTooLarge)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

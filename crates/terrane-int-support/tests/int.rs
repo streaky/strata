@@ -1,5 +1,5 @@
 use num_bigint::BigInt;
-use terrane_int_support::{Int, Tier};
+use terrane_int_support::{ArithmeticError, Int, Tier};
 
 #[test]
 fn arithmetic_promotes_and_normalizes_exactly() {
@@ -26,4 +26,52 @@ fn signed_minimum_negation_promotes_without_overflow() {
 fn bitwise_operations_use_infinite_twos_complement() {
     assert_eq!((!Int::from(0_i64)).to_string(), "-1");
     assert_eq!((Int::from(-1_i64) & Int::from(255_i64)).to_string(), "255");
+}
+
+#[test]
+fn division_and_modulo_follow_flooring_semantics() {
+    let cases = [
+        (-7_i64, 3_i64, "-3", "2"),
+        (7, -3, "-3", "-2"),
+        (-7, -3, "2", "-1"),
+        (7, 3, "2", "1"),
+    ];
+    for (left, right, quotient, remainder) in cases {
+        assert_eq!(
+            Int::from(left)
+                .floor_div(&Int::from(right))
+                .unwrap()
+                .to_string(),
+            quotient
+        );
+        assert_eq!(
+            Int::from(left)
+                .modulo(&Int::from(right))
+                .unwrap()
+                .to_string(),
+            remainder
+        );
+    }
+    assert_eq!(
+        Int::from(1_i64).floor_div(&Int::from(0_i64)),
+        Err(ArithmeticError::DivisionByZero)
+    );
+}
+
+#[test]
+fn shifts_are_exact_and_reject_negative_counts() {
+    let shifted = Int::from(1_i64).shift_left(&Int::from(130_i64)).unwrap();
+    assert_eq!(shifted.tier(), Tier::Arbitrary);
+    assert_eq!(
+        shifted.shift_right(&Int::from(129_i64)).unwrap(),
+        Int::from(2_i64)
+    );
+    assert_eq!(
+        Int::from(-3_i64).shift_right(&Int::from(1_i64)).unwrap(),
+        Int::from(-2_i64)
+    );
+    assert_eq!(
+        Int::from(1_i64).shift_left(&Int::from(-1_i64)),
+        Err(ArithmeticError::NegativeShiftCount)
+    );
 }
