@@ -52,12 +52,7 @@ impl Parser<'_> {
     fn parse_statement(&mut self) -> SyntaxNode {
         match self.text() {
             "namespace" => self.parse_namespace(),
-            "function" | "public" | "private" | "protected" | "static" | "async" | "mutating"
-            | "throws"
-                if self.looks_like_function_declaration() =>
-            {
-                self.parse_function()
-            }
+            _ if self.looks_like_function_declaration() => self.parse_function(),
             "if" => self.parse_if(),
             "while" => self.parse_while(),
             "for" => self.parse_for(),
@@ -198,13 +193,19 @@ impl Parser<'_> {
 
     fn parse_binding(&mut self) -> SyntaxNode {
         let start = self.position;
-        while matches!(
-            self.text(),
-            "public" | "private" | "protected" | "global" | "constant"
-        ) {
-            self.bump();
+        let mut children = self.parse_declaration_modifiers();
+        self.parse_visibility(&mut children);
+        let mut qualifier_seen = false;
+        while matches!(self.text(), "global" | "constant") {
+            if qualifier_seen {
+                self.error_here(
+                    "S1029",
+                    "a binding may have only one of `global` or `constant`",
+                );
+            }
+            qualifier_seen = true;
+            children.push(self.leaf(SyntaxKind::DeclarationQualifier));
         }
-        let mut children = Vec::new();
         if self.at(TokenKind::Identifier) {
             children.push(self.leaf(SyntaxKind::Name));
         } else {
@@ -225,11 +226,24 @@ impl Parser<'_> {
 
     fn parse_function(&mut self) -> SyntaxNode {
         let start = self.position;
-        while !self.at_text("function") && !self.at_line_end() {
-            self.bump();
+        let mut children = self.parse_declaration_modifiers();
+        self.parse_visibility(&mut children);
+        let mut qualifiers = 0u8;
+        while matches!(self.text(), "static" | "async" | "mutating" | "throws") {
+            let bit = match self.text() {
+                "static" => 1,
+                "async" => 2,
+                "mutating" => 4,
+                "throws" => 8,
+                _ => unreachable!(),
+            };
+            if qualifiers & bit != 0 {
+                self.error_here("S1029", "duplicate function qualifier");
+            }
+            qualifiers |= bit;
+            children.push(self.leaf(SyntaxKind::DeclarationQualifier));
         }
         self.expect_text("function", "S1005", "expected `function`");
-        let mut children = Vec::new();
         if self.at(TokenKind::Identifier) && !self.at_text("from") && !self.at_text("to") {
             children.push(self.leaf(SyntaxKind::Name));
             if !self.at(TokenKind::Semicolon) && !self.at_line_end() {
@@ -799,11 +813,37 @@ impl Parser<'_> {
         }
     }
 
+    fn parse_declaration_modifiers(&mut self) -> Vec<SyntaxNode> {
+        let mut modifiers = Vec::new();
+        while self.at(TokenKind::Dot) {
+            let start = self.position;
+            let object = self.parse_object_name("S1029", "expected a declaration modifier name");
+            modifiers.push(self.node(
+                SyntaxKind::DeclarationModifier,
+                start,
+                self.position,
+                vec![object],
+            ));
+        }
+        modifiers
+    }
+
+    fn parse_visibility(&mut self, children: &mut Vec<SyntaxNode>) {
+        if matches!(self.text(), "public" | "private" | "protected") {
+            children.push(self.leaf(SyntaxKind::Visibility));
+            if matches!(self.text(), "public" | "private" | "protected") {
+                self.error_here("S1029", "a declaration may have only one visibility");
+            }
+        }
+    }
+
     fn looks_like_binding(&self) -> bool {
-        if matches!(
-            self.text(),
-            "public" | "private" | "protected" | "global" | "constant"
-        ) {
+        if self.at(TokenKind::Dot)
+            || matches!(
+                self.text(),
+                "public" | "private" | "protected" | "global" | "constant"
+            )
+        {
             return true;
         }
         self.at(TokenKind::Identifier)
@@ -812,16 +852,25 @@ impl Parser<'_> {
     }
 
     fn looks_like_function_declaration(&self) -> bool {
-        self.tokens[self.position..]
-            .iter()
-            .take_while(|token| token.kind != TokenKind::Newline)
-            .find(|token| {
-                !matches!(
-                    token.text.as_str(),
-                    "public" | "private" | "protected" | "static" | "async" | "mutating" | "throws"
-                )
-            })
-            .is_some_and(|token| token.text == "function")
+        let mut offset = 0usize;
+        while self.peek_kind(offset) == Some(TokenKind::Dot)
+            && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
+        {
+            offset += 2;
+        }
+        if matches!(
+            self.peek_text(offset),
+            Some("public" | "private" | "protected")
+        ) {
+            offset += 1;
+        }
+        while matches!(
+            self.peek_text(offset),
+            Some("static" | "async" | "mutating" | "throws")
+        ) {
+            offset += 1;
+        }
+        self.peek_text(offset) == Some("function")
     }
     fn line_has_semicolons(&self, count: usize) -> bool {
         let mut depth = 0usize;

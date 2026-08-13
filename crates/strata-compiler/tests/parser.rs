@@ -23,10 +23,13 @@ fn contains(node: &strata_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> boo
 
 #[test]
 fn parses_lossless_declarations_and_legal_empty_blocks() {
-    let text = "namespace example app\npublic count int = 1\nfunction empty; value int\nfunction main\n  count = count + 1\n";
+    let text = "namespace example app\n.cache public constant count int = 1\n.trace public async throws function empty; value int\nfunction main\n  count = count + 1\n";
     let tree = parse_source(text);
     assert!(contains(&tree.root, SyntaxKind::NamespaceDeclaration));
     assert!(contains(&tree.root, SyntaxKind::Binding));
+    assert!(contains(&tree.root, SyntaxKind::DeclarationModifier));
+    assert!(contains(&tree.root, SyntaxKind::Visibility));
+    assert!(contains(&tree.root, SyntaxKind::DeclarationQualifier));
     assert_eq!(
         tree.lexed.tokens.last().unwrap().kind,
         strata_compiler::tokens::TokenKind::Eof
@@ -200,6 +203,9 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
     rejected("value =\n", "S1019");
     rejected("function main; ,\n", "S1007");
+    rejected("public private value int\n", "S1029");
+    rejected("constant global value int\n", "S1029");
+    rejected("async async function work\n", "S1029");
     rejected("from import .thing\n", "S1026");
     rejected("import .thing\n", "S1027");
     rejected("from /core output import print\n", "S1026");
