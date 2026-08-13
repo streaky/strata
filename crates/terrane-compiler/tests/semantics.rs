@@ -702,3 +702,59 @@ fn rejects_unsupported_integer_coercion_destinations() {
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0010");
 }
+
+#[test]
+fn types_valid_unary_binary_and_comparison_operators() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function main\n",
+                "  count = 5\n",
+                "  negative = -count\n",
+                "  mask = ~count\n",
+                "  sum = count + 2\n",
+                "  shifted = count << 1\n",
+                "  ordered = count >= 2\n",
+                "  selected = true and false\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    let bindings = &analyzed.units[0].typed_bindings;
+    for name in ["negative", "mask", "sum", "shifted"] {
+        assert_eq!(
+            bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap()
+                .value_type,
+            ValueType::Scalar(ScalarType::Int)
+        );
+    }
+    for name in ["ordered", "selected"] {
+        assert_eq!(
+            bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap()
+                .value_type,
+            ValueType::Scalar(ScalarType::Bool)
+        );
+    }
+}
+
+#[test]
+fn rejects_operators_with_incompatible_scalar_operands() {
+    for source in [
+        "namespace app\nfunction main\n  value = true + false\n",
+        "namespace app\nfunction main\n  value = ~'text'\n",
+        "namespace app\nfunction main\n  value = 1 and 2\n",
+        "namespace app\nfunction main\n  value = 1 == true\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0011");
+    }
+}

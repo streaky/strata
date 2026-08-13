@@ -965,8 +965,20 @@ fn infer_value_type(
     aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
-    if let Some(scalar) = infer_literal_type(unit, node) {
-        return Ok(Some(ValueType::Scalar(scalar)));
+    if node.kind == SyntaxKind::Literal {
+        return Ok(infer_literal_type(unit, node).map(ValueType::Scalar));
+    }
+    if node.kind == SyntaxKind::GroupExpression {
+        return match node.children.first() {
+            Some(child) => infer_value_type(unit, child, aliases, bindings),
+            None => Ok(None),
+        };
+    }
+    if node.kind == SyntaxKind::UnaryExpression {
+        return infer_unary_type(unit, node, aliases, bindings).map(Some);
+    }
+    if node.kind == SyntaxKind::BinaryExpression {
+        return infer_binary_type(unit, node, aliases, bindings).map(Some);
     }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
@@ -976,9 +988,66 @@ fn infer_value_type(
             .find(|binding| binding.name == name)
             .map(|binding| binding.value_type));
     }
-    if node.kind != SyntaxKind::CallExpression {
-        return Ok(None);
+    if node.kind == SyntaxKind::CallExpression {
+        return infer_integer_coercion_type(unit, node, aliases, bindings);
     }
+    Ok(None)
+}
+
+fn infer_unary_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    bindings: &[TypedBinding],
+) -> Result<ValueType, SemanticFailure> {
+    let Some(operand_node) = node.children.last() else {
+        return Err(operator_failure(
+            unit,
+            node,
+            "unary operator requires an operand",
+        ));
+    };
+    let Some(ValueType::Scalar(operand)) = infer_value_type(unit, operand_node, aliases, bindings)?
+    else {
+        return Err(operator_failure(
+            unit,
+            node,
+            "unary operator requires a scalar operand",
+        ));
+    };
+    let operator = unit.source.text()[node.span.start..operand_node.span.start].trim();
+    let valid = match operator {
+        "-" => {
+            operand.is_integer()
+                || matches!(
+                    operand,
+                    ScalarType::Float | ScalarType::Float32 | ScalarType::Float64
+                )
+        }
+        "~" => operand.is_integer(),
+        "not" => operand == ScalarType::Bool,
+        _ => false,
+    };
+    if !valid {
+        return Err(operator_failure(
+            unit,
+            node,
+            format!("operator `{operator}` is not defined for `{operand}`"),
+        ));
+    }
+    Ok(ValueType::Scalar(if operator == "not" {
+        ScalarType::Bool
+    } else {
+        operand
+    }))
+}
+
+fn infer_integer_coercion_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
     let Some(member) = node.children.first() else {
         return Ok(None);
     };
@@ -1060,6 +1129,67 @@ fn infer_value_type(
         ValueType::Scalar(destination)
     };
     Ok(Some(result))
+}
+fn infer_binary_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    bindings: &[TypedBinding],
+) -> Result<ValueType, SemanticFailure> {
+    let [left_node, right_node] = node.children.as_slice() else {
+        return Err(operator_failure(
+            unit,
+            node,
+            "binary operator requires two operands",
+        ));
+    };
+    let left = infer_value_type(unit, left_node, aliases, bindings)?;
+    let right = infer_value_type(unit, right_node, aliases, bindings)?;
+    let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
+    if matches!(operator, "is" | "is a") {
+        return Ok(ValueType::Scalar(ScalarType::Bool));
+    }
+    let (Some(ValueType::Scalar(left)), Some(ValueType::Scalar(right))) = (left, right) else {
+        return Err(operator_failure(
+            unit,
+            node,
+            "operator requires scalar operands",
+        ));
+    };
+    let same = left == right;
+    let numeric = |ty: ScalarType| {
+        ty.is_integer()
+            || matches!(
+                ty,
+                ScalarType::Float | ScalarType::Float32 | ScalarType::Float64
+            )
+    };
+    let result = match operator {
+        "+" | "-" | "*" | "/" | "%" if same && numeric(left) => left,
+        "<<" | ">>" if left.is_integer() && right.is_integer() => left,
+        "&" | "^" | "|" if same && left.is_integer() => left,
+        "and" | "or" if left == ScalarType::Bool && right == ScalarType::Bool => ScalarType::Bool,
+        "==" | "!=" if same => ScalarType::Bool,
+        "<" | "<=" | ">" | ">=" if same && (numeric(left) || left == ScalarType::String) => {
+            ScalarType::Bool
+        }
+        _ => {
+            return Err(operator_failure(
+                unit,
+                node,
+                format!("operator `{operator}` is not defined for `{left}` and `{right}`"),
+            ));
+        }
+    };
+    Ok(ValueType::Scalar(result))
+}
+
+fn operator_failure(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    message: impl Into<String>,
+) -> SemanticFailure {
+    failure(&unit.source, "T0011", message, node.span)
 }
 
 fn descriptor_scalar(symbol: &Symbol) -> Option<ScalarType> {
