@@ -254,6 +254,19 @@ fn deferred_spellings_receive_canonical_fixes() {
 }
 
 #[test]
+fn binary_word_operators_do_not_look_like_bindings() {
+    for operator in ["in", "is", "and", "or"] {
+        let text = format!("left {operator} right\n");
+        let source = SourceFile::new(0, "case.strata".into(), text);
+        let parsed = parse(&source, lex(&source).unwrap());
+        assert_ne!(parsed.tree.root.children[0].kind, SyntaxKind::Binding);
+        if let Some(diagnostic) = parsed.diagnostics.first() {
+            assert_eq!(diagnostic.primary.unwrap().start, 5);
+        }
+    }
+}
+
+#[test]
 fn normalized_tree_retains_tokens_and_trivia() {
     assert_eq!(
         parse_source("value = 1 # note\n").normalized(),
