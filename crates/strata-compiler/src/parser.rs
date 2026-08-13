@@ -901,17 +901,27 @@ impl Parser<'_> {
     }
 
     fn looks_like_binding(&self) -> bool {
-        if self.at(TokenKind::Dot)
-            || matches!(
-                self.text(),
-                "public" | "private" | "protected" | "global" | "constant"
-            )
+        let mut offset = 0usize;
+        while self.peek_kind(offset) == Some(TokenKind::Dot)
+            && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
         {
-            return true;
+            offset += 2;
         }
-        self.at(TokenKind::Identifier)
-            && self.peek_kind(1) == Some(TokenKind::Identifier)
-            && !matches!(self.peek_text(1), Some("in" | "is" | "and" | "or"))
+        if matches!(
+            self.peek_text(offset),
+            Some("public" | "private" | "protected")
+        ) {
+            offset += 1;
+        }
+        if matches!(self.peek_text(offset), Some("global" | "constant")) {
+            offset += 1;
+        }
+        self.peek_kind(offset) == Some(TokenKind::Identifier)
+            && matches!(
+                self.peek_kind(offset + 1),
+                Some(TokenKind::Identifier | TokenKind::Assign | TokenKind::Newline)
+            )
+            && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
     }
 
     fn looks_like_function_declaration(&self) -> bool {

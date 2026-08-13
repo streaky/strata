@@ -74,7 +74,11 @@ fn expression_tree_respects_precedence_and_postfix_binding() {
 
 #[test]
 fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
-    let tree = parse_source("result = .thing;\nvalue = call; first, (convert; second)\n");
+    let tree = parse_source(
+        ".print; 'hello'\n.thing\nresult = .thing;\nvalue = call; first, (convert; second)\n",
+    );
+    assert_eq!(tree.root.children[0].kind, SyntaxKind::CallExpression);
+    assert_eq!(tree.root.children[1].kind, SyntaxKind::ObjectName);
     assert!(contains(&tree.root, SyntaxKind::ObjectName));
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert!(contains(&tree.root, SyntaxKind::GroupExpression));
