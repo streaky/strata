@@ -24,7 +24,6 @@ pub fn parse(source: &SourceFile, lexed: LexedSource) -> ParseOutput {
     };
     let root = parser.parse_compilation_unit();
     let diagnostics = std::mem::take(&mut parser.diagnostics);
-    drop(parser);
     ParseOutput {
         tree: SyntaxTree { lexed, root },
         diagnostics,
