@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, SourceFile, Span, lexer, parser, syntax::SyntaxTree};
+use crate::{Diagnostic, Package, SourceFile, Span, lexer, parser, syntax::SyntaxTree};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -44,35 +44,68 @@ impl std::ops::Deref for CompilationFailure {
     }
 }
 
-/// Compiles one Strata source file through parsing, resolution, and Rust lowering.
+/// Compiles one Strata source file as an implicit, stable-identity package.
 ///
 /// # Errors
 ///
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
-    let source = SourceFile::new(0, path.into(), text);
-    let lexed = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
-        source: source.clone(),
-        diagnostics,
-    })?;
-    let parsed = parser::parse(&source, lexed);
-    if !parsed.diagnostics.is_empty() {
-        return Err(CompilationFailure {
-            source,
-            diagnostics: parsed.diagnostics,
-        });
-    }
-    let program = project_bootstrap_program(&source, &parsed.tree).map_err(|diagnostics| {
-        CompilationFailure {
+    compile_package(&Package::implicit(path, text))
+}
+
+/// Compiles every manifest-enumerated source unit through the shared frontend.
+///
+/// # Errors
+///
+/// Returns diagnostics from the first source unit that fails. All units are
+/// parsed before semantic projection, in deterministic package order.
+pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFailure> {
+    let mut parsed_units = Vec::with_capacity(package.units.len());
+    for unit in &package.units {
+        let source = &unit.source;
+        let lexed = lexer::lex(source).map_err(|diagnostics| CompilationFailure {
             source: source.clone(),
             diagnostics,
+        })?;
+        let parsed = parser::parse(source, lexed);
+        if !parsed.diagnostics.is_empty() {
+            return Err(CompilationFailure {
+                source: source.clone(),
+                diagnostics: parsed.diagnostics,
+            });
         }
-    })?;
+        parsed_units.push((source, parsed.tree));
+    }
+
+    let Some((source, syntax)) = parsed_units
+        .iter()
+        .find(|(source, _)| {
+            source
+                .text()
+                .lines()
+                .any(|line| line.trim() == "function main")
+        })
+        .or_else(|| parsed_units.first())
+    else {
+        let source = SourceFile::new(0, package.root.clone(), String::new());
+        return Err(CompilationFailure {
+            source,
+            diagnostics: vec![Diagnostic::unlocated_error(
+                "S2000",
+                "package contains no source units",
+            )],
+        });
+    };
+    let program =
+        project_bootstrap_program(source, syntax).map_err(|diagnostics| CompilationFailure {
+            source: (*source).clone(),
+            diagnostics,
+        })?;
     let program = resolve(program);
     let ir = lower(&program);
-    let rust = emit_rust(&ir, &source);
+    let rust = emit_rust(&ir, source);
     Ok(Compilation {
-        source,
+        source: (*source).clone(),
         program,
         rust,
     })

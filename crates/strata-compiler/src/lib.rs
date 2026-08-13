@@ -7,7 +7,7 @@ pub mod source;
 pub mod syntax;
 pub mod tokens;
 
-pub use compiler::{Compilation, CompilationFailure, Program, compile};
+pub use compiler::{Compilation, CompilationFailure, Program, compile, compile_package};
 pub use diagnostic::{Diagnostic, Severity};
 pub use package::{IMPLICIT_PACKAGE_ID, MANIFEST_FILE_NAME, Package, PackageLoadError, SourceUnit};
 pub use source::{SourceFile, Span};

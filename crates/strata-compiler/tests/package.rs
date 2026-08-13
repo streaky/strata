@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use strata_compiler::{IMPLICIT_PACKAGE_ID, Package};
+use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, compile_package};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -68,6 +68,45 @@ fn manifest_enumerates_sources_in_deterministic_path_order() {
     );
     assert_eq!(loaded.units[0].source.id(), 0);
     assert_eq!(loaded.units[1].source.id(), 1);
+}
+
+#[test]
+fn package_compilation_parses_every_enumerated_unit() {
+    let package = TempPackage::new();
+    package.write(
+        "strata.package",
+        "package example.multi\nsource support.strata\nsource main.strata\n",
+    );
+    package.write("support.strata", "namespace hello helpers\nvalue = 1\n");
+    package.write(
+        "main.strata",
+        "namespace hello\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >package pipeline\n",
+    );
+
+    let loaded = Package::load(&package.0).unwrap();
+    let compilation = compile_package(&loaded).unwrap();
+
+    assert_eq!(compilation.program.namespace, "hello");
+    assert_eq!(compilation.program.message, "package pipeline");
+}
+
+#[test]
+fn syntax_failure_in_non_main_unit_stops_package_compilation() {
+    let package = TempPackage::new();
+    package.write(
+        "strata.package",
+        "package example.invalid\nsource main.strata\nsource support.strata\n",
+    );
+    package.write(
+        "main.strata",
+        "namespace hello\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >unreachable\n",
+    );
+    package.write("support.strata", "value =\n");
+
+    let failure = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
+
+    assert!(failure.source.path().ends_with("support.strata"));
+    assert_eq!(failure.diagnostics[0].code, "S1019");
 }
 
 #[test]
