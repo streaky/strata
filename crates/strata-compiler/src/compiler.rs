@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Diagnostic, SourceFile, Span, lexer, tokens::LexedSource};
+use crate::{Diagnostic, SourceFile, Span, lexer, parser, syntax::SyntaxTree};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
@@ -51,15 +51,20 @@ impl std::ops::Deref for CompilationFailure {
 /// Returns every source-oriented diagnostic produced by the shared frontend.
 pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, CompilationFailure> {
     let source = SourceFile::new(0, path.into(), text);
-    let tokens = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
+    let lexed = lexer::lex(&source).map_err(|diagnostics| CompilationFailure {
         source: source.clone(),
         diagnostics,
     })?;
-    let syntax = parse(&source, &tokens).map_err(|diagnostics| CompilationFailure {
+    let syntax = parser::parse(&source, lexed).map_err(|diagnostics| CompilationFailure {
         source: source.clone(),
         diagnostics,
     })?;
-    let program = resolve(syntax);
+    let program =
+        project_bootstrap_program(&source, &syntax).map_err(|diagnostics| CompilationFailure {
+            source: source.clone(),
+            diagnostics,
+        })?;
+    let program = resolve(program);
     let ir = lower(&program);
     let rust = emit_rust(&ir, &source);
     Ok(Compilation {
@@ -69,8 +74,12 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
     })
 }
 
-fn parse(source: &SourceFile, tokens: &LexedSource) -> Result<SyntaxProgram, Vec<Diagnostic>> {
-    let mut lines = tokens
+fn project_bootstrap_program(
+    source: &SourceFile,
+    syntax: &SyntaxTree,
+) -> Result<SyntaxProgram, Vec<Diagnostic>> {
+    let mut lines = syntax
+        .lexed
         .logical_lines
         .iter()
         .map(|(offset, line)| (*offset, line.as_str()))

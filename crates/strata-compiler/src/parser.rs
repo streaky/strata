@@ -64,8 +64,10 @@ impl Parser<'_> {
             "return" => self.parse_simple_value_statement(SyntaxKind::ReturnStatement, false),
             "break" => self.parse_bare_statement(SyntaxKind::BreakStatement),
             "continue" => self.parse_bare_statement(SyntaxKind::ContinueStatement),
+            "from" => self.parse_import_declaration(),
+            "import" => self.parse_import_selection(),
             "class" | "try" | "throw" | "yield" | "match" | "unsafe" | "rust" | "label"
-            | "goto" | "when" | "use" | "from" | "import" => self.parse_unsupported(),
+            | "goto" | "when" | "use" => self.parse_unsupported(),
             _ if self.looks_like_binding() => self.parse_binding(),
             _ => self.parse_expression_statement(),
         }
@@ -91,6 +93,51 @@ impl Parser<'_> {
             start,
             self.position,
             children,
+        )
+    }
+
+    fn parse_import_declaration(&mut self) -> SyntaxNode {
+        let start = self.position;
+        self.bump();
+        let mut saw_path = false;
+        while !self.at_text("import") && !self.at_line_end() {
+            saw_path = true;
+            self.bump();
+        }
+        if !saw_path {
+            self.error_here("S1026", "expected a namespace path after `from`");
+        }
+        self.expect_text("import", "S1026", "expected `import` after namespace path");
+        let mut saw_object = false;
+        while !self.at_line_end() {
+            saw_object = true;
+            self.bump();
+        }
+        if !saw_object {
+            self.error_here("S1026", "expected an object name after `import`");
+        }
+        self.node(
+            SyntaxKind::ImportDeclaration,
+            start,
+            self.position,
+            Vec::new(),
+        )
+    }
+
+    fn parse_import_selection(&mut self) -> SyntaxNode {
+        let start = self.position;
+        self.bump();
+        self.expect_text("with", "S1027", "expected `with` after `import`");
+        if self.at_line_end() {
+            self.error_here("S1027", "expected an importer object after `with`");
+        } else {
+            self.recover_line();
+        }
+        self.node(
+            SyntaxKind::ImportSelection,
+            start,
+            self.position,
+            Vec::new(),
         )
     }
 

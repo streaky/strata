@@ -4,6 +4,8 @@ use crate::{Span, tokens::LexedSource};
 pub enum SyntaxKind {
     CompilationUnit,
     NamespaceDeclaration,
+    ImportDeclaration,
+    ImportSelection,
     Binding,
     FunctionDeclaration,
     ParameterList,

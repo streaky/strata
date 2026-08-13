@@ -173,3 +173,19 @@ fn rejects_wrong_call() {
             .any(|diagnostic| diagnostic.code == "S0004")
     );
 }
+
+#[test]
+fn compilation_uses_the_shared_parser_before_semantics() {
+    let source = HELLO.replace("function main", "function main; ,");
+    let diagnostics = strata_compiler::compile("syntax.strata", source).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "S1007")
+    );
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "S0005")
+    );
+}
