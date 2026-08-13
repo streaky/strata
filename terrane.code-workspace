@@ -1,24 +1,24 @@
 {
     "folders": [
         {
-            "name": "Strata",
+            "name": "Terrane",
             "path": "."
         }
     ],
     "settings": {
         "files.associations": {
-            "*.strata": "strata"
+            "*.trn": "terrane"
         }
     },
     "launch": {
         "version": "0.2.0",
         "configurations": [
             {
-                "name": "Develop Strata syntax highlighter",
+                "name": "Develop Terrane syntax highlighter",
                 "type": "extensionHost",
                 "request": "launch",
                 "args": [
-                    "--extensionDevelopmentPath=${workspaceFolder:Strata}/editors/vscode"
+                    "--extensionDevelopmentPath=${workspaceFolder:Terrane}/editors/vscode"
                 ]
             }
         ]

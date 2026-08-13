@@ -1,7 +1,7 @@
 use crate::tokens::{Attachment, LexedSource, Token, TokenKind, Trivia, TriviaKind};
 use crate::{Diagnostic, SourceFile, Span};
 
-/// Tokenizes one UTF-8 Strata source file.
+/// Tokenizes one UTF-8 Terrane source file.
 ///
 /// # Errors
 ///

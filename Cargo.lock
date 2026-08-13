@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "strata-cli"
+name = "terrane-cli"
 version = "0.1.0"
 dependencies = [
- "strata-compiler",
+ "terrane-compiler",
 ]
 
 [[package]]
-name = "strata-compiler"
+name = "terrane-compiler"
 version = "0.1.0"

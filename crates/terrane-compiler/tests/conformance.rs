@@ -14,22 +14,22 @@ fn every_manifest_drives_a_conformance_case() {
         let manifest = fs::read_to_string(&manifest_path).unwrap();
         let phase = field(&manifest, "phase").unwrap();
         let status = field(&manifest, "status").unwrap();
-        let entrypoint = field(&manifest, "entrypoint").unwrap_or("case.strata");
+        let entrypoint = field(&manifest, "entrypoint").unwrap_or("case.trn");
         let source_path = case.join(entrypoint);
         let source = fs::read_to_string(&source_path).unwrap();
 
         match (phase, status) {
             ("run" | "check", "accept") => {
                 let expected = fs::read_to_string(case.join("lower.rs")).unwrap();
-                let compilation = strata_compiler::compile(&source_path, source).unwrap();
+                let compilation = terrane_compiler::compile(&source_path, source).unwrap();
                 let normalized = compilation
                     .rust
-                    .replace(strata_compiler::VERSION, "<version>");
+                    .replace(terrane_compiler::VERSION, "<version>");
                 assert_eq!(normalized, expected, "{}", case.display());
             }
             ("check", "reject") => {
                 let code = field(&manifest, "code").unwrap();
-                let diagnostics = strata_compiler::compile(&source_path, source).unwrap_err();
+                let diagnostics = terrane_compiler::compile(&source_path, source).unwrap_err();
                 assert!(
                     diagnostics.iter().any(|diagnostic| diagnostic.code == code),
                     "{} did not report {code}: {diagnostics:?}",

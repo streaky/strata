@@ -1,16 +1,16 @@
 use std::path::PathBuf;
 
-const HELLO: &str = include_str!("../../../tests/conformance/run/hello/case.strata");
+const HELLO: &str = include_str!("../../../tests/conformance/run/hello/case.trn");
 
 #[test]
 fn hello_lowers_deterministically() {
-    let first = strata_compiler::compile(PathBuf::from("case.strata"), HELLO.to_owned()).unwrap();
-    let second = strata_compiler::compile(PathBuf::from("case.strata"), HELLO.to_owned()).unwrap();
+    let first = terrane_compiler::compile(PathBuf::from("case.trn"), HELLO.to_owned()).unwrap();
+    let second = terrane_compiler::compile(PathBuf::from("case.trn"), HELLO.to_owned()).unwrap();
     assert_eq!(first.rust, second.rust);
     assert!(
         first
             .rust
-            .contains("Hello from Strata!\\n\\nTail strings make punctuation literal")
+            .contains("Hello from Terrane!\\n\\nTail strings make punctuation literal")
     );
 }
 
@@ -25,14 +25,14 @@ fn rejects_every_repeated_milestone_construct() {
 
     for (construct, description) in cases {
         let source = HELLO.replacen(construct, &format!("{construct}\n{construct}"), 1);
-        let diagnostics = strata_compiler::compile("duplicate.strata", source).unwrap_err();
+        let diagnostics = terrane_compiler::compile("duplicate.trn", source).unwrap_err();
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "S0005" && diagnostic.message == format!("duplicate {description}")
         }));
     }
 
     let source = HELLO.replace("print; >>", "print; >first\n  print; >>");
-    let diagnostics = strata_compiler::compile("statements.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("statements.trn", source).unwrap_err();
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "S0005"
             && diagnostic
@@ -44,7 +44,7 @@ fn rejects_every_repeated_milestone_construct() {
 #[test]
 fn rejects_mixed_indentation() {
     let source = HELLO.replace("  print", " \tprint");
-    let diagnostics = strata_compiler::compile("mixed.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("mixed.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
@@ -59,18 +59,18 @@ fn blank_lines_do_not_select_indentation_style() {
             "function main\n  print; >>",
             "function main\n \n\tprint; >>",
         )
-        .replace("\n    Hello from Strata!", "\n\t\tHello from Strata!")
+        .replace("\n    Hello from Terrane!", "\n\t\tHello from Terrane!")
         .replace("\n    Tail strings", "\n\t\tTail strings");
-    strata_compiler::compile("blank-indent.strata", source).unwrap();
+    terrane_compiler::compile("blank-indent.trn", source).unwrap();
 }
 
 #[test]
 fn diagnoses_content_after_a_closed_quote() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; 'hello' # unsupported trailing comment",
     );
-    let failure = strata_compiler::compile("trailing-content.strata", source).unwrap_err();
+    let failure = terrane_compiler::compile("trailing-content.trn", source).unwrap_err();
     assert!(failure.iter().any(|diagnostic| {
         diagnostic.code == "S0004" && diagnostic.message.contains("after closing string quote")
     }));
@@ -84,55 +84,52 @@ fn diagnoses_content_after_a_closed_quote() {
 #[test]
 fn compilation_failure_owns_the_original_source() {
     let source = HELLO.replace("print = .print", "print = .missing");
-    let failure = strata_compiler::compile("owned.strata", source.clone()).unwrap_err();
+    let failure = terrane_compiler::compile("owned.trn", source.clone()).unwrap_err();
     assert_eq!(failure.source.text(), source);
-    assert_eq!(
-        failure.source.path(),
-        PathBuf::from("owned.strata").as_path()
-    );
+    assert_eq!(failure.source.path(), PathBuf::from("owned.trn").as_path());
     assert!(failure.iter().any(|diagnostic| diagnostic.code == "S0003"));
 }
 
 #[test]
 fn tail_string_preserves_every_remaining_character() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
-        "print; >Hello! From, \"Strata\"! >> # literal",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >Hello! From, \"Terrane\"! >> # literal",
     );
-    let compilation = strata_compiler::compile("tail.strata", source).unwrap();
+    let compilation = terrane_compiler::compile("tail.trn", source).unwrap();
     assert!(
         compilation
             .rust
-            .contains("Hello! From, \\\"Strata\\\"! >> # literal")
+            .contains("Hello! From, \\\"Terrane\\\"! >> # literal")
     );
 }
 
 #[test]
 fn tail_string_can_be_empty() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; >",
     );
-    let compilation = strata_compiler::compile("empty-tail.strata", source).unwrap();
+    let compilation = terrane_compiler::compile("empty-tail.trn", source).unwrap();
     assert!(compilation.rust.contains("println!(\"{}\", \"\");"));
 }
 
 #[test]
 fn tail_string_preserves_leading_whitespace() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; > hello",
     );
-    let compilation = strata_compiler::compile("leading-space.strata", source).unwrap();
+    let compilation = terrane_compiler::compile("leading-space.trn", source).unwrap();
     assert!(compilation.rust.contains("println!(\"{}\", \" hello\");"));
 }
 #[test]
 fn rejects_empty_block_string() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; >>",
     );
-    let diagnostics = strata_compiler::compile("string.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("string.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
@@ -143,7 +140,7 @@ fn rejects_empty_block_string() {
 #[test]
 fn rejects_trailing_content_after_block_marker() {
     let source = HELLO.replace("print; >>", "print; >> ");
-    let diagnostics = strata_compiler::compile("marker.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("marker.trn", source).unwrap_err();
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "L0008" && diagnostic.message.contains("final content")
     }));
@@ -152,7 +149,7 @@ fn rejects_trailing_content_after_block_marker() {
 #[test]
 fn rejects_unresolved_object() {
     let source = HELLO.replace("print = .print", "print = .missing");
-    let diagnostics = strata_compiler::compile("object.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("object.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
@@ -163,10 +160,10 @@ fn rejects_unresolved_object() {
 #[test]
 fn rejects_wrong_call() {
     let source = HELLO.replace(
-        "print; >>\n    Hello from Strata!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; hello",
     );
-    let diagnostics = strata_compiler::compile("call.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("call.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
@@ -177,7 +174,7 @@ fn rejects_wrong_call() {
 #[test]
 fn compilation_uses_the_shared_parser_before_semantics() {
     let source = HELLO.replace("function main", "function main; ,");
-    let diagnostics = strata_compiler::compile("syntax.strata", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("syntax.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()

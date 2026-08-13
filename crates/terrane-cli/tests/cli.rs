@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn hello() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/run/hello/case.strata")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/run/hello/case.trn")
 }
 
 #[test]
 fn all_commands_share_the_hello_pipeline() {
-    let binary = env!("CARGO_BIN_EXE_strata");
+    let binary = env!("CARGO_BIN_EXE_terrane");
     let rust = Command::new(binary)
         .args(["rust", hello().to_str().unwrap()])
         .output()
@@ -23,7 +23,7 @@ fn all_commands_share_the_hello_pipeline() {
     assert_eq!(
         String::from_utf8(rust.stdout)
             .unwrap()
-            .replace(strata_compiler::VERSION, "<version>"),
+            .replace(terrane_compiler::VERSION, "<version>"),
         fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap()
     );
 
@@ -41,7 +41,7 @@ fn all_commands_share_the_hello_pipeline() {
     let executable = String::from_utf8(build.stdout).unwrap();
     assert!(Path::new(executable.trim()).is_file());
     let source_root = hello().parent().unwrap().canonicalize().unwrap();
-    assert!(Path::new(executable.trim()).starts_with(source_root.join(".strata")));
+    assert!(Path::new(executable.trim()).starts_with(source_root.join(".terrane")));
 
     let run = Command::new(binary)
         .args(["run", hello().to_str().unwrap()])
@@ -56,7 +56,7 @@ fn all_commands_share_the_hello_pipeline() {
 
 #[test]
 fn help_succeeds_and_extra_arguments_are_rejected() {
-    let binary = env!("CARGO_BIN_EXE_strata");
+    let binary = env!("CARGO_BIN_EXE_terrane");
     let help = Command::new(binary).arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(
@@ -79,18 +79,18 @@ fn help_succeeds_and_extra_arguments_are_rejected() {
 
 #[test]
 fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
-    let binary = env!("CARGO_BIN_EXE_strata");
+    let binary = env!("CARGO_BIN_EXE_terrane");
     let missing = Command::new(binary)
-        .args(["check", "missing.strata"])
+        .args(["check", "missing.trn"])
         .output()
         .unwrap();
     assert_eq!(missing.status.code(), Some(3));
     let missing_stderr = String::from_utf8(missing.stderr).unwrap();
-    assert!(missing_stderr.contains("missing.strata: error[S0000]"));
-    assert!(!missing_stderr.contains("missing.strata:1:1"));
+    assert!(missing_stderr.contains("missing.trn: error[S0000]"));
+    assert!(!missing_stderr.contains("missing.trn:1:1"));
 
     let invalid_path = std::env::temp_dir().join(format!(
-        "strata-invalid-{}-{}.strata",
+        "terrane-invalid-{}-{}.trn",
         std::process::id(),
         std::thread::current().name().unwrap_or("cli")
     ));

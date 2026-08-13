@@ -1,10 +1,10 @@
-# Strata — Working Language Specification and Compiler Architecture
+# Terrane — Working Language Specification and Compiler Architecture
 
 **Draft 0.1 — a human-facing object language lowered transparently to Rust**
 
 > This document is the current integrated design source: normative language semantics, compiler/lowering contracts, and rationale share one file while the design is still changing quickly. Normative requirements are identified by the terms below; implementation sequencing lives separately in `compiler-plan.md`. A future publication may split these views without changing their contract. The constitutional invariants in §41 govern every section and take precedence over illustrative architecture or rationale.
 >
-> The project, language, and command-line interface have the working name **Strata**; the CLI command is `strata`.
+> The project, language, and command-line interface have the working name **Terrane**; the CLI command is `terrane`.
 
 ---
 
@@ -44,7 +44,7 @@ The language is designed around a deliberately small set of ideas:
 - Ordinary syntax favours unshifted characters and readable words over punctuation gymnastics.
 - Control flow is conventional where conventional syntax is already good.
 - The language lowers to readable, deterministic Rust, then uses the normal Rust toolchain.
-- Native Strata packages, Rust crates, system/C libraries, full and inline Rust, and explicit foreign-runtime adapters are first-class.
+- Native Terrane packages, Rust crates, system/C libraries, full and inline Rust, and explicit foreign-runtime adapters are first-class.
 - Compilation is transparent during development and explicit at deployment boundaries.
 - Reflection, source mapping, diagnostics, debugging, tracing, allocation analysis, and performance explanation are designed in from the beginning.
 - A VM or JIT is not required. Fast incremental Rust compilation is the default development model.
@@ -61,7 +61,7 @@ print = .print
 
 function main
 
-  project-name = >Strata
+  project-name = >Terrane
   build-target = >native executable
   build-status = >ready to build
 
@@ -82,7 +82,7 @@ Conceptually:
 The output is:
 
 ```text
-Strata: native executable: ready to build
+Terrane: native executable: ready to build
 ```
 
 ---
@@ -376,7 +376,7 @@ A declaration with no following deeper-indented line has an empty body.
 
 ### 6.4 Comments
 
-Strata supports both shell-style and C-style comments:
+Terrane supports both shell-style and C-style comments:
 
 ```text
 # comment
@@ -400,7 +400,7 @@ All `/* ... */` forms are ordinary comments, including forms beginning with `/**
 
 Comment contents do not participate in indentation. Comment-only lines are ignored when producing indentation tokens, and a multiline comment must not create or close a block. Outside comments, `//` and `/*` are recognised only as those exact two-character delimiters, so `/` remains available for root-anchored namespace paths.
 
-Python-style triple-string “comments” are deliberately not supported. A string is an expression, never a comment, and unused strings must not acquire comment semantics. An embedded foreign-source block retains the foreign language’s own lexical rules; Strata does not reinterpret Python contents.
+Python-style triple-string “comments” are deliberately not supported. A string is an expression, never a comment, and unused strings must not acquire comment semantics. An embedded foreign-source block retains the foreign language’s own lexical rules; Terrane does not reinterpret Python contents.
 
 ### 6.5 Identifiers
 
@@ -435,7 +435,7 @@ count-1  # lexical error: attached joiner followed by a digits-only suffix
 -einval  # prefix negation, never an identifier named `-einval`
 ```
 
-Consequently `x=foo+bar` binds `x` to the exact identifier `foo+bar`, while `x=count-1` is rejected with a diagnostic suggesting `x = count - 1`. `=` and other structural delimiters are not identifier joiners, so assignment remains recognisable without surrounding spaces. Nevertheless, canonical Strata style requires whitespace around these delimiters: compact forms such as `x=foo+bar` visually obscure the boundary between assignment syntax and operator-bearing identifiers. Formatters insert the spaces, and linters should warn when they are omitted. The warning targets the compact structural delimiter, not the operator-bearing identifier; `result = foo+bar` remains ordinary canonical source. Ordinary numeric suffixes remain valid when no joiner introduces them, as in `sha256`.
+Consequently `x=foo+bar` binds `x` to the exact identifier `foo+bar`, while `x=count-1` is rejected with a diagnostic suggesting `x = count - 1`. `=` and other structural delimiters are not identifier joiners, so assignment remains recognisable without surrounding spaces. Nevertheless, canonical Terrane style requires whitespace around these delimiters: compact forms such as `x=foo+bar` visually obscure the boundary between assignment syntax and operator-bearing identifiers. Formatters insert the spaces, and linters should warn when they are omitted. The warning targets the compact structural delimiter, not the operator-bearing identifier; `result = foo+bar` remains ordinary canonical source. Ordinary numeric suffixes remain valid when no joiner introduces them, as in `sha256`.
 
 Prefix, right-attached, and postfix forms are grammar-specific. `-1` and `-einval` apply declared prefix negation; `a +b` is the same infix addition as `a + b` because the preceding whitespace starts an operator token; and `i++` retains its declared postfix meaning. A left-attached form such as `a+ b` is reserved for declared postfix behaviour and is otherwise an error. `foo++bar`, by contrast, is an identifier because its post-joiner unit contains letters. Comment openers take lexical priority, so `//` and `/*` begin comments rather than forming identifier content.
 
@@ -502,11 +502,11 @@ An attached `>` in an expression-start position begins a **tail string**. Every 
 
 ```text
 project-kind = >native executable
-message = >Hello! From, "Strata"! >>
+message = >Hello! From, "Terrane"! >>
 send; recipient, >Error: file not found!
 ```
 
-The second value is exactly `Hello! From, "Strata"! >>`. Quotes, commas, operators, comment markers, and further `>` characters have no grammatical meaning after the opening marker. Whitespace is preserved exactly, including whitespace immediately after `>` and trailing horizontal whitespace. An attached `>` with no following content is the empty string.
+The second value is exactly `Hello! From, "Terrane"! >>`. Quotes, commas, operators, comment markers, and further `>` characters have no grammatical meaning after the opening marker. Whitespace is preserved exactly, including whitespace immediately after `>` and trailing horizontal whitespace. An attached `>` with no following content is the empty string.
 
 The marker must begin an expression and must be lexically attached to the expression position; its content begins with the very next character, which may be whitespace. This keeps it distinct from infix comparison:
 
@@ -521,7 +521,7 @@ An exact `>>` in an expression-start position opens a **block string** whose con
 
 ```text
 message = >>
-  Hello! From, "Strata"!
+  Hello! From, "Terrane"!
 
   Everything in this block is text.
   # This is content, not a comment.
@@ -533,7 +533,7 @@ The first nonblank line selects the block's structural indentation prefix. That 
 
 Lines are joined with `\n`. Source layout does not add a final newline to the value. An empty block is invalid rather than silently producing an empty string; use `>` or `''` for that value.
 
-Both tail and block strings are literal and non-interpolating. Once either form begins, comments, escapes, substitutions, and ordinary Strata tokens are not recognised within its content. Interpolation, if added, requires a separate explicit form.
+Both tail and block strings are literal and non-interpolating. Once either form begins, comments, escapes, substitutions, and ordinary Terrane tokens are not recognised within its content. Interpolation, if added, requires a separate explicit form.
 
 A bare identifier always performs binding lookup:
 
@@ -545,10 +545,10 @@ To create text, use one of the three explicit forms:
 
 ```text
 inline = 'hello'
-tail = >Hello, from Strata!
+tail = >Hello, from Terrane!
 multiline = >>
   Hello,
-  from Strata!
+  from Terrane!
 ```
 
 ### 6.8 Numeric literals
@@ -1452,7 +1452,7 @@ callback function from int, borrowed-ref of opaque to int
 
 Packages may supply type-constructor objects, but they cannot add type-expression grammar. Every constructor argument is parsed into the same unified constructor-argument syntax node; the parser does not guess whether an identifier denotes a type or a compile-time value. Semantic analysis resolves each argument against the constructor's declared signature and reports whether a type, constant value, or other permitted compile-time object was required. Thus `array of vm-struct|none, nr-cached-stacks` can accept a type followed by a constant extent without lexer or parser knowledge of `array`.
 
-Comma-separated arguments after `of` belong to the same type application. `|` forms a union within the current constructor argument; grouping may override the resulting structure. Angle-bracket generic spelling such as `list<string>`, `array<thing, 4>`, or `function-reference<int, void>` is not Strata syntax.
+Comma-separated arguments after `of` belong to the same type application. `|` forms a union within the current constructor argument; grouping may override the resulting structure. Angle-bracket generic spelling such as `list<string>`, `array<thing, 4>`, or `function-reference<int, void>` is not Terrane syntax.
 
 Functions have one core type shape because functions are core objects:
 
@@ -2515,7 +2515,7 @@ Multiple class inheritance is not part of the core language.
 
 The compiler may lower inheritance through generated composition, enums, trait objects, or static specialisation. Source semantics must not depend on Rust having class inheritance.
 
-Assigning a subclass instance to a superclass-typed binding preserves the complete dynamic object and its subclass state. Subsequent value assignment copies that complete dynamic value under the ordinary COW contract; Strata never slices to the statically named superclass fields. A superclass annotation constrains the visible interface and accepted dynamic classes, not storage layout. Targets unable to represent the permitted dynamic class set without an unavailable capability reject the boundary at compile time rather than changing this rule.
+Assigning a subclass instance to a superclass-typed binding preserves the complete dynamic object and its subclass state. Subsequent value assignment copies that complete dynamic value under the ordinary COW contract; Terrane never slices to the statically named superclass fields. A superclass annotation constrains the visible interface and accepted dynamic classes, not storage layout. Targets unable to represent the permitted dynamic class set without an unavailable capability reject the boundary at compile time rather than changing this rule.
 
 ### 18.3 Interfaces
 
@@ -2680,10 +2680,10 @@ Every branch is nevertheless lexed, parsed, formatted, retained in source maps, 
 
 This is compile-time source selection, not an optimiser hint and not an ordinary `if`. Generated Rust must contain no runtime branch for a resolved `when build`, and diagnostics must identify the build predicate and configuration that selected the failing source.
 
-Build-time execution has two stages in the first implementation. The bootstrap compiler loads custom importers and declaration modifiers only as precompiled, versioned host extensions implementing the compiler protocol; ordinary Strata source is not recursively executed as an importer or modifier. `when build` evaluates a restricted constant-expression subset: literals, immutable manifest/target/capability descriptors, boolean/comparison operators, and calls to compiler-provided pure build-query objects. It cannot allocate mutable program objects, perform I/O, throw, access runtime declarations, or invoke arbitrary source functions.
+Build-time execution has two stages in the first implementation. The bootstrap compiler loads custom importers and declaration modifiers only as precompiled, versioned host extensions implementing the compiler protocol; ordinary Terrane source is not recursively executed as an importer or modifier. `when build` evaluates a restricted constant-expression subset: literals, immutable manifest/target/capability descriptors, boolean/comparison operators, and calls to compiler-provided pure build-query objects. It cannot allocate mutable program objects, perform I/O, throw, access runtime declarations, or invoke arbitrary source functions.
 
 
-Stage order is: load and validate the manifest and lockfile; load declared host extensions; process compilation-unit imports in source order; assemble namespaces; evaluate build selections; then resolve and type-check selected declarations and apply modifiers to their typed descriptors. Extension inputs and outputs are serialisable import/modifier plans included in cache keys. A future self-hosted compile-time Strata subset would be a separate specified feature, not an accidental consequence of runtime language semantics.
+Stage order is: load and validate the manifest and lockfile; load declared host extensions; process compilation-unit imports in source order; assemble namespaces; evaluate build selections; then resolve and type-check selected declarations and apply modifiers to their typed descriptors. Extension inputs and outputs are serialisable import/modifier plans included in cache keys. A future self-hosted compile-time Terrane subset would be a separate specified feature, not an accidental consequence of runtime language semantics.
 
 ---
 
@@ -2914,7 +2914,7 @@ Resource classes may be linear where copying is nonsensical.
 
 The package system supports:
 
-1. native Strata packages;
+1. native Terrane packages;
 2. Rust crates;
 3. system libraries, ordinarily exposed through C ABI metadata or a wrapper;
 4. foreign-runtime packages hosted through an explicit runtime adapter.
@@ -3067,7 +3067,7 @@ This makes the language embeddable rather than a one-way consumer.
 
 ### 23.11 Native interop versus foreign runtimes
 
-Rust is Strata’s canonical lowering language. Inline Rust and maintained Rust modules inhabit the generated program and may use its documented native representations directly. System/C libraries cross an ABI boundary but do not introduce another language runtime.
+Rust is Terrane’s canonical lowering language. Inline Rust and maintained Rust modules inhabit the generated program and may use its documented native representations directly. System/C libraries cross an ABI boundary but do not introduce another language runtime.
 
 A foreign runtime is different:
 
@@ -3081,7 +3081,7 @@ The distinction is constitutional:
 
 - `rust` is a native lowering escape hatch;
 - `python` is foreign-runtime execution;
-- a runtime adapter must not silently replace Strata typing, assignment, error, thread, or ownership semantics with the foreign language’s semantics.
+- a runtime adapter must not silently replace Terrane typing, assignment, error, thread, or ownership semantics with the foreign language’s semantics.
 
 Python is the first foreign runtime and the first adapter implementation. The initial adapter targets the CPython `libpython3` embedding API. Other adapters, such as Lua or JavaScript, may be added later through the same contracts; they are not version-one requirements.
 
@@ -3097,9 +3097,9 @@ values = .array; 1, 2, 3, 4
 mean = values.mean;
 ```
 
-`from python ...` performs Python module resolution through the selected adapter and binds foreign object proxies in the object-form namespace. Attribute lookup and invocation use ordinary Strata member syntax, but the semantic descriptor records a foreign transition.
+`from python ...` performs Python module resolution through the selected adapter and binds foreign object proxies in the object-form namespace. Attribute lookup and invocation use ordinary Terrane member syntax, but the semantic descriptor records a foreign transition.
 
-A Python object proxy is a Strata object whose implementation, mutable identity, and lifetime belong to CPython. Reflection must identify that fact rather than presenting it as a native value:
+A Python object proxy is a Terrane object whose implementation, mutable identity, and lifetime belong to CPython. Reflection must identify that fact rather than presenting it as a native value:
 
 ```text
 foreign
@@ -3107,9 +3107,9 @@ runtime python
 foreign-type numpy.ndarray
 ```
 
-Foreign proxies are identity-bearing resources, not ordinary COW values. They cannot be value-assigned unless an adapter exposes a specific value-copy contract. Sharing one requires explicit `ref`; transferring an exclusive proxy uses `move`. Calls may borrow a proxy without transferring it. This prevents Python aliasing from silently weakening Strata’s ordinary assignment rule.
+Foreign proxies are identity-bearing resources, not ordinary COW values. They cannot be value-assigned unless an adapter exposes a specific value-copy contract. Sharing one requires explicit `ref`; transferring an exclusive proxy uses `move`. Calls may borrow a proxy without transferring it. This prevents Python aliasing from silently weakening Terrane’s ordinary assignment rule.
 
-An adapter may expose a native Strata wrapper with normal COW semantics when it can genuinely preserve those semantics—for example, through a verified immutable value or buffer-backed representation.
+An adapter may expose a native Terrane wrapper with normal COW semantics when it can genuinely preserve those semantics—for example, through a verified immutable value or buffer-backed representation.
 
 ### 23.13 Embedded foreign source
 
@@ -3152,12 +3152,12 @@ Build explanations and profiling must report whether a boundary conversion borro
 
 ### 23.15 Errors, lifetime, and threads
 
-A Python exception becomes a Strata `.python-error` preserving:
+A Python exception becomes a Terrane `.python-error` preserving:
 
 - the Python exception type and message;
 - the formatted Python traceback;
 - the original Python exception object while its runtime remains alive;
-- the Strata source location and boundary operation;
+- the Terrane source location and boundary operation;
 - a causal chain when wrapped or rethrown.
 
 ```text
@@ -3169,7 +3169,7 @@ catch .python-error as error
   print; error.python-trace
 ```
 
-Crossing the boundary may acquire the CPython GIL, allocate in Python’s managed heap, execute arbitrary Python code, and trigger Python finalisers. The adapter owns reference-count transitions and interpreter shutdown ordering. Foreign finalisation must not be described as deterministic Strata destruction when CPython cannot provide that guarantee.
+Crossing the boundary may acquire the CPython GIL, allocate in Python’s managed heap, execute arbitrary Python code, and trigger Python finalisers. The adapter owns reference-count transitions and interpreter shutdown ordering. Foreign finalisation must not be described as deterministic Terrane destruction when CPython cannot provide that guarantee.
 
 The compiler and runtime must reject unsupported cross-thread use rather than silently adding locks or moving a proxy between interpreters.
 
@@ -3188,11 +3188,11 @@ Every foreign runtime adapter defines:
 - debugger, profiler, and source-map integration;
 - deployment and capability metadata.
 
-Adapters expose these behaviours through Strata’s object and binding model. They do not create a universal multi-language VM, and they do not make foreign semantics the defaults for native Strata code.
+Adapters expose these behaviours through Terrane’s object and binding model. They do not create a universal multi-language VM, and they do not make foreign semantics the defaults for native Terrane code.
 
 ### 23.17 Deployment contract
 
-`use runtime python` adds an explicit runtime dependency. It does not preserve the pure Strata/Rust guarantee that no language runtime is needed in production.
+`use runtime python` adds an explicit runtime dependency. It does not preserve the pure Terrane/Rust guarantee that no language runtime is needed in production.
 
 The build report and lockfile must identify at least:
 
@@ -3281,17 +3281,17 @@ Writing `unsafe` inside a nominally safe raw block does not bypass source-level 
 
 Source identifiers are represented internally by their exact source spelling and lexical scope. Punctuation is never deleted, word-substituted, or normalised, so `foo+bar`, `foobar`, and `fooplusbar` are three unrelated symbols.
 
-Generated Rust uses a deterministic, injective encoding. A suitable canonical scheme prefixes the name with `__strata_`, preserves ASCII letters and digits, and encodes every other UTF-8 byte as `_xHH_`; underscore itself is encoded if it becomes legal in source identifiers. For example:
+Generated Rust uses a deterministic, injective encoding. A suitable canonical scheme prefixes the name with `__terrane_`, preserves ASCII letters and digits, and encodes every other UTF-8 byte as `_xHH_`; underscore itself is encoded if it becomes legal in source identifiers. For example:
 
 ```text
-my-value    -> __strata_my_x2d_value
-foo+bar     -> __strata_foo_x2b_bar
-ipv4/ipv6   -> __strata_ipv4_x2f_ipv6
+my-value    -> __terrane_my_x2d_value
+foo+bar     -> __terrane_foo_x2b_bar
+ipv4/ipv6   -> __terrane_ipv4_x2f_ipv6
 ```
 
 No two distinct source spellings may produce the same encoded spelling. Scope/module identity is represented separately and deterministically where Rust requires further disambiguation; it must never repair a lossy spelling conversion with an arbitrary suffix.
 
-The debugger and `strata rust-name` tooling expose both directions of the mapping. Inline Rust uses the generated Rust names, with editor tooling able to complete and display the originating source names.
+The debugger and `terrane rust-name` tooling expose both directions of the mapping. Inline Rust uses the generated Rust names, with editor tooling able to complete and display the originating source names.
 
 A later interpolation syntax may permit direct source-name references, but it is not required for the first implementation.
 
@@ -3326,7 +3326,7 @@ There is no C-style FFI boundary merely because one function was handwritten.
 Tooling should support:
 
 ```text
-strata eject-rust /image codec resize
+terrane eject-rust /image codec resize
 ```
 
 This copies a generated implementation into a maintained native Rust module, adds the appropriate bridge metadata, and replaces source generation for that object.
@@ -3538,7 +3538,7 @@ The debugger uses source maps and custom debug metadata to collapse generated fr
 
 An “enter Rust” action permits stepping into generated or handwritten Rust when desired.
 
-An “enter runtime” action permits stepping from a Strata boundary into embedded foreign source or an available foreign debugger. If an adapter cannot provide statement-level stepping, tooling must say so rather than presenting a native call as foreign source execution.
+An “enter runtime” action permits stepping from a Terrane boundary into embedded foreign source or an available foreign debugger. If an adapter cannot provide statement-level stepping, tooling must say so rather than presenting a native call as foreign source execution.
 
 ### 26.5 Tracing
 
@@ -3611,7 +3611,7 @@ This is more valuable than merely producing a flame graph.
 A build may request:
 
 ```text
-strata explain /image codec resize
+terrane explain /image codec resize
 ```
 
 and receive:
@@ -3690,7 +3690,7 @@ The first compiler frontend should be implemented in Rust.
 
 Rust provides one distributable toolchain executable, precise and exhaustively checked compiler phase models, and direct integration with generated Cargo projects, structured rustc diagnostics, source maps, and any future support crates.
 
-Mature parser tooling should be evaluated rather than assuming that a Rust implementation requires every frontend component to be handwritten. A parser-combinator library such as Chumsky may provide token parsing, spans, recursive grammars, Pratt expression parsing, rich errors, and recovery. Strata's token, syntax, span, and diagnostic models remain compiler-owned so a library can be replaced or selectively bypassed without changing language semantics.
+Mature parser tooling should be evaluated rather than assuming that a Rust implementation requires every frontend component to be handwritten. A parser-combinator library such as Chumsky may provide token parsing, spans, recursive grammars, Pratt expression parsing, rich errors, and recovery. Terrane's token, syntax, span, and diagnostic models remain compiler-owned so a library can be replaced or selectively bypassed without changing language semantics.
 
 The hardest whitespace-sensitive and operator-attachment cases must be prototyped before the parser architecture is frozen. A narrow handwritten lexer remains appropriate if indentation, tail/block strings, or attached-operator rules are clearer there.
 
@@ -4046,9 +4046,9 @@ Translation must not discard the original compiler information.
 Commands and flags should include:
 
 ```text
-strata check --rust-errors
-strata explain-error error-id
-strata rust /namespace function
+terrane check --rust-errors
+terrane explain-error error-id
+terrane rust /namespace function
 ```
 
 An experienced engineer or AI agent can inspect the raw Rust evidence.
@@ -4082,10 +4082,10 @@ A failed high-level translation is not a failed build diagnostic; the raw Rust e
 The normal workflow is:
 
 ```text
-strata run
-strata test
-strata dev
-strata check
+terrane run
+terrane test
+terrane dev
+terrane check
 ```
 
 These commands transparently:
@@ -4101,7 +4101,7 @@ Compilation is real, but ordinary development should not require manually operat
 
 ### 30.2 Compiler daemon
 
-`strata dev` may run a resident compiler service retaining:
+`terrane dev` may run a resident compiler service retaining:
 
 - parsed syntax trees;
 - resolved namespace graphs;
@@ -4125,7 +4125,7 @@ Hot code replacement is optional and must not be faked. Stateful reload requires
 Production uses an explicit build:
 
 ```text
-strata build --release
+terrane build --release
 ```
 
 The deployed artefact is normally:
@@ -4135,10 +4135,10 @@ The deployed artefact is normally:
 - a container image containing the compiled artefact;
 - firmware/kernel/wasm output.
 
-For a pure Strata/Rust program, the production target does not require:
+For a pure Terrane/Rust program, the production target does not require:
 
 - source files;
-- the Strata compiler;
+- the Terrane compiler;
 - Cargo;
 - `rustc`;
 - dynamic recompilation;
@@ -4195,20 +4195,20 @@ The compiler must never reuse generated Rust after an importer, target capabilit
 A serious first release needs:
 
 ```text
-strata fmt
-strata check
-strata build
-strata run
-strata test
-strata dev
-strata rust
-strata rust-name
-strata explain
-strata explain-error
-strata debug
-strata trace
-strata profile
-strata package
+terrane fmt
+terrane check
+terrane build
+terrane run
+terrane test
+terrane dev
+terrane rust
+terrane rust-name
+terrane explain
+terrane explain-error
+terrane debug
+terrane trace
+terrane profile
+terrane package
 ```
 
 ### 31.2 Formatter
@@ -4280,7 +4280,7 @@ The language needs a public conformance corpus covering:
 
 Generated Rust snapshots are useful but semantic execution tests remain authoritative.
 
-The conformance suite should contain many minimal Strata snippets, each isolating one lexical, syntactic, semantic, or lowering decision. Where lowering is expected to succeed, the case should be able to assert canonical generated Rust byte for byte. This turns the public lowered representation into a precise, reviewable compiler contract and makes broad coverage inexpensive.
+The conformance suite should contain many minimal Terrane snippets, each isolating one lexical, syntactic, semantic, or lowering decision. Where lowering is expected to succeed, the case should be able to assert canonical generated Rust byte for byte. This turns the public lowered representation into a precise, reviewable compiler contract and makes broad coverage inexpensive.
 
 Not every minimal snapshot needs its own Cargo invocation. The harness may combine independent accepted snippets into deterministic generated crates for batched `cargo check`, while cases whose contract depends on crate structure, linking, diagnostics, or runtime behaviour remain individually compiled or executed. Snapshot agreement proves what the compiler emitted; Rust compilation proves that emission is valid; selected execution tests remain the authority for observable language semantics.
 
@@ -4315,11 +4315,11 @@ This belongs naturally in `AGENTS.md`.
 Every important command must offer structured output:
 
 ```text
-strata check --json
-strata lower --json
-strata explain --json
-strata profile --json
-strata trace --json
+terrane check --json
+terrane lower --json
+terrane explain --json
+terrane profile --json
+terrane trace --json
 ```
 
 Records should include:
@@ -4447,7 +4447,7 @@ Build-time extensions should run under a capability sandbox where platform suppo
 
 A project may deliberately grant full access. The language does not pretend that powerful custom import behaviour is safe merely because it is elegant.
 
-Foreign packages execute with the authority of their host runtime; a Strata object proxy is not a sandbox. Runtime adapters must expose filesystem, network, environment, process, and native-extension requirements to capability analysis where the runtime can report them, and must mark unknown effects rather than claiming isolation.
+Foreign packages execute with the authority of their host runtime; a Terrane object proxy is not a sandbox. Runtime adapters must expose filesystem, network, environment, process, and native-extension requirements to capability analysis where the runtime can report them, and must mark unknown effects rather than claiming isolation.
 
 ---
 
@@ -4831,7 +4831,7 @@ from /my-output import .print
 print = .print
 
 function main
-  print; >Hello! From, "Strata"!
+  print; >Hello! From, "Terrane"!
 ```
 
 Only `my-app` and descendants see this `print` unless it is promoted globally.
@@ -5179,7 +5179,7 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 53. exported may-throw functions expose `throws`, non-throwing callable contracts reject may-throw implementations, fixed-width checked arithmetic throws a catchable `.arithmetic-overflow`, `int` representation promotion does not throw, and explicit wrapping operations do not.
 54. assigning a subclass value to a base-typed binding preserves the complete dynamic value and dispatch; implementations that would slice are rejected.
 55. protocols express structural capabilities, interfaces define typed dispatch boundaries, traits reuse implementation without becoming types, and single inheritance preserves value and dynamic-type semantics.
-56. only declared precompiled host extensions execute as importers or modifiers; `when build` accepts only its restricted deterministic query subset, records inputs and plans in cache keys, and never recursively executes ordinary Strata source.
+56. only declared precompiled host extensions execute as importers or modifiers; `when build` accepts only its restricted deterministic query subset, records inputs and plans in cache keys, and never recursively executes ordinary Terrane source.
 57. an `async function` has an async callable type, `await` is rejected outside async context, sync and async callables are incompatible without an explicit adapter, and no borrow crosses suspension unless its contract proves that lifetime.
 58. default `string.length` requires grapheme segmentation capability; a target lacking it diagnoses the operation instead of substituting scalar or byte length, while explicit scalar/byte views remain available.
 59. representation specialisation may inspect only a package compilation unit and declared dependency metadata; downstream packages consume the published representation contract rather than changing upstream layout.
@@ -5305,7 +5305,7 @@ The following are the design’s constitutional layer. They govern the entire do
 28. Native, Rust, system/C, and declared foreign-runtime dependencies belong in one inspectable package graph.
 29. Rust is native lowering; foreign runtimes remain explicit semantic, performance, ownership, and deployment boundaries.
 30. Compilation is transparent in development and explicit in deployment.
-31. Production does not require dynamic source compilation or a bespoke Strata VM.
+31. Production does not require dynamic source compilation or a bespoke Terrane VM.
 32. Reflection, debugging, tracing, and performance explanation are compiler contracts, not later plugins.
 33. Hosted convenience must not prevent allocator-free, embedded, firmware, or kernel realisation where source capabilities permit it.
 34. The compiler must explain costs and constraints rather than silently repairing semantics.

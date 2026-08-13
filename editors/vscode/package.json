@@ -1,9 +1,9 @@
 {
-  "name": "strata-language",
-  "displayName": "Strata Language",
-  "description": "Syntax highlighting and basic editor support for Strata",
+  "name": "terrane-language",
+  "displayName": "Terrane Language",
+  "description": "Syntax highlighting and basic editor support for Terrane",
   "version": "0.0.1",
-  "publisher": "strata",
+  "publisher": "terrane",
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.90.0"
@@ -14,22 +14,22 @@
   "contributes": {
     "languages": [
       {
-        "id": "strata",
+        "id": "terrane",
         "aliases": [
-          "Strata",
-          "strata"
+          "Terrane",
+          "terrane"
         ],
         "extensions": [
-          ".strata"
+          ".trn"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "strata",
-        "scopeName": "source.strata",
-        "path": "./syntaxes/strata.tmLanguage.json"
+        "language": "terrane",
+        "scopeName": "source.terrane",
+        "path": "./syntaxes/terrane.tmLanguage.json"
       }
     ]
   }

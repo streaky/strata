@@ -17,8 +17,8 @@ impl CliFailure {
     }
 
     fn diagnostic(path: PathBuf, code: &'static str, message: String, exit_code: u8) -> Self {
-        let source = strata_compiler::SourceFile::new(0, path, String::new());
-        let diagnostic = strata_compiler::Diagnostic::unlocated_error(code, message);
+        let source = terrane_compiler::SourceFile::new(0, path, String::new());
+        let diagnostic = terrane_compiler::Diagnostic::unlocated_error(code, message);
         Self {
             code: exit_code,
             message: diagnostic.render(&source),
@@ -45,7 +45,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         return Err(CliFailure::usage());
     };
     if command == "--version" || command == "-V" {
-        println!("strata {}", strata_compiler::VERSION);
+        println!("terrane {}", terrane_compiler::VERSION);
         return Ok(ExitCode::SUCCESS);
     }
     if command == "--help" || command == "-h" {
@@ -70,7 +70,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     let source_text = fs::read_to_string(&source_path).map_err(|error| {
         CliFailure::diagnostic(source_path.clone(), "S0000", error.to_string(), 3)
     })?;
-    let compilation = match strata_compiler::compile(&source_path, source_text) {
+    let compilation = match terrane_compiler::compile(&source_path, source_text) {
         Ok(compilation) => compilation,
         Err(failure) => {
             return Err(CliFailure {
@@ -102,7 +102,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     if command == "check" {
         return Ok(ExitCode::SUCCESS);
     }
-    let executable = crate_dir.join("target/debug/strata_program");
+    let executable = crate_dir.join("target/debug/terrane_program");
     if command == "build" {
         println!("{}", executable.display());
         return Ok(ExitCode::SUCCESS);
@@ -138,7 +138,7 @@ fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, CliFailure
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    Ok(root.join(".strata/build").join(format!("{hash:016x}")))
+    Ok(root.join(".terrane/build").join(format!("{hash:016x}")))
 }
 
 fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure> {
@@ -146,7 +146,7 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure>
         .map_err(|error| CliFailure::backend(format!("cannot create generated crate: {error}")))?;
     fs::write(
         directory.join("Cargo.toml"),
-        "[package]\nname = \"strata_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        "[package]\nname = \"terrane_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n",
     )
     .map_err(|error| {
         CliFailure::backend(format!("cannot write generated manifest: {error}"))
@@ -187,7 +187,7 @@ fn ensure_rust_toolchain() -> Result<(), CliFailure> {
 }
 
 fn usage() -> String {
-    "usage: strata <check|rust|build|run> <source.strata> [-- program arguments]\n\
+    "usage: terrane <check|rust|build|run> <source.trn> [-- program arguments]\n\
      commands:\n  check  validate and compile generated Rust\n  rust   print generated Rust\n  \
      build  compile a native executable\n  run    compile and execute the program"
         .to_owned()
