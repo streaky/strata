@@ -1,11 +1,11 @@
-use strata_compiler::{
+use terrane_compiler::{
     SourceFile,
     lexer::lex,
     tokens::{Attachment, TokenKind, TriviaKind},
 };
 
-fn lex_source(text: &str) -> strata_compiler::tokens::LexedSource {
-    lex(&SourceFile::new(0, "case.strata".into(), text.to_owned())).unwrap()
+fn lex_source(text: &str) -> terrane_compiler::tokens::LexedSource {
+    lex(&SourceFile::new(0, "case.trn".into(), text.to_owned())).unwrap()
 }
 
 fn significant(text: &str) -> Vec<(TokenKind, String, Attachment)> {
@@ -110,7 +110,7 @@ fn bitwise_operators_and_numeric_forms_are_single_tokens() {
 #[test]
 fn malformed_numeric_literals_are_rejected_whole() {
     for source in ["1e9", "0x", "0xzz", "1_", "1__0", "123abc", "0b101"] {
-        let file = SourceFile::new(0, "case.strata".into(), source.to_owned());
+        let file = SourceFile::new(0, "case.trn".into(), source.to_owned());
         let error = lex(&file)
             .unwrap_err()
             .into_iter()
@@ -186,7 +186,7 @@ fn block_strings_are_contextual_and_require_a_clean_marker_line() {
             .any(|token| token.kind == TokenKind::Operator && token.text == ">>")
     );
 
-    let source = SourceFile::new(0, "case.strata".into(), "message = >> ".to_owned());
+    let source = SourceFile::new(0, "case.trn".into(), "message = >> ".to_owned());
     assert!(
         lex(&source)
             .unwrap_err()
@@ -275,7 +275,7 @@ fn a_comment_only_terminator_line_stays_out_of_indentation() {
 fn block_string_content_follows_the_file_indentation_style() {
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "function main\n  x = >>\n\t\t\tcontent\n".to_owned(),
     );
     assert!(
@@ -336,7 +336,7 @@ fn tab_indentation_and_style_changes_are_covered() {
     );
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "function main\n  value\n\tnext\n".to_owned(),
     );
     assert!(
@@ -351,7 +351,7 @@ fn tab_indentation_and_style_changes_are_covered() {
 fn inconsistent_dedent_is_rejected() {
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "root\n    deep\n  invalid\n".to_owned(),
     );
     assert!(
@@ -387,7 +387,7 @@ fn structural_tokens_and_trivia_have_exact_spans() {
     }
     let trivia = lex_source("x # note").trivia.pop().unwrap();
     assert_eq!(trivia.text, "# note");
-    assert_eq!(trivia.span, strata_compiler::Span::new(0, 2, 8));
+    assert_eq!(trivia.span, terrane_compiler::Span::new(0, 2, 8));
 }
 
 #[test]
@@ -424,7 +424,7 @@ fn malformed_lexemes_report_originating_bytes() {
         ("/* open", "L0002", 0),
         ("naïve", "L0001", 2),
     ] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let error = lex(&source)
             .unwrap_err()
             .into_iter()
@@ -436,15 +436,15 @@ fn malformed_lexemes_report_originating_bytes() {
 
 #[test]
 fn multibyte_invalid_character_is_rendered_as_unicode() {
-    let source = SourceFile::new(0, "case.strata".into(), "naïve".to_owned());
+    let source = SourceFile::new(0, "case.trn".into(), "naïve".to_owned());
     let error = lex(&source).unwrap_err().remove(0);
     assert_eq!(error.message, "invalid source character `ï`");
-    assert_eq!(error.primary.unwrap(), strata_compiler::Span::new(0, 2, 4));
+    assert_eq!(error.primary.unwrap(), terrane_compiler::Span::new(0, 2, 4));
 }
 
 #[test]
 fn escaped_quote_does_not_terminate_a_quoted_string() {
-    let source = SourceFile::new(0, "case.strata".into(), "name = 'it\\'".to_owned());
+    let source = SourceFile::new(0, "case.trn".into(), "name = 'it\\'".to_owned());
     let diagnostics = lex(&source).unwrap_err();
     assert!(
         diagnostics

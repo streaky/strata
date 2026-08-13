@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use strata_compiler::{Package, SourceFile, SourceUnit, analyze};
+use terrane_compiler::{Package, SourceFile, SourceUnit, analyze};
 
 fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
     Package {
@@ -28,11 +28,11 @@ fn assembles_namespaces_symmetrically_before_import_resolution() {
         false,
         &[
             (
-                "consumer.strata",
+                "consumer.trn",
                 "namespace app\nfrom /shared import .item\n",
             ),
-            ("second.strata", "namespace shared\n.thing = 2\n"),
-            ("first.strata", "namespace shared\n.item = 1\n"),
+            ("second.trn", "namespace shared\n.thing = 2\n"),
+            ("first.trn", "namespace shared\n.item = 1\n"),
         ],
     ))
     .unwrap();
@@ -49,7 +49,7 @@ fn namespace_diagnostics_use_source_spelling() {
     let failure = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace app\nfrom /missing nested import .item\n",
         )],
     ))
@@ -66,7 +66,7 @@ fn compiler_owned_namespaces_cannot_be_extended() {
     let failure = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace core output\npublic .injected = 1\n",
         )],
     ))
@@ -83,13 +83,13 @@ fn resolves_exact_root_and_parent_namespace_anchors() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("exports.strata", "namespace parent shared\n.item = 1\n"),
+            ("exports.trn", "namespace parent shared\n.item = 1\n"),
             (
-                "root.strata",
+                "root.trn",
                 "namespace root\nfrom /parent shared import .item as .root-item\n",
             ),
             (
-                "child.strata",
+                "child.trn",
                 "namespace parent child\nfrom .. shared import .item as .parent-item\n",
             ),
         ],
@@ -105,7 +105,7 @@ fn imports_are_object_form_and_require_explicit_ordinary_binding() {
     let analyzed = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace app\nfrom /core output import .print\nprinter = .print\n",
         )],
     ))
@@ -121,7 +121,7 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
     let accepted = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace app\nfrom /core output import .print\nfrom /core output import .print\n",
         )],
     ));
@@ -130,10 +130,10 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
     let rejected = analyze(&package(
         false,
         &[
-            ("one.strata", "namespace one\n.item = 1\n"),
-            ("two.strata", "namespace two\n.item = 2\n"),
+            ("one.trn", "namespace one\n.item = 1\n"),
+            ("two.trn", "namespace two\n.item = 2\n"),
             (
-                "main.strata",
+                "main.trn",
                 "namespace app\nfrom /one import .item\nfrom /two import .item\n",
             ),
         ],
@@ -144,20 +144,20 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
 
 #[test]
 fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
-    let enabled = analyze(&package(true, &[("main.strata", "namespace app\n")])).unwrap();
+    let enabled = analyze(&package(true, &[("main.trn", "namespace app\n")])).unwrap();
     let names = enabled.prelude_bindings.keys().cloned().collect::<Vec<_>>();
     assert_eq!(
         names,
         ["bool", "bytes", "float", "int", "none", "print", "string"]
     );
 
-    let disabled = analyze(&package(false, &[("main.strata", "namespace app\n")])).unwrap();
+    let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
     assert!(disabled.prelude_bindings.is_empty());
 }
 
 #[test]
 fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
-    let analyzed = analyze(&package(false, &[("main.strata", "namespace app\n")])).unwrap();
+    let analyzed = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
 
     assert_eq!(analyzed.bootstrap_version, "1");
     for namespace in [
@@ -181,7 +181,7 @@ fn ordinary_import_binding_cannot_change_structural_imports() {
     let analyzed = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace app\nimport = 1\nfrom /core output import .print\n",
         )],
     ))
@@ -196,8 +196,8 @@ fn duplicate_declarations_and_private_imports_are_rejected() {
     let duplicate = analyze(&package(
         false,
         &[
-            ("one.strata", "namespace app\nvalue = 1\n"),
-            ("two.strata", "namespace app\nvalue = 2\n"),
+            ("one.trn", "namespace app\nvalue = 1\n"),
+            ("two.trn", "namespace app\nvalue = 2\n"),
         ],
     ))
     .unwrap_err();
@@ -206,9 +206,9 @@ fn duplicate_declarations_and_private_imports_are_rejected() {
     let private = analyze(&package(
         false,
         &[
-            ("exports.strata", "namespace hidden\nprivate .secret = 1\n"),
+            ("exports.trn", "namespace hidden\nprivate .secret = 1\n"),
             (
-                "consumer.strata",
+                "consumer.trn",
                 "namespace app\nfrom /hidden import .secret\n",
             ),
         ],
@@ -223,11 +223,11 @@ fn global_replacement_is_distinct_from_namespace_local_assignment() {
         false,
         &[
             (
-                "one.strata",
+                "one.trn",
                 "namespace first\nglobal shared = 1\nlocal = 1\n",
             ),
             (
-                "two.strata",
+                "two.trn",
                 "namespace second\nglobal shared = 2\nlocal = 2\n",
             ),
         ],
@@ -244,9 +244,9 @@ fn namespace_local_bindings_may_shadow_program_globals() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("global.strata", "namespace owner\nglobal shared = 1\n"),
-            ("local.strata", "namespace consumer\nshared = 2\n"),
-            ("peer.strata", "namespace peer\n"),
+            ("global.trn", "namespace owner\nglobal shared = 1\n"),
+            ("local.trn", "namespace consumer\nshared = 2\n"),
+            ("peer.trn", "namespace peer\n"),
         ],
     ))
     .unwrap();
@@ -273,14 +273,14 @@ fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
         true,
         &[
             (
-                "parent.strata",
+                "parent.trn",
                 "namespace app\nparent-value = 1\nprotected inherited = 1\nprivate hidden = 1\n",
             ),
             (
-                "child.strata",
+                "child.trn",
                 "namespace app child\nparent-value = 2\nglobal shared = 1\n",
             ),
-            ("peer.strata", "namespace peer\n"),
+            ("peer.trn", "namespace peer\n"),
         ],
     ))
     .unwrap();
@@ -312,7 +312,7 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
         "  if true\n",
         "    inner = value\n",
     );
-    let analyzed = analyze(&package(false, &[("main.strata", source)])).unwrap();
+    let analyzed = analyze(&package(false, &[("main.trn", source)])).unwrap();
     let unit = &analyzed.units[0];
     let inner_offset = source.find("inner =").unwrap();
     let value_offset = source.find("value =").unwrap();
@@ -345,7 +345,7 @@ fn duplicate_parameters_and_same_scope_bindings_are_rejected() {
         "namespace app\nfunction run; value int, value int\n",
         "namespace app\nfunction run\n  private value = 1\n  private value = 2\n",
     ] {
-        let failure = analyze(&package(false, &[("main.strata", source)])).unwrap_err();
+        let failure = analyze(&package(false, &[("main.trn", source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "S2012");
     }
 }
@@ -355,7 +355,7 @@ fn nested_global_declarations_populate_the_package_global_tier() {
     let analyzed = analyze(&package(
         false,
         &[(
-            "main.strata",
+            "main.trn",
             "namespace app\nfunction run\n  public global counter = 1\n",
         )],
     ))
@@ -365,7 +365,7 @@ fn nested_global_declarations_populate_the_package_global_tier() {
     assert!(counter.global);
     assert_eq!(
         counter.visibility,
-        strata_compiler::semantics::Visibility::Public
+        terrane_compiler::semantics::Visibility::Public
     );
 }
 
@@ -373,7 +373,7 @@ fn nested_global_declarations_populate_the_package_global_tier() {
 fn nested_object_form_declarations_are_rejected_explicitly() {
     let failure = analyze(&package(
         false,
-        &[("main.strata", "namespace app\nfunction run\n  .thing = 1\n")],
+        &[("main.trn", "namespace app\nfunction run\n  .thing = 1\n")],
     ))
     .unwrap_err();
 
@@ -389,8 +389,8 @@ fn imports_report_inaccessible_exports_consistently_at_every_scope() {
         let failure = analyze(&package(
             false,
             &[
-                ("hidden.strata", "namespace hidden\nprotected .item = 1\n"),
-                ("consumer.strata", consumer),
+                ("hidden.trn", "namespace hidden\nprotected .item = 1\n"),
+                ("consumer.trn", consumer),
             ],
         ))
         .unwrap_err();

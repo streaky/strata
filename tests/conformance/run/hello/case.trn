@@ -6,6 +6,6 @@ print = .print
 
 function main
   print; >>
-    Hello from Strata!
+    Hello from Terrane!
 
     Tail strings make punctuation literal: >, #, "quotes".

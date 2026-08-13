@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use strata_compiler::{IMPLICIT_PACKAGE_ID, Package, analyze, compile_package};
+use terrane_compiler::{IMPLICIT_PACKAGE_ID, Package, analyze, compile_package};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -12,7 +12,7 @@ impl TempPackage {
     fn new() -> Self {
         let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("strata-package-{}-{serial}", std::process::id()));
+            std::env::temp_dir().join(format!("terrane-package-{}-{serial}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -34,22 +34,22 @@ impl Drop for TempPackage {
 
 #[test]
 fn implicit_source_has_stable_package_contract() {
-    let package = Package::implicit("examples/hello.strata", "namespace hello\n".to_owned());
+    let package = Package::implicit("examples/hello.trn", "namespace hello\n".to_owned());
 
     assert_eq!(package.identity, IMPLICIT_PACKAGE_ID);
     assert!(package.prelude);
     assert_eq!(package.root, Path::new("examples"));
     assert_eq!(package.units.len(), 1);
-    assert_eq!(package.units[0].relative_path, Path::new("hello.strata"));
+    assert_eq!(package.units[0].relative_path, Path::new("hello.trn"));
     assert_eq!(package.units[0].source.id(), 0);
 }
 
 #[test]
 fn bare_implicit_source_uses_current_directory_as_root() {
-    let package = Package::implicit("hello.strata", "namespace hello\n".to_owned());
+    let package = Package::implicit("hello.trn", "namespace hello\n".to_owned());
 
     assert_eq!(package.root, Path::new("."));
-    assert_eq!(package.units[0].relative_path, Path::new("hello.strata"));
+    assert_eq!(package.units[0].relative_path, Path::new("hello.trn"));
 }
 
 #[test]
@@ -57,10 +57,10 @@ fn manifest_enumerates_sources_in_deterministic_path_order() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "# complete source set\npackage = \"example.tools\"\nprelude = false\nsources = [\"zed.strata\", \"nested/alpha.strata\"]\n",
+        "# complete source set\npackage = \"example.tools\"\nprelude = false\nsources = [\"zed.trn\", \"nested/alpha.trn\"]\n",
     );
-    package.write("zed.strata", "namespace zed\n");
-    package.write("nested/alpha.strata", "namespace alpha\n");
+    package.write("zed.trn", "namespace zed\n");
+    package.write("nested/alpha.trn", "namespace alpha\n");
 
     let loaded = Package::load(&package.0).unwrap();
 
@@ -72,7 +72,7 @@ fn manifest_enumerates_sources_in_deterministic_path_order() {
             .iter()
             .map(|unit| unit.relative_path.as_path())
             .collect::<Vec<_>>(),
-        [Path::new("nested/alpha.strata"), Path::new("zed.strata")]
+        [Path::new("nested/alpha.trn"), Path::new("zed.trn")]
     );
     assert_eq!(loaded.units[0].source.id(), 0);
     assert_eq!(loaded.units[1].source.id(), 1);
@@ -83,11 +83,11 @@ fn package_compilation_parses_every_enumerated_unit() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package = \"example.multi\"\nsources = [\"support.strata\", \"main.strata\"]\n",
+        "package = \"example.multi\"\nsources = [\"support.trn\", \"main.trn\"]\n",
     );
-    package.write("support.strata", "namespace hello helpers\nvalue = 1\n");
+    package.write("support.trn", "namespace hello helpers\nvalue = 1\n");
     package.write(
-        "main.strata",
+        "main.trn",
         "namespace hello\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >package pipeline\n",
     );
 
@@ -103,14 +103,14 @@ fn package_entry_point_comes_from_resolved_function_declarations() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package = \"example.entry\"\nsources = [\"decoy.strata\", \"main.strata\"]\n",
+        "package = \"example.entry\"\nsources = [\"decoy.trn\", \"main.trn\"]\n",
     );
     package.write(
-        "decoy.strata",
+        "decoy.trn",
         "namespace decoy\ntext = >>\n  function main\n",
     );
     package.write(
-        "main.strata",
+        "main.trn",
         "namespace actual\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >real entry\n",
     );
 
@@ -125,16 +125,16 @@ fn package_requires_one_unambiguous_main_function() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package = \"example.entry\"\nsources = [\"first.strata\", \"second.strata\"]\n",
+        "package = \"example.entry\"\nsources = [\"first.trn\", \"second.trn\"]\n",
     );
-    package.write("first.strata", "namespace first\nvalue = 1\n");
-    package.write("second.strata", "namespace second\nvalue = 2\n");
+    package.write("first.trn", "namespace first\nvalue = 1\n");
+    package.write("second.trn", "namespace second\nvalue = 2\n");
 
     let missing = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
     assert_eq!(missing.diagnostics[0].code, "S2015");
 
-    package.write("first.strata", "namespace first\nfunction main\n");
-    package.write("second.strata", "namespace second\nfunction main\n");
+    package.write("first.trn", "namespace first\nfunction main\n");
+    package.write("second.trn", "namespace second\nfunction main\n");
     let ambiguous = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
     assert_eq!(ambiguous.diagnostics[0].code, "S2016");
 }
@@ -144,17 +144,17 @@ fn syntax_failure_in_non_main_unit_stops_package_compilation() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package = \"example.invalid\"\nsources = [\"main.strata\", \"support.strata\"]\n",
+        "package = \"example.invalid\"\nsources = [\"main.trn\", \"support.trn\"]\n",
     );
     package.write(
-        "main.strata",
+        "main.trn",
         "namespace hello\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >unreachable\n",
     );
-    package.write("support.strata", "value =\n");
+    package.write("support.trn", "value =\n");
 
     let failure = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
 
-    assert!(failure.source.path().ends_with("support.strata"));
+    assert!(failure.source.path().ends_with("support.trn"));
     assert_eq!(failure.diagnostics[0].code, "S1019");
 }
 
@@ -163,7 +163,7 @@ fn malformed_manifests_report_all_manifest_errors() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "prelude = \"perhaps\"\nsources = [\"../escape.strata\", \"repeated.strata\", \"repeated.strata\"]\nunknown = \"field\"\n",
+        "prelude = \"perhaps\"\nsources = [\"../escape.trn\", \"repeated.trn\", \"repeated.trn\"]\nunknown = \"field\"\n",
     );
 
     let errors = Package::load(&package.0).unwrap_err();
@@ -176,7 +176,7 @@ fn malformed_manifests_report_all_manifest_errors() {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("relative `.strata`"))
+            .any(|message| message.contains("relative `.trn`"))
     );
     assert!(
         messages
@@ -203,16 +203,16 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
         concat!(
             "package = \"namespace-contract\"\n",
             "prelude = false\n",
-            "sources = [\"consumer.strata\", \"exports.strata\", \"parent.strata\"]\n",
+            "sources = [\"consumer.trn\", \"exports.trn\", \"parent.trn\"]\n",
         ),
     );
-    package.write("exports.strata", "namespace shared\npublic .item = 1\n");
+    package.write("exports.trn", "namespace shared\npublic .item = 1\n");
     package.write(
-        "parent.strata",
+        "parent.trn",
         "namespace app support\npublic .parent = 1\n",
     );
     package.write(
-        "consumer.strata",
+        "consumer.trn",
         concat!(
             "namespace app child\n",
             "from /shared import .item\n",
@@ -253,7 +253,7 @@ fn missing_enumerated_sources_are_package_errors() {
     let package = TempPackage::new();
     package.write(
         "package.toml",
-        "package = \"missing-source\"\nsources = [\"absent.strata\"]\n",
+        "package = \"missing-source\"\nsources = [\"absent.trn\"]\n",
     );
 
     let errors = Package::load(package.0.join("package.toml")).unwrap_err();

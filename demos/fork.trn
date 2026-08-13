@@ -5,7 +5,7 @@ from /linux kernel import .per-cpu, .cacheline-aligned, .cacheline-aligned-in-sm
 from /collections import .range
 
 /*
- * Native Strata stress-test translation of Linux kernel/fork.c.
+ * Native Terrane stress-test translation of Linux kernel/fork.c.
  *
  * The system package supplies the kernel ABI, types, constants, linker
  * attributes, configuration features, and architecture hooks. C identifiers

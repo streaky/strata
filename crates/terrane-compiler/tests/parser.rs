@@ -1,7 +1,7 @@
-use strata_compiler::{SourceFile, lexer::lex, parser::parse, syntax::SyntaxKind};
+use terrane_compiler::{SourceFile, lexer::lex, parser::parse, syntax::SyntaxKind};
 
-fn parse_source(text: &str) -> strata_compiler::syntax::SyntaxTree {
-    let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+fn parse_source(text: &str) -> terrane_compiler::syntax::SyntaxTree {
+    let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
     let lexed = lex(&source).unwrap();
     let parsed = parse(&source, lexed);
     assert!(
@@ -13,7 +13,7 @@ fn parse_source(text: &str) -> strata_compiler::syntax::SyntaxTree {
 }
 
 fn rejected(text: &str, code: &str) {
-    let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+    let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
     let lexed = lex(&source).unwrap();
     let diagnostics = parse(&source, lexed).diagnostics;
     assert!(
@@ -24,7 +24,7 @@ fn rejected(text: &str, code: &str) {
 
 #[test]
 fn returns_recovered_tree_and_tokens_with_diagnostics() {
-    let source = SourceFile::new(0, "case.strata".into(), "value =\nnext = 1\n".to_owned());
+    let source = SourceFile::new(0, "case.trn".into(), "value =\nnext = 1\n".to_owned());
     let lexed = lex(&source).unwrap();
     let parsed = parse(&source, lexed);
     assert!(
@@ -36,11 +36,11 @@ fn returns_recovered_tree_and_tokens_with_diagnostics() {
     assert_eq!(parsed.tree.root.children.len(), 2);
     assert_eq!(
         parsed.tree.lexed.tokens.last().unwrap().kind,
-        strata_compiler::tokens::TokenKind::Eof
+        terrane_compiler::tokens::TokenKind::Eof
     );
 }
 
-fn contains(node: &strata_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
+fn contains(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains(child, kind))
 }
 
@@ -55,7 +55,7 @@ fn parses_lossless_declarations_and_legal_empty_blocks() {
     assert!(contains(&tree.root, SyntaxKind::DeclarationQualifier));
     assert_eq!(
         tree.lexed.tokens.last().unwrap().kind,
-        strata_compiler::tokens::TokenKind::Eof
+        terrane_compiler::tokens::TokenKind::Eof
     );
     assert!(tree.normalized().starts_with("CompilationUnit 0.."));
 }
@@ -112,7 +112,7 @@ fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
     assert!(contains(&tree.root, SyntaxKind::GroupExpression));
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "value = call; convert; input\n".to_owned(),
     );
     let diagnostic = parse(&source, lex(&source).unwrap())
@@ -175,7 +175,7 @@ fn three_clause_for_requires_grouping_for_calls() {
         "for item.member in values\n  break\n",
         "for item + other in values\n  break\n",
     ] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let parsed = parse(&source, lex(&source).unwrap());
         assert_eq!(parsed.diagnostics.len(), 1, "{:#?}", parsed.diagnostics);
         assert_eq!(parsed.diagnostics[0].code, "S1009");
@@ -230,7 +230,7 @@ fn rejects_tighter_operators_after_type_membership() {
         "value = thing is a int + 1\n",
         "value = thing is a int == other\n",
     ] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, "S1012");
@@ -241,7 +241,7 @@ fn rejects_tighter_operators_after_type_membership() {
 fn deferred_spellings_receive_canonical_fixes() {
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "same = left === right\n".to_owned(),
     );
     let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
@@ -250,7 +250,7 @@ fn deferred_spellings_receive_canonical_fixes() {
         Some("use `==` for equality or `is` for identity")
     );
     for text in ["items list<string>\n", "items list<string>= value\n"] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let lexed = lex(&source).unwrap();
         let diagnostics = parse(&source, lexed).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
@@ -266,7 +266,7 @@ fn deferred_spellings_receive_canonical_fixes() {
 fn binary_word_operators_do_not_look_like_bindings() {
     for operator in ["in", "is", "and", "or"] {
         let text = format!("left {operator} right\n");
-        let source = SourceFile::new(0, "case.strata".into(), text);
+        let source = SourceFile::new(0, "case.trn".into(), text);
         let parsed = parse(&source, lex(&source).unwrap());
         assert_ne!(parsed.tree.root.children[0].kind, SyntaxKind::Binding);
         if let Some(diagnostic) = parsed.diagnostics.first() {
@@ -388,7 +388,7 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("function main; ,\n", "S1007");
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "public private value int\n".to_owned(),
     );
     let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
@@ -396,13 +396,13 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     assert_eq!(diagnostics[0].code, "S1029");
     rejected("constant global value int\n", "S1029");
     for text in ["constant public value int\n", "global private value int\n"] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, "S1029");
     }
     for text in ["global function main\n", "constant function main\n"] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, "S1029");
@@ -453,7 +453,7 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
         ("if a = b\n    value = 1\n", "S1030"),
         ("while a = b\n    value = 1\n", "S1030"),
     ] {
-        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let source = SourceFile::new(0, "case.trn".into(), text.to_owned());
         let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0].code, code);
@@ -461,7 +461,7 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
 
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "if a = b\n    value = 1\n".to_owned(),
     );
     let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
@@ -472,7 +472,7 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
 
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "value = 1\n    deeper = 2\nafter = 3\n".to_owned(),
     );
     let parsed = parse(&source, lex(&source).unwrap());
@@ -481,7 +481,7 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
 
     let source = SourceFile::new(
         0,
-        "case.strata".into(),
+        "case.trn".into(),
         "function main\n  value = 1\n    deeper = 2\n  after = 3\n".to_owned(),
     );
     let parsed = parse(&source, lex(&source).unwrap());

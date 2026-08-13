@@ -4,6 +4,6 @@ docs/dump/
 
 AGENTS.md
 
-# Rust and Strata build artifacts
+# Rust and Terrane build artifacts
 /target/
-**/.strata/
+**/.trn/
