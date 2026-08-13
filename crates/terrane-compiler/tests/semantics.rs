@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use terrane_compiler::semantics::SymbolKind;
 use terrane_compiler::{Package, SourceFile, SourceUnit, analyze};
 
 fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
@@ -27,10 +28,7 @@ fn assembles_namespaces_symmetrically_before_import_resolution() {
     let analyzed = analyze(&package(
         false,
         &[
-            (
-                "consumer.trn",
-                "namespace app\nfrom /shared import .item\n",
-            ),
+            ("consumer.trn", "namespace app\nfrom /shared import .item\n"),
             ("second.trn", "namespace shared\n.thing = 2\n"),
             ("first.trn", "namespace shared\n.item = 1\n"),
         ],
@@ -65,10 +63,7 @@ fn namespace_diagnostics_use_source_spelling() {
 fn compiler_owned_namespaces_cannot_be_extended() {
     let failure = analyze(&package(
         false,
-        &[(
-            "main.trn",
-            "namespace core output\npublic .injected = 1\n",
-        )],
+        &[("main.trn", "namespace core output\npublic .injected = 1\n")],
     ))
     .unwrap_err();
 
@@ -222,10 +217,7 @@ fn global_replacement_is_distinct_from_namespace_local_assignment() {
     let analyzed = analyze(&package(
         false,
         &[
-            (
-                "one.trn",
-                "namespace first\nglobal shared = 1\nlocal = 1\n",
-            ),
+            ("one.trn", "namespace first\nglobal shared = 1\nlocal = 1\n"),
             (
                 "two.trn",
                 "namespace second\nglobal shared = 2\nlocal = 2\n",
@@ -395,5 +387,23 @@ fn imports_report_inaccessible_exports_consistently_at_every_scope() {
         ))
         .unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "S2010");
+    }
+}
+
+#[test]
+fn imported_fixed_width_objects_remain_canonical_type_descriptors() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            "namespace app\nfrom /core types import .int8, .uint128, .float32\n",
+        )],
+    ))
+    .unwrap();
+
+    for name in ["int8", "uint128", "float32"] {
+        let descriptor = analyzed.object("/app", name).unwrap();
+        assert_eq!(descriptor.kind, SymbolKind::TypeDescriptor);
+        assert_eq!(descriptor.identity, format!("/core/types::{name}"));
     }
 }

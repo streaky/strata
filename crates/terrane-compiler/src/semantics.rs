@@ -15,6 +15,7 @@ pub enum Visibility {
 pub enum SymbolKind {
     Binding,
     Function,
+    TypeDescriptor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -908,7 +909,11 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     object_form: false,
                     visibility: Visibility::Public,
                     global: false,
-                    kind: SymbolKind::Binding,
+                    kind: if name == "print" {
+                        SymbolKind::Binding
+                    } else {
+                        SymbolKind::TypeDescriptor
+                    },
                     declaration_span: None,
                 },
             )
@@ -920,7 +925,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     let mut namespaces = BTreeMap::new();
     namespaces.insert(
         "/core/output".to_owned(),
-        namespace_with_objects("/core/output", ["print"]),
+        namespace_with_objects("/core/output", ["print"], SymbolKind::Binding),
     );
     let mut types = vec![
         "int".to_owned(),
@@ -939,7 +944,11 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     }
     namespaces.insert(
         "/core/types".to_owned(),
-        namespace_with_objects("/core/types", types.iter().map(String::as_str)),
+        namespace_with_objects(
+            "/core/types",
+            types.iter().map(String::as_str),
+            SymbolKind::TypeDescriptor,
+        ),
     );
     namespaces.insert(
         "/core/errors".to_owned(),
@@ -953,13 +962,18 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
                 "negative-shift-count",
                 "coercion-error",
             ],
+            SymbolKind::Binding,
         ),
     );
     namespaces.insert("/collections".to_owned(), Namespace::default());
     namespaces
 }
 
-fn namespace_with_objects<'a>(path: &str, names: impl IntoIterator<Item = &'a str>) -> Namespace {
+fn namespace_with_objects<'a>(
+    path: &str,
+    names: impl IntoIterator<Item = &'a str>,
+    kind: SymbolKind,
+) -> Namespace {
     let objects = names
         .into_iter()
         .map(|name| {
@@ -972,7 +986,7 @@ fn namespace_with_objects<'a>(path: &str, names: impl IntoIterator<Item = &'a st
                     object_form: true,
                     visibility: Visibility::Public,
                     global: false,
-                    kind: SymbolKind::Binding,
+                    kind,
                     declaration_span: None,
                 },
             )
