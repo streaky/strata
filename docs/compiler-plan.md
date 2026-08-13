@@ -380,9 +380,11 @@ imports, keeps ordinary and object-form namespaces separate, and records lexical
 for parameters, local bindings, assignments, and block-local object imports. Its fixed
 bootstrap table and exact default prelude are versioned compiler-owned data. Focused
 accepted and rejected cases cover explicit object-to-ordinary binding, visibility,
-shadowing, duplicate and collision rules, idempotent reimports, `global` assignment,
-unresolved references, and ordinary bindings named `import`; a manifest-driven
-multi-source contract test exercises package assembly and cross-unit resolution.
+duplicate and collision rules, idempotent reimports, `global` assignment, unresolved
+references, and ordinary bindings named `import`; a manifest-driven multi-source
+contract test exercises package assembly and cross-unit resolution. Shadowing behavior
+is implemented in the semantic model but is not yet part of the executable conformance
+corpus.
 
 ### Milestone 4 — Types, calls, and control-flow semantics
 
