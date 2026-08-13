@@ -48,6 +48,9 @@ impl Parser<'_> {
             if self.at(TokenKind::Dedent) {
                 self.error_here("S1001", "unexpected dedent");
                 self.bump();
+            } else if self.at(TokenKind::Indent) {
+                self.error_here("S1001", "unexpected indentation outside a block");
+                self.recover_nested_block();
             } else {
                 children.push(self.parse_statement());
                 self.finish_statement();
@@ -64,7 +67,7 @@ impl Parser<'_> {
             "if" => self.parse_if(),
             "while" => self.parse_while(),
             "for" => self.parse_for(),
-            "return" => self.parse_simple_value_statement(SyntaxKind::ReturnStatement, false),
+            "return" => self.parse_simple_value_statement(SyntaxKind::ReturnStatement),
             "break" => self.parse_bare_statement(SyntaxKind::BreakStatement),
             "continue" => self.parse_bare_statement(SyntaxKind::ContinueStatement),
             "from" => self.parse_import_declaration(),
@@ -328,6 +331,7 @@ impl Parser<'_> {
         let start = self.position;
         self.bump();
         let mut children = vec![self.require_expression("if condition")];
+        self.reject_assignment_in_condition();
         children.push(self.parse_block());
         while self.at_text("else") {
             let clause_start = self.position;
@@ -335,6 +339,7 @@ impl Parser<'_> {
             let mut clause = Vec::new();
             if self.eat_text("if") {
                 clause.push(self.require_expression("else-if condition"));
+                self.reject_assignment_in_condition();
             }
             clause.push(self.parse_block());
             children.push(self.node(SyntaxKind::ElseClause, clause_start, self.position, clause));
@@ -346,6 +351,7 @@ impl Parser<'_> {
         let start = self.position;
         self.bump();
         let condition = self.require_expression("while condition");
+        self.reject_assignment_in_condition();
         let block = self.parse_block();
         self.node(
             SyntaxKind::WhileStatement,
@@ -422,20 +428,19 @@ impl Parser<'_> {
     }
 
     fn parse_for_expression(&mut self) -> SyntaxNode {
+        let previous = self.semicolon_boundary;
         self.semicolon_boundary = true;
         let expression = self.parse_expression(0, false);
-        self.semicolon_boundary = false;
+        self.semicolon_boundary = previous;
         expression
     }
 
-    fn parse_simple_value_statement(&mut self, kind: SyntaxKind, required: bool) -> SyntaxNode {
+    fn parse_simple_value_statement(&mut self, kind: SyntaxKind) -> SyntaxNode {
         let start = self.position;
         self.bump();
         let mut children = Vec::new();
         if !self.at_line_end() {
             children.push(self.parse_expression(0, true));
-        } else if required {
-            self.error_here("S1010", "expected an expression");
         }
         self.node(kind, start, self.position, children)
     }
@@ -501,6 +506,14 @@ impl Parser<'_> {
                     self.position,
                     vec![left, type_expression],
                 );
+                if self.at_text("is") {
+                    self.error_here(
+                        "S1012",
+                        "identity and type-membership expressions do not chain; join tests with `and`",
+                    );
+                    self.recover_expression();
+                    break;
+                }
                 continue;
             }
             if let Some(precedence) = self.binary_precedence() {
@@ -526,10 +539,12 @@ impl Parser<'_> {
                     self.position,
                     vec![left, right],
                 );
-                if Self::is_comparison(&operator) && self.binary_precedence() == Some(precedence) {
+                if (Self::is_comparison(&operator) || operator == "is")
+                    && self.binary_precedence() == Some(precedence)
+                {
                     self.error_here(
                         "S1012",
-                        "comparisons do not chain; join comparisons with `and`",
+                        "comparison and identity expressions do not chain; join tests with `and`",
                     );
                     self.recover_expression();
                     break;
@@ -573,7 +588,7 @@ impl Parser<'_> {
 
     fn parse_postfix(&mut self, allow_call: bool) -> SyntaxNode {
         let start = self.position;
-        let mut value = self.parse_primary(allow_call);
+        let mut value = self.parse_primary();
         loop {
             if self.at(TokenKind::Dot) {
                 if self.current().attachment != Attachment::Both {
@@ -652,7 +667,7 @@ impl Parser<'_> {
         self.node(SyntaxKind::ArgumentList, start, self.position, children)
     }
 
-    fn parse_primary(&mut self, allow_call: bool) -> SyntaxNode {
+    fn parse_primary(&mut self) -> SyntaxNode {
         match self.current().kind {
             TokenKind::Identifier => self.leaf(SyntaxKind::Name),
             TokenKind::Number
@@ -692,7 +707,6 @@ impl Parser<'_> {
                 if !self.at_expression_end() {
                     self.bump();
                 }
-                let _ = allow_call;
                 self.node(SyntaxKind::Error, start, self.position, Vec::new())
             }
         }
@@ -702,7 +716,7 @@ impl Parser<'_> {
         let start = self.position;
         let mut left = self.parse_prefix_type();
         let mut members = vec![left];
-        while self.at(TokenKind::Pipe) || self.at_text("|") {
+        while self.at(TokenKind::Pipe) {
             self.bump();
             members.push(self.parse_prefix_type());
         }
@@ -844,6 +858,16 @@ impl Parser<'_> {
             self.node(SyntaxKind::Error, self.position, self.position, Vec::new())
         } else {
             self.parse_expression(0, true)
+        }
+    }
+
+    fn reject_assignment_in_condition(&mut self) {
+        if self.at(TokenKind::Assign) {
+            self.error_here(
+                "S1030",
+                "assignment is not allowed in a condition; use `==` for equality",
+            );
+            self.recover_line();
         }
     }
 

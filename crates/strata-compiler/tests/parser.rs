@@ -258,3 +258,20 @@ fn rejects_invalid_postfix_and_control_flow_boundaries() {
     rejected("for item values\n", "S1009");
     rejected("if\n", "S1019");
 }
+
+#[test]
+fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
+    rejected("same = a is b is c\n", "S1012");
+    rejected("same = a is a int is b\n", "S1012");
+
+    for (text, code) in [
+        ("value = 1\n    deeper = 2\n", "S1001"),
+        ("if a = b\n    value = 1\n", "S1030"),
+        ("while a = b\n    value = 1\n", "S1030"),
+    ] {
+        let source = SourceFile::new(0, "case.strata".into(), text.to_owned());
+        let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, code);
+    }
+}
