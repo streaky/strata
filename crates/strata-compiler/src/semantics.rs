@@ -252,6 +252,36 @@ fn collect_unit(
             SyntaxKind::ImportDeclaration => imports.extend(imports_from_syntax(unit, node)?),
             _ => {}
         }
+        collect_nested_declarations(unit, node, namespaces, globals)?;
+    }
+    Ok(())
+}
+fn collect_nested_declarations(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    namespaces: &mut BTreeMap<String, Namespace>,
+    globals: &mut BTreeMap<String, Symbol>,
+) -> Result<(), SemanticFailure> {
+    for child in &node.children {
+        if matches!(
+            child.kind,
+            SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::FunctionDeclaration
+        ) {
+            if let Some(declaration) = declaration_from_syntax(unit, child) {
+                if declaration.object_form {
+                    return Err(failure(
+                        &unit.source,
+                        "S2017",
+                        "object-form declarations inside lexical scopes are unsupported",
+                        child.span,
+                    ));
+                }
+                if declaration.global {
+                    collect_declaration(unit, child, namespaces, globals)?;
+                }
+            }
+        }
+        collect_nested_declarations(unit, child, namespaces, globals)?;
     }
     Ok(())
 }
@@ -623,25 +653,26 @@ fn collect_lexical_scopes(
     ) -> Result<(), SemanticFailure> {
         match node.kind {
             SyntaxKind::Binding => {
-                if let Some(name) = declaration_name(node, &unit.source) {
-                    if !name.starts_with('.') {
-                        insert_local(unit, scopes, index, name, node.span)?;
-                    }
+                if let Some(declaration) = declaration_from_syntax(unit, node)
+                    && !declaration.object_form
+                    && !declaration.global
+                {
+                    insert_local(unit, scopes, index, declaration.name, node.span)?;
                 }
             }
             SyntaxKind::Assignment => {
-                if let Some(name) = declaration_name(node, &unit.source) {
-                    if !name.starts_with('.')
-                        && !local_or_namespace_binding_exists(
-                            scopes,
-                            index,
-                            namespaces,
-                            &unit.namespace,
-                            &name,
-                        )
-                    {
-                        insert_local(unit, scopes, index, name, node.span)?;
-                    }
+                if let Some(declaration) = declaration_from_syntax(unit, node)
+                    && !declaration.object_form
+                    && !declaration.global
+                    && !local_or_namespace_binding_exists(
+                        scopes,
+                        index,
+                        namespaces,
+                        &unit.namespace,
+                        &declaration.name,
+                    )
+                {
+                    insert_local(unit, scopes, index, declaration.name, node.span)?;
                 }
             }
             SyntaxKind::ImportDeclaration => {

@@ -283,3 +283,33 @@ fn duplicate_parameters_and_same_scope_bindings_are_rejected() {
         assert_eq!(failure.diagnostics[0].code, "S2012");
     }
 }
+
+#[test]
+fn nested_global_declarations_populate_the_package_global_tier() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.strata",
+            "namespace app\nfunction run\n  public global counter = 1\n",
+        )],
+    ))
+    .unwrap();
+
+    let counter = analyzed.globals.get("counter").unwrap();
+    assert!(counter.global);
+    assert_eq!(
+        counter.visibility,
+        strata_compiler::semantics::Visibility::Public
+    );
+}
+
+#[test]
+fn nested_object_form_declarations_are_rejected_explicitly() {
+    let failure = analyze(&package(
+        false,
+        &[("main.strata", "namespace app\nfunction run\n  .thing = 1\n")],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "S2017");
+}
