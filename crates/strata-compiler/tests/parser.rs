@@ -278,6 +278,47 @@ fn normalized_tree_retains_tokens_and_trivia() {
 }
 
 #[test]
+fn normalized_import_tree_retains_anchors_and_aliases() {
+    assert_eq!(
+        parse_source("from /core output import .debug as .trace\n").normalized(),
+        concat!(
+            "CompilationUnit 0..42\n",
+            "  ImportDeclaration 0..41\n",
+            "    NamespacePath 5..17\n",
+            "      NamespaceAnchor 5..6\n",
+            "      Name 6..10\n",
+            "      Name 11..17\n",
+            "    ObjectImport 25..41\n",
+            "      ObjectName 25..31\n",
+            "        Name 26..31\n",
+            "      ImportAlias 32..41\n",
+            "        ObjectName 35..41\n",
+            "          Name 36..41\n",
+            "tokens\n",
+            "  Identifier 0..4 \"from\"\n",
+            "  Operator 5..6 \"/\"\n",
+            "  Identifier 6..10 \"core\"\n",
+            "  Identifier 11..17 \"output\"\n",
+            "  Identifier 18..24 \"import\"\n",
+            "  Dot 25..26 \".\"\n",
+            "  Identifier 26..31 \"debug\"\n",
+            "  Identifier 32..34 \"as\"\n",
+            "  Dot 35..36 \".\"\n",
+            "  Identifier 36..41 \"trace\"\n",
+            "  Newline 41..42 \"\\n\"\n",
+            "  Eof 42..42 \"\"\n",
+            "trivia\n",
+            "  Whitespace 4..5 \" \"\n",
+            "  Whitespace 10..11 \" \"\n",
+            "  Whitespace 17..18 \" \"\n",
+            "  Whitespace 24..25 \" \"\n",
+            "  Whitespace 31..32 \" \"\n",
+            "  Whitespace 34..35 \" \"\n",
+        )
+    );
+}
+
+#[test]
 fn parses_structural_import_forms_and_named_arguments() {
     let tree = parse_source(
         "from /core output import .print, .debug as .trace\nfrom .. sibling import .item\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
