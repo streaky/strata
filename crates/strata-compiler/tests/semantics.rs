@@ -57,7 +57,7 @@ fn namespace_diagnostics_use_source_spelling() {
 
     assert_eq!(
         failure.diagnostics[0].message,
-        "unresolved object `.item` in `/ missing nested`"
+        "unresolved object `.item` in `/missing nested`"
     );
 }
 
@@ -75,7 +75,7 @@ fn compiler_owned_namespaces_cannot_be_extended() {
     assert_eq!(failure.diagnostics[0].code, "S2017");
     assert_eq!(
         failure.diagnostics[0].message,
-        "cannot declare into compiler-owned namespace `/ core output`"
+        "cannot declare into compiler-owned namespace `/core output`"
     );
 }
 #[test]

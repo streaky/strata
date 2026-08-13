@@ -851,7 +851,7 @@ fn source_namespace(namespace: &str) -> String {
             if components.is_empty() {
                 "/".to_owned()
             } else {
-                format!("/ {}", components.replace('/', " "))
+                format!("/{}", components.replace('/', " "))
             }
         },
     )
