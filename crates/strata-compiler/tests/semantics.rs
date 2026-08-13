@@ -107,18 +107,14 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
 #[test]
 fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
     let enabled = analyze(&package(true, &[("main.strata", "namespace app\n")])).unwrap();
-    let names = enabled.namespaces["/app"]
-        .ordinary
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
+    let names = enabled.prelude_bindings.keys().cloned().collect::<Vec<_>>();
     assert_eq!(
         names,
         ["bool", "bytes", "float", "int", "none", "print", "string"]
     );
 
     let disabled = analyze(&package(false, &[("main.strata", "namespace app\n")])).unwrap();
-    assert!(disabled.namespaces["/app"].ordinary.is_empty());
+    assert!(disabled.prelude_bindings.is_empty());
 }
 
 #[test]
@@ -203,4 +199,39 @@ fn global_replacement_is_distinct_from_namespace_local_assignment() {
     assert!(analyzed.ordinary("/first", "local").is_some());
     assert!(analyzed.ordinary("/second", "local").is_some());
     assert!(analyzed.ordinary("/first", "shared").is_none());
+}
+
+#[test]
+fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
+    let analyzed = analyze(&package(
+        true,
+        &[
+            (
+                "parent.strata",
+                "namespace app\nparent-value = 1\nprotected inherited = 1\nprivate hidden = 1\n",
+            ),
+            (
+                "child.strata",
+                "namespace app child\nparent-value = 2\nglobal shared = 1\n",
+            ),
+            ("peer.strata", "namespace peer\n"),
+        ],
+    ))
+    .unwrap();
+
+    assert_eq!(
+        analyzed
+            .resolve_ordinary("/app/child", "parent-value")
+            .unwrap()
+            .namespace,
+        "/app/child"
+    );
+    assert!(
+        analyzed
+            .resolve_ordinary("/app/child", "inherited")
+            .is_some()
+    );
+    assert!(analyzed.resolve_ordinary("/peer", "hidden").is_none());
+    assert!(analyzed.resolve_ordinary("/peer", "shared").is_some());
+    assert!(analyzed.resolve_ordinary("/peer", "print").is_some());
 }

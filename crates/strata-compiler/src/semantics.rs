@@ -33,6 +33,8 @@ pub struct SemanticPackage {
     pub identity: String,
     pub prelude: bool,
     pub namespaces: BTreeMap<String, Namespace>,
+    pub globals: BTreeMap<String, Symbol>,
+    pub prelude_bindings: BTreeMap<String, Symbol>,
     pub units: Vec<SemanticUnit>,
     pub bootstrap_version: &'static str,
 }
@@ -102,14 +104,18 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         collect_unit(unit, &mut namespaces, &mut globals, &mut imports)?;
     }
     resolve_imports(imports, &mut namespaces)?;
-    if package.prelude {
-        install_prelude(&mut namespaces);
-    }
+    let prelude_bindings = if package.prelude {
+        bootstrap_prelude()
+    } else {
+        BTreeMap::new()
+    };
 
     Ok(SemanticPackage {
         identity: package.identity.clone(),
         prelude: package.prelude,
         namespaces,
+        globals,
+        prelude_bindings,
         units,
         bootstrap_version: BOOTSTRAP_VERSION,
     })
@@ -124,6 +130,29 @@ impl SemanticPackage {
     #[must_use]
     pub fn object(&self, namespace: &str, name: &str) -> Option<&Symbol> {
         self.namespaces.get(namespace)?.objects.get(name)
+    }
+
+    #[must_use]
+    pub fn resolve_ordinary(&self, namespace: &str, name: &str) -> Option<&Symbol> {
+        namespace_chain(namespace)
+            .find_map(|path| {
+                self.ordinary(&path, name)
+                    .filter(|symbol| visible_from(symbol, namespace))
+            })
+            .or_else(|| {
+                self.globals
+                    .get(name)
+                    .filter(|symbol| visible_from(symbol, namespace))
+            })
+            .or_else(|| self.prelude_bindings.get(name))
+    }
+
+    #[must_use]
+    pub fn resolve_object(&self, namespace: &str, name: &str) -> Option<&Symbol> {
+        namespace_chain(namespace).find_map(|path| {
+            self.object(&path, name)
+                .filter(|symbol| visible_from(symbol, namespace))
+        })
     }
 }
 
@@ -354,34 +383,61 @@ fn resolve_imports(
     Ok(())
 }
 
-fn install_prelude(namespaces: &mut BTreeMap<String, Namespace>) {
-    const PRELUDE: [(&str, &str); 7] = [
-        ("print", "/core/output::print"),
-        ("int", "/core/types::int"),
-        ("float", "/core/types::float"),
-        ("bool", "/core/types::bool"),
-        ("string", "/core/types::string"),
-        ("bytes", "/core/types::bytes"),
-        ("none", "/core/types::none"),
+fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {
+    let mut current = namespace.trim_end_matches('/').to_owned();
+    std::iter::from_fn(move || {
+        if current.is_empty() {
+            return None;
+        }
+        let result = current.clone();
+        if current == "/" {
+            current.clear();
+        } else {
+            current.truncate(current.rfind('/').unwrap_or(0).max(1));
+        }
+        Some(result)
+    })
+}
+
+fn visible_from(symbol: &Symbol, namespace: &str) -> bool {
+    match symbol.visibility {
+        Visibility::Public => true,
+        Visibility::Private => symbol.namespace == namespace,
+        Visibility::Protected => {
+            symbol.namespace == namespace
+                || namespace
+                    .strip_prefix(&symbol.namespace)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        }
+    }
+}
+
+fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
+    const PRELUDE: [(&str, &str, &str); 7] = [
+        ("print", "/core/output::print", "/core/output"),
+        ("int", "/core/types::int", "/core/types"),
+        ("float", "/core/types::float", "/core/types"),
+        ("bool", "/core/types::bool", "/core/types"),
+        ("string", "/core/types::string", "/core/types"),
+        ("bytes", "/core/types::bytes", "/core/types"),
+        ("none", "/core/types::none", "/core/types"),
     ];
-    for (path, namespace) in namespaces
-        .iter_mut()
-        .filter(|(path, _)| !path.starts_with("/core") && path.as_str() != "/collections")
-    {
-        for (name, identity) in PRELUDE {
-            namespace
-                .ordinary
-                .entry(name.to_owned())
-                .or_insert_with(|| Symbol {
+    PRELUDE
+        .into_iter()
+        .map(|(name, identity, namespace)| {
+            (
+                name.to_owned(),
+                Symbol {
                     identity: identity.to_owned(),
                     name: name.to_owned(),
-                    namespace: path.clone(),
+                    namespace: namespace.to_owned(),
                     object_form: false,
                     visibility: Visibility::Public,
                     global: false,
-                });
-        }
-    }
+                },
+            )
+        })
+        .collect()
 }
 
 fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
