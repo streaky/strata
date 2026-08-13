@@ -96,3 +96,28 @@ fn fixed_width_operation_families_pin_overflow_modes() {
         Err(ArithmeticError::DivisionByZero)
     );
 }
+
+#[test]
+fn runtime_arithmetic_failures_render_in_source_terms() {
+    let cases = [
+        (
+            ArithmeticError::DivisionByZero,
+            ".division-by-zero: integer division by zero",
+        ),
+        (
+            ArithmeticError::ArithmeticOverflow,
+            ".arithmetic-overflow: fixed-width integer arithmetic overflow",
+        ),
+        (
+            ArithmeticError::IntegerConversionOverflow,
+            ".integer-conversion-overflow: integer conversion result is outside the destination type",
+        ),
+        (
+            ArithmeticError::NegativeShiftCount,
+            ".negative-shift-count: negative integer shift count",
+        ),
+    ];
+    for (failure, expected) in cases {
+        assert_eq!(failure.render(), expected);
+    }
+}

@@ -16,6 +16,7 @@ pub enum Int {
 pub enum ArithmeticError {
     DivisionByZero,
     ArithmeticOverflow,
+    IntegerConversionOverflow,
     NegativeShiftCount,
     ShiftCountTooLarge,
 }
@@ -25,6 +26,9 @@ impl fmt::Display for ArithmeticError {
         formatter.write_str(match self {
             Self::DivisionByZero => "integer division by zero",
             Self::ArithmeticOverflow => "fixed-width integer arithmetic overflow",
+            Self::IntegerConversionOverflow => {
+                "integer conversion result is outside the destination type"
+            }
             Self::NegativeShiftCount => "negative integer shift count",
             Self::ShiftCountTooLarge => "integer shift count cannot be represented on this target",
         })
@@ -32,6 +36,26 @@ impl fmt::Display for ArithmeticError {
 }
 
 impl std::error::Error for ArithmeticError {}
+
+impl ArithmeticError {
+    /// Stable Terrane object-form name used by generated failure paths.
+    #[must_use]
+    pub const fn source_name(self) -> &'static str {
+        match self {
+            Self::DivisionByZero => ".division-by-zero",
+            Self::ArithmeticOverflow => ".arithmetic-overflow",
+            Self::IntegerConversionOverflow => ".integer-conversion-overflow",
+            Self::NegativeShiftCount => ".negative-shift-count",
+            Self::ShiftCountTooLarge => ".resource-error",
+        }
+    }
+
+    /// Deterministic source-oriented text suitable for an uncaught failure.
+    #[must_use]
+    pub fn render(self) -> String {
+        format!("{}: {self}", self.source_name())
+    }
+}
 
 impl Int {
     #[must_use]
