@@ -15,7 +15,7 @@ pub use diagnostic::{Diagnostic, Severity};
 pub use package::{IMPLICIT_PACKAGE_ID, MANIFEST_FILE_NAME, Package, PackageLoadError, SourceUnit};
 pub use semantics::{
     BOOTSTRAP_VERSION, Namespace, SemanticFailure, SemanticPackage, SemanticUnit, Symbol,
-    Visibility, analyze,
+    TypedBinding, ValueType, Visibility, analyze,
 };
 pub use source::{SourceFile, Span};
 pub use types::ScalarType;

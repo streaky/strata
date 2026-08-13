@@ -1,7 +1,8 @@
+use num_bigint::BigInt;
 use std::collections::BTreeMap;
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
-use crate::{Diagnostic, Package, SourceFile, Span, lexer, parser};
+use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, lexer, parser};
 
 pub const BOOTSTRAP_VERSION: &str = "1";
 
@@ -47,6 +48,19 @@ pub struct SemanticPackage {
     pub bootstrap_version: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValueType {
+    Scalar(ScalarType),
+    TypeDescriptor(ScalarType),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypedBinding {
+    pub name: String,
+    pub span: Span,
+    pub value_type: ValueType,
+}
+
 #[derive(Clone, Debug)]
 pub struct SemanticFailure {
     pub source: SourceFile,
@@ -59,6 +73,7 @@ pub struct SemanticUnit {
     pub tree: SyntaxTree,
     pub namespace: String,
     pub scopes: Vec<LexicalScope>,
+    pub typed_bindings: Vec<TypedBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +127,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             tree: parsed.tree,
             namespace,
             scopes: Vec::new(),
+            typed_bindings: Vec::new(),
         });
     }
 
@@ -156,7 +172,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         BTreeMap::new()
     };
 
-    let semantic = SemanticPackage {
+    let mut semantic = SemanticPackage {
         identity: package.identity.clone(),
         prelude: package.prelude,
         namespaces,
@@ -166,6 +182,10 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_references(&semantic)?;
+    let typed_units = analyze_binding_types(&semantic)?;
+    for (unit, typed_bindings) in semantic.units.iter_mut().zip(typed_units) {
+        unit.typed_bindings = typed_bindings;
+    }
     Ok(semantic)
 }
 
@@ -612,6 +632,222 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
         }
     }
     Ok(())
+}
+
+fn analyze_binding_types(
+    package: &SemanticPackage,
+) -> Result<Vec<Vec<TypedBinding>>, SemanticFailure> {
+    package
+        .units
+        .iter()
+        .map(|unit| {
+            let mut aliases = BTreeMap::new();
+            if package.prelude {
+                for ty in ScalarType::ALL {
+                    aliases.insert(ty.source_name().to_owned(), ty);
+                }
+            }
+            let mut bindings = Vec::new();
+            analyze_binding_nodes(package, unit, &unit.tree.root, &mut aliases, &mut bindings)?;
+            Ok(bindings)
+        })
+        .collect()
+}
+
+fn analyze_binding_nodes(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &mut BTreeMap<String, ScalarType>,
+    bindings: &mut Vec<TypedBinding>,
+) -> Result<(), SemanticFailure> {
+    if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
+        analyze_binding_node(package, unit, node, aliases, bindings)?;
+    }
+    for child in &node.children {
+        analyze_binding_nodes(package, unit, child, aliases, bindings)?;
+    }
+    Ok(())
+}
+
+fn analyze_binding_node(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &mut BTreeMap<String, ScalarType>,
+    bindings: &mut Vec<TypedBinding>,
+) -> Result<(), SemanticFailure> {
+    let Some(name_node) = node
+        .children
+        .iter()
+        .find(|child| matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName))
+    else {
+        return Ok(());
+    };
+    if name_node.kind == SyntaxKind::ObjectName {
+        return Ok(());
+    }
+    let name = node_text(&unit.source, name_node).to_owned();
+    let declared = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::TypeExpression);
+    let initializer = node.children.iter().rev().find(|child| {
+        child.span != name_node.span
+            && !matches!(
+                child.kind,
+                SyntaxKind::DeclarationModifier
+                    | SyntaxKind::Visibility
+                    | SyntaxKind::DeclarationQualifier
+                    | SyntaxKind::TypeExpression
+            )
+    });
+
+    if declared.is_none()
+        && let Some(initializer) = initializer
+        && initializer.kind == SyntaxKind::ObjectName
+    {
+        let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
+        if let Some(symbol) = package.resolve_object_at(unit, initializer.span.start, object_name)
+            && symbol.kind == SymbolKind::TypeDescriptor
+            && let Some(ty) = descriptor_scalar(symbol)
+        {
+            aliases.insert(name.clone(), ty);
+            bindings.push(TypedBinding {
+                name,
+                span: node.span,
+                value_type: ValueType::TypeDescriptor(ty),
+            });
+        }
+        return Ok(());
+    }
+
+    let inferred = initializer.and_then(|value| infer_literal_type(unit, value));
+    let value_type = if let Some(type_node) = declared {
+        let type_name = node_text(&unit.source, type_node).trim();
+        let Some(ty) = aliases.get(type_name).copied() else {
+            return Err(failure(
+                &unit.source,
+                "T0001",
+                format!("`{type_name}` does not resolve to a scalar type descriptor"),
+                type_node.span,
+            ));
+        };
+        if let Some(inferred) = inferred
+            && inferred != ty
+        {
+            if inferred == ScalarType::Int
+                && ty.is_integer()
+                && let Some(value) = initializer.and_then(|value| constant_integer(unit, value))
+            {
+                check_integer_range(&unit.source, ty, &value, initializer.unwrap().span)?;
+            } else {
+                return Err(failure(
+                    &unit.source,
+                    "T0002",
+                    format!("cannot initialize `{name}` of type `{ty}` with `{inferred}`"),
+                    initializer.unwrap().span,
+                ));
+            }
+        }
+        ty
+    } else if let Some(inferred) = inferred {
+        inferred
+    } else {
+        return Ok(());
+    };
+
+    bindings.push(TypedBinding {
+        name,
+        span: node.span,
+        value_type: ValueType::Scalar(value_type),
+    });
+    Ok(())
+}
+
+fn descriptor_scalar(symbol: &Symbol) -> Option<ScalarType> {
+    symbol
+        .identity
+        .strip_prefix("/core/types::")
+        .and_then(ScalarType::from_source_name)
+}
+
+fn infer_literal_type(unit: &SemanticUnit, node: &SyntaxNode) -> Option<ScalarType> {
+    if node.kind == SyntaxKind::UnaryExpression {
+        return node
+            .children
+            .last()
+            .and_then(|child| infer_literal_type(unit, child));
+    }
+    if node.kind != SyntaxKind::Literal {
+        return None;
+    }
+    let text = node_text(&unit.source, node);
+    match text {
+        "true" | "false" => Some(ScalarType::Bool),
+        value if value.starts_with(['\'', '>']) => Some(ScalarType::String),
+        _ => Some(ScalarType::Int),
+    }
+}
+
+fn constant_integer(unit: &SemanticUnit, node: &SyntaxNode) -> Option<BigInt> {
+    let compact = node_text(&unit.source, node)
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '_')
+        .collect::<String>();
+    let (negative, digits) = compact
+        .strip_prefix('-')
+        .map_or((false, compact.as_str()), |digits| (true, digits));
+    let (radix, digits) = if let Some(digits) = digits.strip_prefix("0x") {
+        (16, digits)
+    } else if let Some(digits) = digits.strip_prefix("0o") {
+        (8, digits)
+    } else if let Some(digits) = digits.strip_prefix("0b") {
+        (2, digits)
+    } else {
+        (10, digits)
+    };
+    let value = BigInt::parse_bytes(digits.as_bytes(), radix)?;
+    Some(if negative { -value } else { value })
+}
+
+fn check_integer_range(
+    source: &SourceFile,
+    destination: ScalarType,
+    value: &BigInt,
+    span: Span,
+) -> Result<(), SemanticFailure> {
+    let bounds = match destination {
+        ScalarType::Int8 => integer_bounds(8, true),
+        ScalarType::Int16 => integer_bounds(16, true),
+        ScalarType::Int32 => integer_bounds(32, true),
+        ScalarType::Int64 => integer_bounds(64, true),
+        ScalarType::Int128 => integer_bounds(128, true),
+        ScalarType::Uint8 => integer_bounds(8, false),
+        ScalarType::Uint16 => integer_bounds(16, false),
+        ScalarType::Uint32 => integer_bounds(32, false),
+        ScalarType::Uint64 => integer_bounds(64, false),
+        ScalarType::Uint128 => integer_bounds(128, false),
+        _ => return Ok(()),
+    };
+    if value < &bounds.0 || value > &bounds.1 {
+        return Err(failure(
+            source,
+            "T0003",
+            format!("constant `{value}` is outside the range of `{destination}`"),
+            span,
+        ));
+    }
+    Ok(())
+}
+
+fn integer_bounds(bits: usize, signed: bool) -> (BigInt, BigInt) {
+    if signed {
+        let magnitude = BigInt::from(1_u8) << (bits - 1);
+        (-&magnitude, magnitude - 1)
+    } else {
+        (BigInt::from(0_u8), (BigInt::from(1_u8) << bits) - 1)
+    }
 }
 
 fn collect_lexical_scopes(

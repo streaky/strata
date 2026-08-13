@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use terrane_compiler::semantics::SymbolKind;
-use terrane_compiler::{Package, SourceFile, SourceUnit, analyze};
+use terrane_compiler::{Package, ScalarType, SourceFile, SourceUnit, ValueType, analyze};
 
 fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
     Package {
@@ -406,4 +406,80 @@ fn imported_fixed_width_objects_remain_canonical_type_descriptors() {
         assert_eq!(descriptor.kind, SymbolKind::TypeDescriptor);
         assert_eq!(descriptor.identity, format!("/core/types::{name}"));
     }
+}
+
+#[test]
+fn infers_core_literal_types_and_checks_fixed_width_destinations() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "count = 42\n",
+                "enabled = true\n",
+                "message = 'ready'\n",
+                "minimum int8 = -128\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    let bindings = &analyzed.units[0].typed_bindings;
+    for (name, ty) in [
+        ("count", ScalarType::Int),
+        ("enabled", ScalarType::Bool),
+        ("message", ScalarType::String),
+        ("minimum", ScalarType::Int8),
+    ] {
+        assert_eq!(
+            bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap()
+                .value_type,
+            ValueType::Scalar(ty)
+        );
+    }
+}
+
+#[test]
+fn imported_descriptor_aliases_drive_explicit_binding_types() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .uint8\n",
+                "byte = .uint8\n",
+                "maximum byte = 255\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    assert_eq!(
+        analyzed.units[0].typed_bindings[0].value_type,
+        ValueType::TypeDescriptor(ScalarType::Uint8)
+    );
+    assert_eq!(
+        analyzed.units[0].typed_bindings[1].value_type,
+        ValueType::Scalar(ScalarType::Uint8)
+    );
+}
+
+#[test]
+fn rejects_out_of_range_integer_constants_at_the_initializer() {
+    let failure = analyze(&package(
+        true,
+        &[("main.trn", "namespace app\nvalue int8 = 128\n")],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0003");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "constant `128` is outside the range of `int8`"
+    );
 }
