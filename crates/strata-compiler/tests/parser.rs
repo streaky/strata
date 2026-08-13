@@ -354,6 +354,16 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
 }
 
 #[test]
+fn rejects_every_reserved_statement_keyword() {
+    for keyword in [
+        "class", "try", "throw", "yield", "match", "unsafe", "rust", "label", "goto", "when",
+        "use", "catch", "finally", "case",
+    ] {
+        rejected(&format!("{keyword}\n"), "S1090");
+    }
+}
+
+#[test]
 fn rejects_invalid_postfix_and_control_flow_boundaries() {
     rejected("value = thing.\n", "S1014");
     rejected("value = values[\n", "S1019");
