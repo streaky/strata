@@ -216,9 +216,13 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
             declarations[1].span,
         ));
     }
-    let text = node_text(source, declarations[0]);
-    let path = text.trim().strip_prefix("namespace").unwrap().trim();
-    normalize_declared_path(path).ok_or_else(|| {
+    let components = declarations[0]
+        .children
+        .iter()
+        .filter(|child| child.kind == SyntaxKind::Name)
+        .map(|child| node_text(source, child))
+        .collect::<Vec<_>>();
+    normalize_declared_path(&components).ok_or_else(|| {
         Diagnostic::error(
             "S2003",
             "namespace declaration requires an unanchored path",
@@ -238,11 +242,49 @@ fn collect_unit(
             SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::FunctionDeclaration => {
                 collect_declaration(unit, node, namespaces, globals)?;
             }
-            SyntaxKind::ImportDeclaration => imports.extend(parse_import(unit, node)?),
+            SyntaxKind::ImportDeclaration => imports.extend(imports_from_syntax(unit, node)?),
             _ => {}
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct Declaration {
+    name: String,
+    object_form: bool,
+    visibility: Visibility,
+    global: bool,
+}
+
+fn declaration_from_syntax(unit: &SemanticUnit, node: &SyntaxNode) -> Option<Declaration> {
+    let name_node = node
+        .children
+        .iter()
+        .find(|child| matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName))?;
+    let object_form = name_node.kind == SyntaxKind::ObjectName;
+    let name = node_text(&unit.source, name_node)
+        .trim_start_matches('.')
+        .to_owned();
+    let visibility = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::Visibility)
+        .map(|child| node_text(&unit.source, child))
+        .map_or(Visibility::Public, |visibility| match visibility {
+            "private" => Visibility::Private,
+            "protected" => Visibility::Protected,
+            _ => Visibility::Public,
+        });
+    let global = node.children.iter().any(|child| {
+        child.kind == SyntaxKind::DeclarationQualifier && node_text(&unit.source, child) == "global"
+    });
+    Some(Declaration {
+        name,
+        object_form,
+        visibility,
+        global,
+    })
 }
 
 fn collect_declaration(
@@ -251,17 +293,7 @@ fn collect_declaration(
     namespaces: &mut BTreeMap<String, Namespace>,
     globals: &mut BTreeMap<String, Symbol>,
 ) -> Result<(), SemanticFailure> {
-    let text = node_text(&unit.source, node).trim();
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    let global = words.first() == Some(&"global");
-    let visibility = if words.contains(&"private") {
-        Visibility::Private
-    } else if words.contains(&"protected") {
-        Visibility::Protected
-    } else {
-        Visibility::Public
-    };
-    let name = declaration_name(node, &unit.source).ok_or_else(|| {
+    let declaration = declaration_from_syntax(unit, node).ok_or_else(|| {
         failure(
             &unit.source,
             "S2004",
@@ -269,106 +301,106 @@ fn collect_declaration(
             node.span,
         )
     })?;
-    let object_form = name.starts_with('.');
-    let bare = name.trim_start_matches('.').to_owned();
-    if bare == "import" && node.kind != SyntaxKind::ImportDeclaration {
-        // Deliberately ordinary: import syntax was classified structurally by the parser.
-    }
-    let identity = if global {
-        format!("global::{bare}")
+    let identity = if declaration.global {
+        format!("global::{}", declaration.name)
     } else {
-        format!("{}::{bare}", unit.namespace)
+        format!("{}::{}", unit.namespace, declaration.name)
     };
     let symbol = Symbol {
         identity,
-        name: bare.clone(),
+        name: declaration.name.clone(),
         namespace: unit.namespace.clone(),
-        object_form,
-        visibility,
-        global,
+        object_form: declaration.object_form,
+        visibility: declaration.visibility,
+        global: declaration.global,
     };
-    if global {
-        globals.insert(bare, symbol);
+    if declaration.global {
+        globals.insert(declaration.name, symbol);
         return Ok(());
     }
-    let namespace = namespaces.get_mut(&unit.namespace).unwrap();
-    let table = if object_form {
+    let namespace = namespaces
+        .get_mut(&unit.namespace)
+        .expect("every source-unit namespace is assembled before declarations");
+    let table = if declaration.object_form {
         &mut namespace.objects
     } else {
         &mut namespace.ordinary
     };
-    if table.contains_key(&bare) {
+    if table.contains_key(&declaration.name) {
         return Err(failure(
             &unit.source,
             "S2005",
-            format!("duplicate declaration `{name}`"),
+            format!("duplicate declaration `{}`", declaration.name),
             node.span,
         ));
     }
-    table.insert(bare, symbol);
+    table.insert(declaration.name, symbol);
     Ok(())
 }
 
-fn declaration_name(node: &SyntaxNode, source: &SourceFile) -> Option<String> {
-    fn first_name<'a>(node: &'a SyntaxNode) -> Option<&'a SyntaxNode> {
-        if matches!(node.kind, SyntaxKind::Name | SyntaxKind::ObjectName) {
-            return Some(node);
-        }
-        node.children.iter().find_map(first_name)
-    }
-    let name = first_name(node)?;
-    Some(node_text(source, name).trim().to_owned())
-}
-
-fn parse_import(unit: &SemanticUnit, node: &SyntaxNode) -> Result<Vec<Import>, SemanticFailure> {
-    let text = node_text(&unit.source, node).trim();
-    let (path, selection) = if let Some(rest) = text.strip_prefix("from ") {
-        rest.split_once(" import ")
-            .ok_or_else(|| failure(&unit.source, "S2006", "malformed import", node.span))?
-    } else if let Some(rest) = text.strip_prefix("import ") {
-        let (path, object) = rest
-            .rsplit_once(' ')
-            .ok_or_else(|| failure(&unit.source, "S2006", "malformed import", node.span))?;
-        (path, object)
-    } else {
-        return Err(failure(
-            &unit.source,
-            "S2006",
-            "malformed import",
-            node.span,
-        ));
-    };
-    let target = resolve_path(&unit.namespace, path).ok_or_else(|| {
+fn imports_from_syntax(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Result<Vec<Import>, SemanticFailure> {
+    let path = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::NamespacePath)
+        .ok_or_else(|| failure(&unit.source, "S2006", "malformed import", node.span))?;
+    let anchored = path.children.first().is_some_and(|child| {
+        child.kind == SyntaxKind::NamespaceAnchor && node_text(&unit.source, child) == "/"
+    });
+    let components = path
+        .children
+        .iter()
+        .map(|child| node_text(&unit.source, child))
+        .collect::<Vec<_>>();
+    let target = resolve_path(&unit.namespace, anchored, &components).ok_or_else(|| {
         failure(
             &unit.source,
             "S2007",
             "namespace path escapes above root",
-            node.span,
+            path.span,
         )
     })?;
+    let objects = node
+        .children
+        .iter()
+        .filter(|child| child.kind == SyntaxKind::ObjectImport);
     let mut result = Vec::new();
-    for item in selection.split(',') {
-        let item = item.trim();
-        let (object, alias) = item
-            .split_once(" as ")
-            .map_or((item, item), |(object, alias)| {
-                (object.trim(), alias.trim())
-            });
-        if !object.starts_with('.') || !alias.starts_with('.') {
-            return Err(failure(
-                &unit.source,
-                "S2008",
-                "imports bind object-form names; use an explicit ordinary binding",
-                node.span,
-            ));
-        }
+    for object in objects {
+        let imported_node = object
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::ObjectName)
+            .ok_or_else(|| {
+                failure(
+                    &unit.source,
+                    "S2008",
+                    "imports bind object-form names; use an explicit ordinary binding",
+                    object.span,
+                )
+            })?;
+        let imported = node_text(&unit.source, imported_node).trim_start_matches('.');
+        let alias = object
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::ImportAlias)
+            .and_then(|alias| {
+                alias
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::ObjectName)
+            })
+            .map(|alias| node_text(&unit.source, alias).trim_start_matches('.'))
+            .unwrap_or(imported);
         result.push(Import {
             source: unit.source.clone(),
             namespace: unit.namespace.clone(),
             target: target.clone(),
-            object: object.trim_start_matches('.').to_owned(),
-            alias: alias.trim_start_matches('.').to_owned(),
-            span: node.span,
+            object: imported.to_owned(),
+            alias: alias.to_owned(),
+            span: object.span,
         });
     }
     Ok(result)
@@ -597,7 +629,7 @@ fn collect_lexical_scopes(
                 }
             }
             SyntaxKind::ImportDeclaration => {
-                for import in parse_import(unit, node)? {
+                for import in imports_from_syntax(unit, node)? {
                     let export = namespaces
                         .get(&import.target)
                         .and_then(|namespace| namespace.objects.get(&import.object))
@@ -859,18 +891,19 @@ fn namespace_with_objects<'a>(path: &str, names: impl IntoIterator<Item = &'a st
     }
 }
 
-fn normalize_declared_path(path: &str) -> Option<String> {
-    if path.starts_with('/') || path.starts_with("..") || path.is_empty() {
+fn normalize_declared_path(components: &[&str]) -> Option<String> {
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| matches!(*component, "/" | "..") || component.is_empty())
+    {
         return None;
     }
-    Some(format!(
-        "/{}",
-        path.split_whitespace().collect::<Vec<_>>().join("/")
-    ))
+    Some(format!("/{}", components.join("/")))
 }
 
-fn resolve_path(current: &str, path: &str) -> Option<String> {
-    let mut components = if path.starts_with('/') {
+fn resolve_path(current: &str, anchored: bool, path: &[&str]) -> Option<String> {
+    let mut components = if anchored {
         Vec::new()
     } else {
         current
@@ -879,14 +912,24 @@ fn resolve_path(current: &str, path: &str) -> Option<String> {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
     };
-    for component in path.trim_start_matches('/').split_whitespace() {
-        if component == ".." {
+    for component in path {
+        if *component == "/" {
+            continue;
+        }
+        if *component == ".." {
             components.pop()?;
         } else {
             components.push(component);
         }
     }
     Some(format!("/{}", components.join("/")))
+}
+
+fn declaration_name(node: &SyntaxNode, source: &SourceFile) -> Option<String> {
+    node.children
+        .iter()
+        .find(|child| matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName))
+        .map(|child| node_text(source, child).to_owned())
 }
 
 fn node_text<'a>(source: &'a SourceFile, node: &SyntaxNode) -> &'a str {
