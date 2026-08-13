@@ -34,10 +34,24 @@ pub fn lex(source: &SourceFile) -> Result<LexedSource, Vec<Diagnostic>> {
             Some((marker_indent, token_index, prefix @ None)) if indent > *marker_indent => {
                 *prefix = Some(line.as_bytes()[..indent].to_vec());
                 extend_token(source, &mut tokens[*token_index], offset + line.len());
+                check_indent(
+                    source,
+                    offset,
+                    &line.as_bytes()[..indent],
+                    &mut indent_style,
+                    &mut diagnostics,
+                );
                 true
             }
             Some((_, token_index, Some(prefix))) if line.as_bytes().starts_with(prefix) => {
                 extend_token(source, &mut tokens[*token_index], offset + line.len());
+                check_indent(
+                    source,
+                    offset,
+                    &line.as_bytes()[..indent],
+                    &mut indent_style,
+                    &mut diagnostics,
+                );
                 true
             }
             Some(_) => {

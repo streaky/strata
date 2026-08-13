@@ -248,6 +248,21 @@ fn a_comment_only_terminator_line_stays_out_of_indentation() {
 }
 
 #[test]
+fn block_string_content_follows_the_file_indentation_style() {
+    let source = SourceFile::new(
+        0,
+        "case.strata".into(),
+        "function main\n  x = >>\n\t\t\tcontent\n".to_owned(),
+    );
+    assert!(
+        lex(&source)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0003")
+    );
+}
+
+#[test]
 fn comments_and_shift_operators_do_not_open_block_strings() {
     for source in [
         "x = 1 # use >>\n  kept = 2\nafter = 3\n",
