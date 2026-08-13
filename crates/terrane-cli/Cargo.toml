@@ -1,12 +1,16 @@
 [package]
-name = "strata-compiler"
+name = "terrane-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "terrane"
+path = "src/main.rs"
 
 [dependencies]
-toml = "0.8"
+terrane-compiler = { path = "../terrane-compiler" }
+
 [lints]
 workspace = true

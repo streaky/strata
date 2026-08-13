@@ -1,4 +1,4 @@
-# Strata AI language and compiler reference
+# Terrane AI language and compiler reference
 
 SOURCE_OF_TRUTH: `docs/language-spec-and-compiler-architecture-draft.md`
 ROLE: lossy retrieval/index layer for AI agents; not an independent specification.
@@ -70,7 +70,7 @@ newline: normally ends statement; grammar-defined continuation only
 
 Text literals:
 
-```strata
+```terrane
 'single quoted default'
 >rest of physical line is literal text
 >>
@@ -104,7 +104,7 @@ reimport_different_same_name: collision; alias required
 
 Top-level plain assignment is namespace-local, including root namespace. `global` explicitly creates/replaces program-global identity and does not erase lexical provenance/visibility.
 
-```strata
+```terrane
 namespace application commands
 print = .print
 private cache = .map;
@@ -113,7 +113,7 @@ global shared-limit int = 10
 
 ## IMPORT
 
-```strata
+```terrane
 use (system) sqlite
 from /core output import .print
 from /collections import .map as .ordered-map
@@ -128,7 +128,7 @@ Rules:
 - Imports are structural compile-time slots, never ordinary calls/bindings.
 - Importer selection is scoped; `global import with` selects program fallback.
 - Ordinary binding named `import` cannot affect importer selection.
-- Version-one execution: only declared precompiled/versioned host extensions run as importers/modifiers; never recursively execute arbitrary Strata source.
+- Version-one execution: only declared precompiled/versioned host extensions run as importers/modifiers; never recursively execute arbitrary Terrane source.
 - Structural stage order: manifest+lockfile -> host extensions -> imports in source order -> namespaces -> build selection -> resolve/type/modifiers.
 - Import plans/inputs enter deterministic cache keys.
 
@@ -147,7 +147,7 @@ print int float bool string bytes none
 
 ## CALL
 
-```strata
+```terrane
 thing;                         # explicit zero-arg default call
 print; message                 # positional arg
 connect; host, port, timeout = 10
@@ -223,7 +223,7 @@ Compound clauses align with owner. Empty bodies legal. `return` expression optio
 
 ## DECL
 
-```strata
+```terrane
 name = value
 name int = 42
 name string
@@ -345,7 +345,7 @@ Distinct contracts: `ref T`, `borrowed-ref of T`, `user-ref of T`, `raw-address 
 
 ## CONTROL
 
-```strata
+```terrane
 if condition
   ...
 else
@@ -368,7 +368,7 @@ for i = 0; i < limit; i++
 
 ## ERROR / EFFECT
 
-```strata
+```terrane
 throw error
 try
   ...
@@ -450,7 +450,7 @@ Core environment should provide object protocols/facilities for list, map, set, 
 ## PACKAGE
 
 ```yaml
-origins: strata packages | Rust crates | system/C libraries | foreign runtime packages
+origins: terrane packages | Rust crates | system/C libraries | foreign runtime packages
 use: declares dependency
 from_import: binds exported object forms via namespace/importer
 lockfile: reproducible exact graph
@@ -460,11 +460,11 @@ build_scripts: declarative metadata preferred; arbitrary scripts capability-gate
 ```toml
 package = "example.tools" # required non-empty identity
 prelude = true            # optional; defaults true
-sources = ["src/main.strata", "src/support.strata"] # required complete source set
+sources = ["src/main.trn", "src/support.trn"] # required complete source set
 ```
 - Authored manifest filename: `package.toml`; syntax is TOML; unknown fields rejected.
-- `sources`: non-empty relative `.strata` paths only; no absolute/parent paths or duplicates; stable file IDs use sorted path order.
-- A direct `.strata` CLI input is implicit package `single-file`, one unit, default prelude.
+- `sources`: non-empty relative `.trn` paths only; no absolute/parent paths or duplicates; stable file IDs use sorted path order.
+- A direct `.trn` CLI input is implicit package `single-file`, one unit, default prelude.
 - Compiler-bundled support source is copied content-addressably into generated builds and referenced only by generated-project-relative Cargo paths; no registry, network, or installation absolute path enters reproducible output. Apply the same vendoring mechanism to admitted authored third-party dependencies.
 
 - Package import does not imply runtime mutation.
@@ -478,7 +478,7 @@ sources = ["src/main.strata", "src/support.strata"] # required complete source s
 - Source name, generated Rust name, native/link symbol are independent reflected identities.
 - Inline Rust block/expression and maintained `.rs` files are first-class escape hatches with explicit safety/source mapping.
 - Generated/handwritten Rust may call each other within one Rust crate graph.
-- Rust errors/diagnostics map back to Strata spans without hiding originals.
+- Rust errors/diagnostics map back to Terrane spans without hiding originals.
 - Ejection tooling can produce maintainable generated Rust/Cargo artifacts.
 
 ## FOREIGN
@@ -516,7 +516,7 @@ Contracts:
 - Diagnostic: stable code, primary source span, labels/notes/help; originating bytes including UTF-8.
 - Generated output deterministic for compiler version, target, declared inputs.
 - No universal boxed `Value` shortcut; finite dynamic alternatives use closed representations when sound.
-- Direct native lowering only when Rust operation exactly matches complete Strata semantics.
+- Direct native lowering only when Rust operation exactly matches complete Terrane semantics.
 - Reflection exposes semantic descriptors, source/generated/native identities, compilation artifacts subject to profile.
 - Development compilation explains lowering/cost/copies/COW/ref/move/foreign transitions.
 - Cache keys include source set, compiler version, target, dependencies, import/modifier plans, build selections, relevant options.
@@ -596,7 +596,7 @@ Not version-one; no private incompatible syntax:
 
 ## AUTHORING CHECKLIST
 
-Before writing Strata:
+Before writing Terrane:
 
 1. Determine implemented subset from conformance cases, not this design.
 2. Declare namespace tiers with spaces; never slash separators.

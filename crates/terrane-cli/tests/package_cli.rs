@@ -11,17 +11,17 @@ impl TempPackage {
     fn new() -> Self {
         let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "strata-cli-package-{}-{serial}",
+            "terrane-cli-package-{}-{serial}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();
         fs::write(
             path.join("package.toml"),
-            "package = \"cli-package\"\nprelude = false\nsources = [\"support.strata\", \"main.strata\"]\n",
+            "package = \"cli-package\"\nprelude = false\nsources = [\"support.trn\", \"main.trn\"]\n",
         )
         .unwrap();
         fs::write(
-            path.join("main.strata"),
+            path.join("main.trn"),
             concat!(
                 "namespace cli app\n",
                 "from /core output import .print\n",
@@ -32,7 +32,7 @@ impl TempPackage {
         )
         .unwrap();
         fs::write(
-            path.join("support.strata"),
+            path.join("support.trn"),
             "namespace cli support\npublic .value = 1\n",
         )
         .unwrap();
@@ -49,7 +49,7 @@ impl Drop for TempPackage {
 #[test]
 fn manifest_file_and_package_directory_use_the_shared_cli_pipeline() {
     let package = TempPackage::new();
-    let executable = env!("CARGO_BIN_EXE_strata");
+    let executable = env!("CARGO_BIN_EXE_terrane");
 
     let rust = Command::new(executable)
         .args(["rust", package.0.join("package.toml").to_str().unwrap()])
@@ -61,7 +61,7 @@ fn manifest_file_and_package_directory_use_the_shared_cli_pipeline() {
         String::from_utf8_lossy(&rust.stderr)
     );
     let generated = String::from_utf8(rust.stdout).unwrap();
-    assert!(generated.contains("// Source: main.strata"));
+    assert!(generated.contains("// Source: main.trn"));
     assert!(generated.contains("// Namespace: cli app"));
 
     let run = Command::new(executable)

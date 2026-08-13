@@ -1,8 +1,8 @@
-# Strata first-version compiler plan
+# Terrane first-version compiler plan
 
 ## 1. Purpose
 
-Build the first usable Strata compiler as a source-to-Rust toolchain. The compiler must accept a deliberately bounded, coherent subset of Strata, produce readable and deterministic Rust, invoke Cargo/rustc, and return diagnostics in Strata source terms.
+Build the first usable Terrane compiler as a source-to-Rust toolchain. The compiler must accept a deliberately bounded, coherent subset of Terrane, produce readable and deterministic Rust, invoke Cargo/rustc, and return diagnostics in Terrane source terms.
 
 This plan is for an executable compiler, not another language-design prototype. Every milestone must finish with source programs that are compiled and run through the real pipeline.
 
@@ -13,10 +13,10 @@ This plan is for an executable compiler, not another language-design prototype. 
 The first version is complete when a user can:
 
 ```text
-strata check path/to/program.strata
-strata run path/to/program.strata -- program-arguments
-strata build path/to/program.strata
-strata rust path/to/program.strata
+terrane check path/to/program.trn
+terrane run path/to/program.trn -- program-arguments
+terrane build path/to/program.trn
+terrane rust path/to/program.trn
 ```
 
 and the toolchain can compile and run a small but nontrivial command-line program using:
@@ -41,10 +41,10 @@ The first version does not need classes, universal dynamic values, copy-on-write
 2. **No dependency on `demos/`.** CI must neither compile nor parse files from `demos/` unless a future, explicitly named demo-specific job is introduced.
 3. **Vertical slices before breadth.** Establish `source -> Rust -> Cargo -> executable` early, then expand the language through end-to-end slices.
 4. **One semantic path.** `check`, `run`, `build`, and `rust` share the same frontend and semantic pipeline. Commands must not grow separate parsers or validators.
-5. **No silent repair.** Invalid Strata is rejected at its source span. The compiler must not reinterpret failed syntax as a nearby construct merely to continue.
+5. **No silent repair.** Invalid Terrane is rejected at its source span. The compiler must not reinterpret failed syntax as a nearby construct merely to continue.
 6. **Deterministic output.** The same source, compiler version, target, and declared inputs produce byte-identical generated source and manifests.
 7. **Readable lowering.** Generated Rust is a public debugging surface, not opaque compiler debris.
-8. **Narrow runtime.** Statically known fixed-width scalars and functions lower directly to Rust types and calls where Rust preserves the complete Strata contract; core `int` uses the narrowest exact representation required by its adaptive semantics. The first compiler must not introduce a universal boxed `Value` as a shortcut.
+8. **Narrow runtime.** Statically known fixed-width scalars and functions lower directly to Rust types and calls where Rust preserves the complete Terrane contract; core `int` uses the narrowest exact representation required by its adaptive semantics. The first compiler must not introduce a universal boxed `Value` as a shortcut.
 
 ## 4. Proposed repository layout
 
@@ -52,11 +52,11 @@ The first version does not need classes, universal dynamic values, copy-on-write
 compiler/
   Cargo.toml
   crates/
-    strata-cli/
+    terrane-cli/
       Cargo.toml
       src/
         main.rs
-    strata-compiler/
+    terrane-compiler/
       Cargo.toml
       src/
         diagnostics.rs
@@ -87,14 +87,14 @@ compiler/
           run/
         fixtures/
 examples/
-  hello.strata
-  word-count.strata
-  build-report.strata
+  hello.trn
+  word-count.trn
+  build-report.trn
 ```
 
 The first compiler and its CLI should be implemented in Rust. This gives the project one distributable executable, exhaustive phase models, direct integration with Cargo diagnostics and any support crates, and no later frontend rewrite boundary.
 
-Use mature Rust parsing tooling rather than treating Rust as a requirement to hand-write every frontend component. Chumsky is a strong initial candidate: it supports separate character and token parsers, token-associated spans, recursive combinators, Pratt expression parsing, rich errors, and recovery. Prototype Strata's hardest lexical and grammatical boundaries with it before freezing the parser architecture. Keep Strata tokens, syntax nodes, spans, and diagnostics compiler-owned so replacing or selectively bypassing the parsing library would not change the language model.
+Use mature Rust parsing tooling rather than treating Rust as a requirement to hand-write every frontend component. Chumsky is a strong initial candidate: it supports separate character and token parsers, token-associated spans, recursive combinators, Pratt expression parsing, rich errors, and recovery. Prototype Terrane's hardest lexical and grammatical boundaries with it before freezing the parser architecture. Keep Terrane tokens, syntax nodes, spans, and diagnostics compiler-owned so replacing or selectively bypassing the parsing library would not change the language model.
 
 Do not create a general runtime crate before an implemented feature requires one. Core `int` is the first such feature: introduce a small support crate with its first semantic/lowering slice for adaptive exact integers and their normative failures. Keep other statically known values on direct Rust lowering and add support only for behavior that generated code cannot express cleanly.
 
@@ -105,7 +105,7 @@ Do not create a general runtime crate before an implemented feature requires one
 Each conformance case is a directory or manifest entry containing only the artifacts relevant to its assertion:
 
 ```text
-case.strata     # single-source input
+case.trn     # single-source input
 package.toml    # optional package manifest for multi-source cases
 case.toml       # phase, expected status, entrypoint, arguments
 stdin.txt       # optional exact input
@@ -130,7 +130,7 @@ Golden files must be reviewed output, not snapshots accepted blindly. Unstable d
 - **Lowering goldens:** readable Rust for small constructs, including exact source identity comments or map entries where applicable.
 - **Corpus scale:** expect hundreds or thousands of minimal snippets, each isolating one lowering decision and comparing canonical Rust byte for byte.
 - **Compile tests:** batch independent accepted snippets into deterministic generated crates for `cargo check`; compile cases individually when crate structure, linking, or diagnostics are part of the contract.
-- **Run tests:** purpose-built Strata programs execute and produce exact output and exit status.
+- **Run tests:** purpose-built Terrane programs execute and produce exact output and exit status.
 - **CLI integration tests:** command arguments, exit codes, output locations, and diagnostic behavior.
 - **Differential invariants:** `check` and `build` accept or reject the same source; `rust` uses the same semantic model; formatting or comments do not alter runtime behavior.
 
@@ -167,7 +167,7 @@ The parser must recover at statement and dedent boundaries so one error does not
 
 ### 6.3 Names
 
-- Preserve exact Strata spelling as symbol identity.
+- Preserve exact Terrane spelling as symbol identity.
 - Maintain ordinary names and object-form names as distinct lookup views.
 - Encode Rust identifiers with one deterministic, injective algorithm shared by declarations, references, source maps, and tests.
 - Never normalize punctuation away: `foo+bar`, `foobar`, and `fooplusbar` remain distinct.
@@ -195,7 +195,7 @@ Lower the semantic model to a small Rust-oriented IR before rendering text. The 
 
 Deliver:
 
-- Rust workspace, `strata` CLI executable, and compiler library;
+- Rust workspace, `terrane` CLI executable, and compiler library;
 - compiler version reporting and structured exit codes;
 - isolated temporary/build directories;
 - conformance harness supporting accept, reject, Rust golden, compile, and run cases;
@@ -206,14 +206,14 @@ Deliver:
 End-to-end proof:
 
 ```text
-strata rust tests/conformance/run/hello/case.strata
-strata build tests/conformance/run/hello/case.strata
+terrane rust tests/conformance/run/hello/case.trn
+terrane build tests/conformance/run/hello/case.trn
 <generated executable>
 ```
 
 At this milestone the frontend may support only the exact constructs needed by `hello`, but the source must travel through the real token, syntax, semantic, lowering, Cargo, and execution boundaries. Do not implement `hello` by source-text substitution.
 
-Exit criterion: one purpose-built Strata file produces a real executable and exact expected output; malformed input fails through the diagnostic framework.
+Exit criterion: one purpose-built Terrane file produces a real executable and exact expected output; malformed input fails through the diagnostic framework.
 
 Implementation note: milestone zero names the intended pipeline boundaries, but its bootstrap frontend is deliberately not yet structurally separated. Its `lex` stage records logical lines rather than tokens, import and binding forms are recognized as exact supported lines, unresolved-object detection remains parser-local, and the current resolve/lower boundaries mostly transfer fields. Milestone one therefore builds the real tokenizing lexer rather than extending a complete lexer, and later milestones make resolution and typed lowering substantive.
 
@@ -392,7 +392,7 @@ loading instead accumulates its independently discoverable diagnostics.
 
 Deliver:
 
-- direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, the explicit widths `float32` and `float64`, `string`, and `none`, where the Rust representation preserves the complete Strata contract;
+- direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, the explicit widths `float32` and `float64`, `string`, and `none`, where the Rust representation preserves the complete Terrane contract;
 - core `int` as an exact signed integer with adaptive `i64`, `i128`, and arbitrary-precision tiers, including normalization to the smallest exact tier;
 - the initial integer support component and lowering hooks for checked tier promotion, exact wide operations, normalization, and capability rejection where arbitrary-precision promotion is unavailable;
 - explicit `/core types` resolution for fixed-width descriptor objects: programs import dot-object descriptors and bind ordinary type names, while the exact default prelude remains unchanged;
@@ -425,7 +425,7 @@ print; message
 print; completed-count
 ```
 
-Exit criterion: semantic and lowering conformance for a program that exercises the same contracts as `fizz-buzz` and `build-report` proves the specified integer, canonical scalar text-display, type-descriptor, call, evaluation-order, and control-flow behavior; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, display, descriptor-resolution, and capability mistakes fail at Strata source spans. If the text-display protocol is not yet implemented when milestone 4 begins, the initial executable fixture may print literal strings only, but integer-rendering conformance is required before the milestone exits.
+Exit criterion: semantic and lowering conformance for a program that exercises the same contracts as `fizz-buzz` and `build-report` proves the specified integer, canonical scalar text-display, type-descriptor, call, evaluation-order, and control-flow behavior; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, display, descriptor-resolution, and capability mistakes fail at Terrane source spans. If the text-display protocol is not yet implemented when milestone 4 begins, the initial executable fixture may print literal strings only, but integer-rendering conformance is required before the milestone exits.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -441,7 +441,7 @@ Deliver:
 - deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
 - `cargo check`, build, and run process wrappers with captured structured output;
-- `strata rust` output or path display suitable for inspection, clearly distinguishing authored generated modules from vendored support source.
+- `terrane rust` output or path display suitable for inspection, clearly distinguishing authored generated modules from vendored support source.
 
 Generated artifacts should be organized under a project-local ignored directory or a user cache, never mixed with authored source. A `--keep-generated` or stable development path may expose them intentionally.
 
@@ -453,15 +453,15 @@ Deliver:
 
 - basic source associations from semantic nodes to generated Rust spans;
 - JSON-formatted Cargo/rustc diagnostic ingestion;
-- projection of backend errors to the most relevant Strata span;
+- projection of backend errors to the most relevant Terrane span;
 - raw Rust diagnostic retained as a note or opt-in detail;
 - stable diagnostic codes and CLI rendering with color policy;
-- distinction among source errors, uncaught source-language runtime failures, compiler defects, Rust toolchain failures, and ordinary user-program exits; normative runtime failures render Strata namespace/function frames and source spans, retain generated Rust frames only as expandable detail, and never surface as raw Rust panics or backtraces;
+- distinction among source errors, uncaught source-language runtime failures, compiler defects, Rust toolchain failures, and ordinary user-program exits; normative runtime failures render Terrane namespace/function frames and source spans, retain generated Rust frames only as expandable detail, and never surface as raw Rust panics or backtraces;
 - internal-error reports that preserve generated artifacts and reproduction metadata.
 
 The frontend should prevent ordinary type/name errors from reaching rustc. Backend translation exists for missed constraints, target failures, generated-code defects, and handwritten/toolchain boundaries—not as a substitute for semantic analysis.
 
-Exit criterion: at least one deliberately induced backend error is mapped to its Strata source location, and raw rustc information remains available.
+Exit criterion: at least one deliberately induced backend error is mapped to its Terrane source location, and raw rustc information remains available.
 
 ### Milestone 7 — First-version hardening and release gate
 
@@ -486,16 +486,16 @@ Exit criterion: the clean-checkout release scenario below passes on supported pl
 The release pipeline must prove, from a clean checkout:
 
 1. build the Rust compiler workspace;
-2. report `strata --version`;
+2. report `terrane --version`;
 3. run unit and conformance tests;
 4. verify rejected fixtures and diagnostic goldens;
 5. compile every accepted compile fixture with Cargo;
 6. execute every run fixture and compare exact stdout, stderr, and exit code;
 7. build every file under `examples/`;
-8. run `strata rust` twice for selected cases and compare generated artifacts byte-for-byte;
+8. run `terrane rust` twice for selected cases and compare generated artifacts byte-for-byte;
 9. verify no test enumerated, parsed, or built anything under `demos/`;
-10. package the `strata` executable and install that artifact into a second clean environment;
-11. compile and run `examples/build-report.strata` using only the installed artifact and Rust toolchain prerequisites.
+10. package the `terrane` executable and install that artifact into a second clean environment;
+11. compile and run `examples/build-report.trn` using only the installed artifact and Rust toolchain prerequisites.
 
 ## 9. Initial feature boundary
 
@@ -529,7 +529,7 @@ The release pipeline must prove, from a clean checkout:
 - async/concurrency;
 - build-time selection, labels, and `goto` unless needed before systems profiles;
 - `no_std`, embedded, firmware, and kernel compilation;
-- parsing or compiling `demos/fork.strata` as an acceptance goal.
+- parsing or compiling `demos/fork.trn` as an acceptance goal.
 
 Deferral means “diagnose as unsupported,” not “leave behavior accidental.”
 
@@ -556,7 +556,7 @@ Resolve these through small conformance branches before their dependent mileston
 - whether the selected collection subset needs facilities beyond the already-required integer support component;
 - representation of finite dynamic alternatives in generated Rust;
 - generated module boundaries for multiple namespaces in one package;
-- source-map encoding between Strata byte spans and generated Rust spans;
+- source-map encoding between Terrane byte spans and generated Rust spans;
 - manifest location and deterministic discovery for multi-unit projects.
 
 Each decision should leave behind executable accepted/rejected cases. Do not use `demos/` to settle these questions because their surrounding unsupported constructs would confound the result.
@@ -565,13 +565,13 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 1. Create the Rust workspace, CLI crate, compiler crate, and diagnostic model.
 2. Define the conformance case manifest and test runner.
-3. Add a tiny authored `tests/conformance/run/hello/case.strata` fixture.
+3. Add a tiny authored `tests/conformance/run/hello/case.trn` fixture.
 4. Implement source files, spans, tokens, and indentation lexing for that fixture.
 5. Implement the minimal lossless tree and semantic AST.
 6. Parse namespace, import/binding, `function main`, string value, and invocation.
 7. Resolve a compiler-owned `.print` object and its explicit ordinary binding.
 8. Lower the program through a Rust IR into a generated Cargo binary.
-9. Make `strata rust`, `build`, `run`, and `check` use that shared pipeline.
+9. Make `terrane rust`, `build`, `run`, and `check` use that shared pipeline.
 10. Add malformed indentation, unterminated string, unresolved object, and wrong-call rejected cases.
 11. Expand lexer conformance around identifier/operator attachment before adding arithmetic.
 12. Proceed milestone by milestone, adding real programs only when every construct they contain is supported.
@@ -582,7 +582,7 @@ The first-version compiler is done only when:
 
 - its supported subset is explicit and executable;
 - accepted programs are checked, lowered, compiled, and run through one pipeline;
-- rejected programs fail at the correct Strata spans with stable diagnostics;
+- rejected programs fail at the correct Terrane spans with stable diagnostics;
 - generated Rust and Cargo files are deterministic and readable;
 - a nontrivial purpose-built CLI program builds from a clean installed compiler;
 - tests cover parsing, semantics, lowering, Cargo integration, runtime behavior, and backend diagnostic projection;

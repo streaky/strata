@@ -198,7 +198,7 @@ fn parse_source_paths(
                     errors.push(manifest_error(
                         manifest_path,
                         text,
-                        format!("source `{value}` must be a relative `.strata` path"),
+                        format!("source `{value}` must be a relative `.trn` path"),
                         Some(value),
                     ));
                 } else if !paths.insert(PathBuf::from(value)) {
@@ -278,7 +278,7 @@ fn valid_relative_source(value: &str) -> bool {
     !value.is_empty()
         && path
             .extension()
-            .is_some_and(|extension| extension == "strata")
+            .is_some_and(|extension| extension == "trn")
         && !path.is_absolute()
         && !path
             .components()

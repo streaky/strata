@@ -48,7 +48,7 @@ impl std::ops::Deref for CompilationFailure {
     }
 }
 
-/// Compiles one Strata source file as an implicit, stable-identity package.
+/// Compiles one Terrane source file as an implicit, stable-identity package.
 ///
 /// # Errors
 ///
@@ -495,7 +495,7 @@ fn lower(program: &Program) -> RustIr<'_> {
 
 fn emit_rust(ir: &RustIr<'_>, source: &SourceFile) -> String {
     format!(
-        "// Generated deterministically by Strata {}.\n// Source: {}\n// Namespace: {}\nfn main() {{\n    println!(\"{{}}\", {:?});\n}}\n",
+        "// Generated deterministically by Terrane {}.\n// Source: {}\n// Namespace: {}\nfn main() {{\n    println!(\"{{}}\", {:?});\n}}\n",
         crate::VERSION,
         display_path(source.path()),
         ir.namespace,

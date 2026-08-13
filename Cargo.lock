@@ -87,20 +87,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "strata-cli"
-version = "0.1.0"
-dependencies = [
- "strata-compiler",
-]
-
-[[package]]
-name = "strata-compiler"
-version = "0.1.0"
-dependencies = [
- "toml",
-]
-
-[[package]]
 name = "syn"
 version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -109,6 +95,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "terrane-cli"
+version = "0.1.0"
+dependencies = [
+ "terrane-compiler",
+]
+
+[[package]]
+name = "terrane-compiler"
+version = "0.1.0"
+dependencies = [
+ "toml",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/strata-cli", "crates/strata-compiler"]
+members = ["crates/terrane-cli", "crates/terrane-compiler"]
 resolver = "2"
 
 [workspace.package]
