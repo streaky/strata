@@ -1,12 +1,23 @@
 {
   "name": "terrane-language",
   "displayName": "Terrane Language",
-  "description": "Syntax highlighting and basic editor support for Terrane",
+  "description": "Compiler-backed language support for Terrane",
   "version": "0.0.1",
   "publisher": "terrane",
   "license": "UNLICENSED",
+  "main": "./extension.js",
   "engines": {
     "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onLanguage:terrane"
+  ],
+  "scripts": {
+    "package-server": "node ./scripts/package-server.js",
+    "check": "node --check extension.js && node --check scripts/package-server.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   },
   "categories": [
     "Programming Languages"
@@ -25,12 +36,15 @@
         "configuration": "./language-configuration.json"
       }
     ],
-    "grammars": [
-      {
-        "language": "terrane",
-        "scopeName": "source.trn",
-        "path": "./syntaxes/terrane.tmLanguage.json"
+    "configuration": {
+      "title": "Terrane",
+      "properties": {
+        "terrane.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a Terrane language server executable. Empty uses the binary bundled with the extension."
+        }
       }
-    ]
+    }
   }
 }
