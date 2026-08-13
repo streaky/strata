@@ -73,6 +73,15 @@ fn expression_tree_respects_precedence_and_postfix_binding() {
 }
 
 #[test]
+fn parses_both_postfix_increment_and_decrement() {
+    let tree = parse_source("left++\nright--\n");
+    assert_eq!(tree.root.children.len(), 2);
+    for expression in &tree.root.children {
+        assert_eq!(expression.kind, SyntaxKind::PostfixExpression);
+    }
+}
+
+#[test]
 fn bare_names_are_expression_statements() {
     let tree = parse_source("thing\nfunction main\n  thing\n");
     assert_eq!(tree.root.children[0].kind, SyntaxKind::Name);
