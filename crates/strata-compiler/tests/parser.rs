@@ -108,7 +108,9 @@ fn preserves_type_shapes_without_keywording_core_names() {
 
 #[test]
 fn distinguishes_identity_from_type_membership() {
-    let tree = parse_source("same = value is a\nmember = value is a int\n");
+    let tree = parse_source(
+        "same = value is a\nmember = value is a int\ncomputed = count + 1 is a int\nready = value is a int and enabled\ngrouped = value is a (int | none)\n",
+    );
     assert_eq!(
         tree.root.children[0].children.last().unwrap().kind,
         SyntaxKind::BinaryExpression
@@ -117,6 +119,18 @@ fn distinguishes_identity_from_type_membership() {
         tree.root.children[1].children.last().unwrap().kind,
         SyntaxKind::TypeMembershipExpression
     );
+    assert_eq!(
+        tree.root.children[2].children.last().unwrap().kind,
+        SyntaxKind::TypeMembershipExpression
+    );
+    assert_eq!(
+        tree.root.children[3].children.last().unwrap().kind,
+        SyntaxKind::BinaryExpression
+    );
+    assert!(contains(
+        tree.root.children[4].children.last().unwrap(),
+        SyntaxKind::GroupExpression
+    ));
 }
 
 #[test]

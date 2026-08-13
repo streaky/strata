@@ -429,22 +429,23 @@ impl Parser<'_> {
     fn parse_expression(&mut self, minimum: u8, allow_call: bool) -> SyntaxNode {
         let start = self.position;
         let mut left = self.parse_prefix(allow_call);
-        if minimum <= 3
-            && self.at_text("is")
-            && self.peek_text(1) == Some("a")
-            && self.peek_kind(2) == Some(TokenKind::Identifier)
-        {
-            self.bump();
-            self.bump();
-            let type_expression = self.parse_type_expression();
-            return self.node(
-                SyntaxKind::TypeMembershipExpression,
-                start,
-                self.position,
-                vec![left, type_expression],
-            );
-        }
         loop {
+            if minimum <= 3
+                && self.at_text("is")
+                && self.peek_text(1) == Some("a")
+                && self.type_starts_at(2)
+            {
+                self.bump();
+                self.bump();
+                let type_expression = self.parse_type_expression();
+                left = self.node(
+                    SyntaxKind::TypeMembershipExpression,
+                    start,
+                    self.position,
+                    vec![left, type_expression],
+                );
+                continue;
+            }
             if let Some(precedence) = self.binary_precedence() {
                 if precedence < minimum {
                     break;
@@ -872,6 +873,12 @@ impl Parser<'_> {
         self.tokens
             .get(self.position + offset)
             .map(|token| token.text.as_str())
+    }
+    fn type_starts_at(&self, offset: usize) -> bool {
+        matches!(
+            self.peek_kind(offset),
+            Some(TokenKind::Identifier | TokenKind::OpenParen)
+        )
     }
     fn current(&self) -> &Token {
         &self.tokens[self.position.min(self.tokens.len() - 1)]
