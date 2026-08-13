@@ -128,9 +128,59 @@ fn deferred_spellings_receive_canonical_fixes() {
 
 #[test]
 fn normalized_tree_retains_tokens_and_trivia() {
-    let normalized = parse_source("value = 1 # note\n").normalized();
-    assert!(normalized.contains("tokens\n"));
-    assert!(normalized.contains("Number"));
-    assert!(normalized.contains("trivia\n"));
-    assert!(normalized.contains("LineComment"));
+    assert_eq!(
+        parse_source("value = 1 # note\n").normalized(),
+        concat!(
+            "CompilationUnit 0..17\n",
+            "  Binding 0..9\n",
+            "    Name 0..5\n",
+            "    Literal 8..9\n",
+            "tokens\n",
+            "  Identifier 0..5 \"value\"\n",
+            "  Assign 6..7 \"=\"\n",
+            "  Number 8..9 \"1\"\n",
+            "  Newline 16..17 \"\\n\"\n",
+            "  Eof 17..17 \"\"\n",
+            "trivia\n",
+            "  Whitespace 5..6 \" \"\n",
+            "  Whitespace 7..8 \" \"\n",
+            "  Whitespace 9..10 \" \"\n",
+            "  LineComment 10..16 \"# note\"\n",
+        )
+    );
+}
+
+#[test]
+fn parses_structural_import_forms_and_named_arguments() {
+    let tree = parse_source(
+        "from /core output import .print, .debug as .trace\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
+    );
+    assert!(contains(&tree.root, SyntaxKind::ImportDeclaration));
+    assert!(contains(&tree.root, SyntaxKind::ImportSelection));
+    assert!(contains(&tree.root, SyntaxKind::CallExpression));
+    assert_eq!(
+        tree.root.children[2].children.last().unwrap().children[1]
+            .children
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn rejects_malformed_declarations_and_reserved_constructs() {
+    rejected("namespace\n", "S1002");
+    rejected("value =\n", "S1004");
+    rejected("function main; ,\n", "S1007");
+    rejected("from import .thing\n", "S1026");
+    rejected("import .thing\n", "S1027");
+    rejected("class thing\n", "S1090");
+}
+
+#[test]
+fn rejects_invalid_postfix_and_control_flow_boundaries() {
+    rejected("value = thing.\n", "S1014");
+    rejected("value = values[\n", "S1019");
+    rejected("break value\n", "S1011");
+    rejected("for item values\n", "S1009");
+    rejected("if\n", "S1019");
 }
