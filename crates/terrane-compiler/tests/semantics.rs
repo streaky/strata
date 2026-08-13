@@ -825,6 +825,55 @@ fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
     );
 }
 
+#[test]
+fn checks_control_flow_and_records_unreachable_statements() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "function choose bool; ready bool\n",
+                "  if ready\n",
+                "    return true\n",
+                "  else\n",
+                "    return false\n",
+                "  unreachable = 1\n",
+                "function count\n",
+                "  value int = 1\n",
+                "  while true\n",
+                "    value++\n",
+                "    break\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    assert_eq!(analyzed.units[0].unreachable_spans.len(), 1);
+}
+
+#[test]
+fn rejects_invalid_control_flow_contracts() {
+    for (source, code) in [
+        (
+            "namespace app\nfunction choose bool; ready bool\n  if ready\n    return true\n",
+            "T0015",
+        ),
+        (
+            "namespace app\nfunction main\n  if 1\n    return\n",
+            "T0014",
+        ),
+        ("namespace app\nfunction main\n  break\n", "T0014"),
+        (
+            "namespace app\nfunction main\n  value string = 'x'\n  value++\n",
+            "T0014",
+        ),
+        ("namespace app\nfunction choose bool\n  return 1\n", "T0015"),
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, code, "{source}");
+    }
+}
+
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
 }

@@ -102,6 +102,7 @@ pub struct SemanticUnit {
     pub scopes: Vec<LexicalScope>,
     pub typed_bindings: Vec<TypedBinding>,
     pub functions: Vec<FunctionContract>,
+    pub unreachable_spans: Vec<Span>,
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +158,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
+            unreachable_spans: Vec::new(),
         });
     }
 
@@ -223,6 +225,10 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     }
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
+    let unreachable_units = validate_control_flow(&semantic)?;
+    for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
+        unit.unreachable_spans = unreachable_spans;
+    }
     Ok(semantic)
 }
 
@@ -1665,6 +1671,269 @@ fn validate_assigned_reads(
         validate_assigned_reads(unit, child, declared, assigned)?;
     }
     Ok(())
+}
+
+fn validate_control_flow(package: &SemanticPackage) -> Result<Vec<Vec<Span>>, SemanticFailure> {
+    let mut unreachable_units = Vec::with_capacity(package.units.len());
+    for unit in &package.units {
+        let mut unreachable = Vec::new();
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let Some(name_node) = function
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            else {
+                continue;
+            };
+            let Some(contract) = unit
+                .functions
+                .iter()
+                .find(|contract| contract.name == node_text(&unit.source, name_node))
+            else {
+                continue;
+            };
+            let Some(block) = function
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+            else {
+                continue;
+            };
+            let mut bindings = unit.typed_bindings.clone();
+            bindings.extend(contract.parameters.iter().filter_map(|parameter| {
+                parameter.value_type.map(|value_type| TypedBinding {
+                    name: parameter.name.clone(),
+                    span: parameter.span,
+                    value_type: ValueType::Scalar(value_type),
+                })
+            }));
+            let falls_through =
+                validate_flow_block(unit, block, contract, &bindings, 0, &mut unreachable)?;
+            if contract.return_type.is_some() && falls_through {
+                return Err(failure(
+                    &unit.source,
+                    "T0015",
+                    format!(
+                        "function `{}` may finish without returning a value",
+                        contract.name
+                    ),
+                    function.span,
+                ));
+            }
+        }
+        unreachable_units.push(unreachable);
+    }
+    Ok(unreachable_units)
+}
+
+fn validate_flow_block(
+    unit: &SemanticUnit,
+    block: &SyntaxNode,
+    contract: &FunctionContract,
+    bindings: &[TypedBinding],
+    loop_depth: usize,
+    unreachable: &mut Vec<Span>,
+) -> Result<bool, SemanticFailure> {
+    let mut falls_through = true;
+    for statement in &block.children {
+        if !falls_through {
+            unreachable.push(statement.span);
+            continue;
+        }
+        falls_through =
+            validate_flow_statement(unit, statement, contract, bindings, loop_depth, unreachable)?;
+    }
+    Ok(falls_through)
+}
+
+fn validate_flow_statement(
+    unit: &SemanticUnit,
+    statement: &SyntaxNode,
+    contract: &FunctionContract,
+    bindings: &[TypedBinding],
+    loop_depth: usize,
+    unreachable: &mut Vec<Span>,
+) -> Result<bool, SemanticFailure> {
+    match statement.kind {
+        SyntaxKind::ReturnStatement => {
+            validate_return(unit, statement, contract, bindings)?;
+            Ok(false)
+        }
+        SyntaxKind::BreakStatement | SyntaxKind::ContinueStatement => {
+            if loop_depth == 0 {
+                let keyword = node_text(&unit.source, statement);
+                return Err(failure(
+                    &unit.source,
+                    "T0014",
+                    format!("`{keyword}` is only valid inside a loop"),
+                    statement.span,
+                ));
+            }
+            Ok(false)
+        }
+        SyntaxKind::IfStatement => {
+            validate_if_flow(unit, statement, contract, bindings, loop_depth, unreachable)
+        }
+        SyntaxKind::WhileStatement => {
+            if let Some(condition) = statement.children.first() {
+                validate_bool_condition(unit, condition, bindings)?;
+            }
+            if let Some(block) = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+            {
+                validate_flow_block(unit, block, contract, bindings, loop_depth + 1, unreachable)?;
+            }
+            Ok(true)
+        }
+        SyntaxKind::ForStatement => {
+            if statement.children.len() == 4 {
+                validate_bool_condition(unit, &statement.children[1], bindings)?;
+            }
+            if let Some(block) = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+            {
+                validate_flow_block(unit, block, contract, bindings, loop_depth + 1, unreachable)?;
+            }
+            Ok(true)
+        }
+        SyntaxKind::PostfixExpression => {
+            let Some(operand) = statement.children.first() else {
+                return Ok(true);
+            };
+            if operand.kind != SyntaxKind::Name
+                || !matches!(
+                    infer_value_type(unit, operand, &BTreeMap::new(), bindings)?,
+                    Some(ValueType::Scalar(ty)) if ty.is_integer()
+                )
+            {
+                return Err(failure(
+                    &unit.source,
+                    "T0014",
+                    "postfix update requires an assignable integer binding",
+                    statement.span,
+                ));
+            }
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
+fn validate_bool_condition(
+    unit: &SemanticUnit,
+    condition: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    if matches!(
+        infer_value_type(unit, condition, &BTreeMap::new(), bindings)?,
+        Some(ValueType::Scalar(ScalarType::Bool))
+    ) {
+        return Ok(());
+    }
+    Err(failure(
+        &unit.source,
+        "T0014",
+        "control-flow condition must have type `bool`",
+        condition.span,
+    ))
+}
+
+fn validate_if_flow(
+    unit: &SemanticUnit,
+    statement: &SyntaxNode,
+    contract: &FunctionContract,
+    bindings: &[TypedBinding],
+    loop_depth: usize,
+    unreachable: &mut Vec<Span>,
+) -> Result<bool, SemanticFailure> {
+    let condition = statement.children.first().ok_or_else(|| {
+        failure(
+            &unit.source,
+            "T0014",
+            "an `if` statement requires a condition",
+            statement.span,
+        )
+    })?;
+    validate_bool_condition(unit, condition, bindings)?;
+    let mut branch_falls_through = Vec::new();
+    let mut has_else = false;
+    for branch in statement.children.iter().skip(1) {
+        let block = if branch.kind == SyntaxKind::Block {
+            Some(branch)
+        } else if branch.kind == SyntaxKind::ElseClause {
+            let mut children = branch.children.iter();
+            let first = children.next();
+            if first.is_some_and(|child| child.kind == SyntaxKind::Block) {
+                has_else = true;
+                first
+            } else {
+                if let Some(condition) = first {
+                    validate_bool_condition(unit, condition, bindings)?;
+                }
+                children.find(|child| child.kind == SyntaxKind::Block)
+            }
+        } else {
+            None
+        };
+        if let Some(block) = block {
+            branch_falls_through.push(validate_flow_block(
+                unit,
+                block,
+                contract,
+                bindings,
+                loop_depth,
+                unreachable,
+            )?);
+        }
+    }
+    Ok(!has_else || branch_falls_through.into_iter().any(|branch| branch))
+}
+
+fn validate_return(
+    unit: &SemanticUnit,
+    statement: &SyntaxNode,
+    contract: &FunctionContract,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    let value = statement.children.first();
+    match (contract.return_type, value) {
+        (None, None) => Ok(()),
+        (None, Some(value)) => Err(failure(
+            &unit.source,
+            "T0015",
+            format!("function `{}` does not return a value", contract.name),
+            value.span,
+        )),
+        (Some(expected), None) => Err(failure(
+            &unit.source,
+            "T0015",
+            format!("function `{}` must return `{expected}`", contract.name),
+            statement.span,
+        )),
+        (Some(expected), Some(value)) => {
+            let actual = infer_value_type(unit, value, &BTreeMap::new(), bindings)?;
+            if actual == Some(ValueType::Scalar(expected)) {
+                Ok(())
+            } else {
+                Err(failure(
+                    &unit.source,
+                    "T0015",
+                    format!("function `{}` must return `{expected}`", contract.name),
+                    value.span,
+                ))
+            }
+        }
+    }
 }
 
 fn populate_imports(
