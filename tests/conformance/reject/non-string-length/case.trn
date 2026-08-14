@@ -1,0 +1,4 @@
+namespace non-string-length
+function main
+  value = 42
+  length = value.length

@@ -1,0 +1,13 @@
+namespace descriptor-semantics
+from /core output import .print
+from /core types import .int8
+print = .print
+function accepts bool; item int
+  print; item
+  return item is a int
+function main
+  byte = .int8
+  other-byte = .int8
+  print; (accepts; 1)
+  print; (byte is byte)
+  print; (byte is other-byte)
