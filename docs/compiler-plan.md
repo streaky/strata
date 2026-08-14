@@ -427,6 +427,18 @@ print; completed-count
 
 Exit criterion: semantic and lowering conformance for a program that exercises the same contracts as `fizz-buzz` and `build-report` proves the specified integer, canonical scalar text-display, type-descriptor, call, evaluation-order, and control-flow behavior; generated crates compile and run through the existing pipeline, while plausible type, call, definite-assignment, arithmetic-failure, shift/bitwise, display, descriptor-resolution, and capability mistakes fail at Terrane source spans. If the text-display protocol is not yet implemented when milestone 4 begins, the initial executable fixture may print literal strings only, but integer-rendering conformance is required before the milestone exits.
 
+Implemented evidence: the compiler now resolves compiler-owned and imported scalar
+descriptors, infers and checks typed bindings, parameters, defaults, returns, calls,
+operators, assignments, branches, loops, updates, and finite descriptor alternatives.
+Native fixed-width values lower directly to Rust where their contracts agree; adaptive
+`int` operations use the dedicated exact-integer support crate, and deterministic
+source-oriented failures cover unsupported or invalid arithmetic and coercion paths.
+Canonical scalar display, grapheme-counted string length, descriptor identity, and the
+supported collection iteration slice are checked before lowering. Manifest-driven
+accepted and rejected cases cover the plausible semantic boundaries named above, while
+the `fizz-buzz`, `build-report`, and grouped-precedence run cases compile generated
+crates with warnings denied and verify their observable output.
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:
