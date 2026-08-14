@@ -447,6 +447,39 @@ macro_rules! fixed_width_arithmetic {
 
 fixed_width_arithmetic!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
 
+/// Applies Terrane's checked default addition policy to a fixed-width integer.
+pub fn fixed_addition<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
+    left.checked_addition(right)
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
+/// Applies Terrane's checked default subtraction policy to a fixed-width integer.
+pub fn fixed_subtraction<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
+    left.checked_subtraction(right)
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
+/// Applies Terrane's checked default multiplication policy to a fixed-width integer.
+pub fn fixed_multiplication<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<T, ArithmeticError> {
+    left.checked_multiplication(right)
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
+/// Applies Terrane's checked default division policy to a fixed-width integer.
+pub fn fixed_division<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
+    left.checked_division(right)?
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
+/// Applies Terrane's checked default remainder policy to a fixed-width integer.
+pub fn fixed_remainder<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
+    left.checked_remainder(right)?
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
 /// Converts an integer value to the exact representation used by coercion policies.
 pub trait IntegerSource {
     fn integer_value(&self) -> BigInt;

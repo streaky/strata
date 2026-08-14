@@ -531,6 +531,24 @@ impl Emitter<'_> {
         if self.is_adaptive_expression(left) {
             return self.adaptive_binary(node);
         }
+        if matches!(
+            self.value_type(left),
+            Some(ValueType::Scalar(value_type))
+                if value_type.is_integer() && value_type != ScalarType::Int
+        ) && let Some(operation) = match source_operator {
+            "+" => Some("addition"),
+            "-" => Some("subtraction"),
+            "*" => Some("multiplication"),
+            "/" => Some("division"),
+            "%" => Some("remainder"),
+            _ => None,
+        } {
+            return format!(
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({}, {}))",
+                self.expression(left),
+                self.expression(right)
+            );
+        }
         let operator = match source_operator {
             "and" => "&&",
             "or" => "||",

@@ -361,3 +361,24 @@ terrane_string_support::length(&text) as i128);"
             .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
     );
 }
+
+#[test]
+fn lowers_fixed_width_arithmetic_through_checked_runtime_operations() {
+    let source = concat!(
+        "namespace fixed\n",
+        "from /core types import .int8\n",
+        "function main\n",
+        "  left int8 = 120\n",
+        "  right int8 = 10\n",
+        "  sum int8 = left + right\n",
+        "  quotient int8 = left / right\n",
+    );
+    let compilation = terrane_compiler::compile("fixed.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains(
+        "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_addition(left, right))"
+    ));
+    assert!(compilation.rust.contains(
+        "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_division(left, right))"
+    ));
+}

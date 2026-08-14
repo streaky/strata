@@ -124,6 +124,19 @@ fn fixed_width_operation_families_pin_overflow_modes() {
 }
 
 #[test]
+fn fixed_width_default_operations_report_failures() {
+    assert_eq!(
+        terrane_int_support::fixed_addition(i8::MAX, 1),
+        Err(ArithmeticError::ArithmeticOverflow)
+    );
+    assert_eq!(
+        terrane_int_support::fixed_division(1_i8, 0),
+        Err(ArithmeticError::DivisionByZero)
+    );
+    assert_eq!(terrane_int_support::fixed_remainder(7_u8, 4), Ok(3));
+}
+
+#[test]
 fn integer_coercion_families_cover_signed_unsigned_and_adaptive_values() {
     assert_eq!(coerce::<i8>(&127_i128), Ok(127));
     assert_eq!(
