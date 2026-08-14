@@ -134,6 +134,19 @@ fn fixed_width_default_operations_report_failures() {
         Err(ArithmeticError::DivisionByZero)
     );
     assert_eq!(terrane_int_support::fixed_remainder(7_u8, 4), Ok(3));
+    assert_eq!(terrane_int_support::fixed_shift_left(3_i8, &2_i8), Ok(12));
+    assert_eq!(
+        terrane_int_support::fixed_shift_left(120_i8, &1_i8),
+        Err(ArithmeticError::ArithmeticOverflow)
+    );
+    assert_eq!(
+        terrane_int_support::fixed_shift_right(1_u8, &8_u8),
+        Err(ArithmeticError::ShiftCountTooLarge)
+    );
+    assert_eq!(
+        terrane_int_support::fixed_shift_left(1_i8, &-1_i8),
+        Err(ArithmeticError::NegativeShiftCount)
+    );
 }
 
 #[test]

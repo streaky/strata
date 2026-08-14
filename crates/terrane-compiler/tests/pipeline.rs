@@ -372,6 +372,7 @@ fn lowers_fixed_width_arithmetic_through_checked_runtime_operations() {
         "  right int8 = 10\n",
         "  sum int8 = left + right\n",
         "  quotient int8 = left / right\n",
+        "  shifted int8 = left << right\n",
     );
     let compilation = terrane_compiler::compile("fixed.trn", source.to_owned()).unwrap();
 
@@ -380,5 +381,8 @@ fn lowers_fixed_width_arithmetic_through_checked_runtime_operations() {
     ));
     assert!(compilation.rust.contains(
         "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_division(left, right))"
+    ));
+    assert!(compilation.rust.contains(
+        "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_shift_left(left, &right))"
     ));
 }

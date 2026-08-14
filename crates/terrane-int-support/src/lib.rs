@@ -400,6 +400,8 @@ pub trait FixedWidthArithmetic: Sized + Copy {
     /// # Errors
     /// Returns division by zero when `rhs` is zero.
     fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError>;
+    fn checked_left_shift(self, count: u32) -> Option<Self>;
+    fn checked_right_shift(self, count: u32) -> Option<Self>;
 }
 
 macro_rules! fixed_width_arithmetic {
@@ -441,6 +443,11 @@ macro_rules! fixed_width_arithmetic {
             fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
                 if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_rem(rhs)) }
             }
+            fn checked_left_shift(self, count: u32) -> Option<Self> {
+                self.checked_shl(count)
+                    .filter(|shifted| shifted.checked_shr(count) == Some(self))
+            }
+            fn checked_right_shift(self, count: u32) -> Option<Self> { self.checked_shr(count) }
         }
     )+};
 }
@@ -480,6 +487,26 @@ pub fn fixed_remainder<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, 
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
+/// Applies Terrane's checked default left-shift policy to a fixed-width integer.
+pub fn fixed_shift_left<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Result<T, ArithmeticError> {
+    let count = fixed_shift_count(right)?;
+    left.checked_left_shift(count)
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+
+/// Applies Terrane's checked default right-shift policy to a fixed-width integer.
+pub fn fixed_shift_right<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Result<T, ArithmeticError> {
+    let count = fixed_shift_count(right)?;
+    left.checked_right_shift(count)
+        .ok_or(ArithmeticError::ShiftCountTooLarge)
+}
+
 /// Converts an integer value to the exact representation used by coercion policies.
 pub trait IntegerSource {
     fn integer_value(&self) -> BigInt;
@@ -502,6 +529,14 @@ macro_rules! integer_sources {
 }
 
 integer_sources!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+
+fn fixed_shift_count(value: &impl IntegerSource) -> Result<u32, ArithmeticError> {
+    let value = value.integer_value();
+    if value < BigInt::from(0_u8) {
+        return Err(ArithmeticError::NegativeShiftCount);
+    }
+    value.to_u32().ok_or(ArithmeticError::ShiftCountTooLarge)
+}
 
 /// Destination contract for explicit integer coercions.
 pub trait IntegerDestination: Sized {

@@ -541,12 +541,19 @@ impl Emitter<'_> {
             "*" => Some("multiplication"),
             "/" => Some("division"),
             "%" => Some("remainder"),
+            "<<" => Some("shift_left"),
+            ">>" => Some("shift_right"),
             _ => None,
         } {
+            let right = self.expression(right);
+            let right = if matches!(source_operator, "<<" | ">>") {
+                format!("&{right}")
+            } else {
+                right
+            };
             return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({}, {}))",
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({}, {right}))",
                 self.expression(left),
-                self.expression(right)
             );
         }
         let operator = match source_operator {
