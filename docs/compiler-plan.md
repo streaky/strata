@@ -435,12 +435,13 @@ shift operations; adaptive `int` operations use the dedicated exact-integer supp
 crate, and deterministic source-oriented failures cover unsupported or invalid arithmetic
 and coercion paths. Canonical scalar display, grapheme-counted string length, descriptor
 and value-type identity, and the supported collection iteration slice are checked before
-lowering. Manifest-driven accepted and rejected cases cover the plausible semantic
-boundaries named above, including adaptive logical comparisons, destination-aware
-returns/assignments/lengths, fixed-width overflow, and invalid member receivers. The
-`fizz-buzz`, `build-report`, grouped-precedence, and focused regression run cases compile
-generated crates with warnings denied and verify their observable output, stderr, and
-exit status.
+lowering. Manifest-driven accepted cases and focused rejected cases exercise these semantic
+boundaries, while semantic unit tests cover the broader diagnostic set. The conformance
+corpus includes adaptive logical comparisons, destination-aware returns, assignments, and
+lengths, fixed-width overflow, invalid member receivers, compound membership and identity,
+and identity operand evaluation order. The `fizz-buzz`, `build-report`,
+`grouped-precedence`, and focused regression run cases compile generated crates with
+warnings denied and verify their observable output, stderr, and exit status.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 

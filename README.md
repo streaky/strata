@@ -21,7 +21,7 @@ Its guiding priorities are:
 
 Terrane is in the design and early compiler stage. The language document describes the proposed full contract; the implemented subset is intentionally much smaller.
 
-The working `terrane` CLI can check, lower, build, and run manifest-backed programs through generated Rust and Cargo. Its shared compiler pipeline includes the milestone-one lexer, milestone-two lossless parser, milestone-three package and namespace model, and milestone-four typed semantics. The implemented subset now covers native scalar types, adaptive exact integers, typed bindings and calls, checked control flow and integer operations, canonical scalar display, descriptor objects, strings, and a minimal safe iteration slice. Executable conformance programs exercise hello, fizz-buzz, build-report, and grouped expression precedence; the broader language draft remains planned rather than implemented.
+The working `terrane` CLI can check, lower, build, and run manifest-backed programs through generated Rust and Cargo. Its shared compiler pipeline includes the milestone-one lexer, milestone-two lossless parser, milestone-three package and namespace model, and milestone-four typed semantics. The implemented subset now covers native scalar types, adaptive exact integers, typed bindings and calls, checked control flow and integer operations, canonical scalar display, descriptor objects, strings, and a minimal safe iteration slice. A manifest-driven conformance corpus exercises these contracts through focused accepted and rejected programs, including larger fizz-buzz and build-report scenarios; the broader language draft remains planned rather than implemented.
 
 ## Learn more
 
