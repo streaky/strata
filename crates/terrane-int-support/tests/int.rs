@@ -32,17 +32,17 @@ fn bitwise_operations_use_infinite_twos_complement() {
 }
 
 #[test]
-fn division_and_modulo_follow_flooring_semantics() {
+fn division_and_modulo_follow_euclidean_semantics() {
     let cases = [
         (-7_i64, 3_i64, "-3", "2"),
-        (7, -3, "-3", "-2"),
-        (-7, -3, "2", "-1"),
+        (7, -3, "-2", "1"),
+        (-7, -3, "3", "2"),
         (7, 3, "2", "1"),
     ];
     for (left, right, quotient, remainder) in cases {
         assert_eq!(
             Int::from(left)
-                .floor_div(&Int::from(right))
+                .euclidean_div(&Int::from(right))
                 .unwrap()
                 .to_string(),
             quotient
@@ -56,7 +56,7 @@ fn division_and_modulo_follow_flooring_semantics() {
         );
     }
     assert_eq!(
-        Int::from(1_i64).floor_div(&Int::from(0_i64)),
+        Int::from(1_i64).euclidean_div(&Int::from(0_i64)),
         Err(ArithmeticError::DivisionByZero)
     );
 }
@@ -77,6 +77,18 @@ fn shifts_are_exact_and_reject_negative_counts() {
         Int::from(1_i64).shift_left(&Int::from(-1_i64)),
         Err(ArithmeticError::NegativeShiftCount)
     );
+}
+
+#[test]
+fn shifts_bound_materialization_and_collapse_oversized_right_counts() {
+    let huge = Int::from_decimal("100000000000000000000000000000000000");
+    assert_eq!(
+        Int::from(1_i64).shift_left(&huge),
+        Err(ArithmeticError::ShiftCountTooLarge)
+    );
+    assert_eq!(Int::from(0_i64).shift_left(&huge), Ok(Int::from(0_i64)));
+    assert_eq!(Int::from(9_i64).shift_right(&huge), Ok(Int::from(0_i64)));
+    assert_eq!(Int::from(-9_i64).shift_right(&huge), Ok(Int::from(-1_i64)));
 }
 
 #[test]
@@ -136,6 +148,10 @@ fn runtime_arithmetic_failures_render_in_source_terms() {
         (
             ArithmeticError::NegativeShiftCount,
             ".negative-shift-count: negative integer shift count",
+        ),
+        (
+            ArithmeticError::ShiftCountTooLarge,
+            ".resource-error: integer shift count cannot be represented on this target",
         ),
     ];
     for (failure, expected) in cases {

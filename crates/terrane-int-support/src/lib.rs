@@ -156,9 +156,14 @@ impl Int {
     ///
     /// # Errors
     ///
-    /// Returns a stable error for a negative or target-unrepresentable count.
+    /// Returns a stable error for a negative count or a result beyond this
+    /// runtime's materialization limit.
     pub fn shift_left(&self, count: &Self) -> Result<Self, ArithmeticError> {
-        let count = shift_count(count)?;
+        if self == &Self::from(0_i64) {
+            shift_count_sign(count)?;
+            return Ok(self.clone());
+        }
+        let count = bounded_left_shift_count(count)?;
         Ok(Self::from_big(self.as_big() << count))
     }
 
@@ -166,19 +171,43 @@ impl Int {
     ///
     /// # Errors
     ///
-    /// Returns a stable error for a negative or target-unrepresentable count.
+    /// Returns a stable error for a negative count.
     pub fn shift_right(&self, count: &Self) -> Result<Self, ArithmeticError> {
-        let count = shift_count(count)?;
+        let count = shift_count_sign(count)?;
+        let significant_bits = self.as_big().bits();
+        if count >= BigInt::from(significant_bits) {
+            return Ok(Self::from(if self < &Self::from(0_i64) {
+                -1_i64
+            } else {
+                0_i64
+            }));
+        }
+        let count = count
+            .to_usize()
+            .ok_or(ArithmeticError::ShiftCountTooLarge)?;
         Ok(Self::from_big(self.as_big() >> count))
     }
 }
 
-fn shift_count(count: &Int) -> Result<usize, ArithmeticError> {
+const MAX_MATERIALIZED_SHIFT_BITS: usize = 1 << 20;
+
+fn shift_count_sign(count: &Int) -> Result<BigInt, ArithmeticError> {
     let count = count.as_big();
     if count < BigInt::from(0_u8) {
         return Err(ArithmeticError::NegativeShiftCount);
     }
-    count.to_usize().ok_or(ArithmeticError::ShiftCountTooLarge)
+    Ok(count)
+}
+
+fn bounded_left_shift_count(count: &Int) -> Result<usize, ArithmeticError> {
+    let count = shift_count_sign(count)?;
+    let count = count
+        .to_usize()
+        .ok_or(ArithmeticError::ShiftCountTooLarge)?;
+    if count > MAX_MATERIALIZED_SHIFT_BITS {
+        return Err(ArithmeticError::ShiftCountTooLarge);
+    }
+    Ok(count)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
