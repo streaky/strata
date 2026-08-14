@@ -341,3 +341,151 @@ macro_rules! fixed_width_arithmetic {
 }
 
 fixed_width_arithmetic!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+
+/// Converts an integer value to the exact representation used by coercion policies.
+pub trait IntegerSource {
+    fn integer_value(&self) -> BigInt;
+}
+
+impl IntegerSource for Int {
+    fn integer_value(&self) -> BigInt {
+        self.as_big()
+    }
+}
+
+macro_rules! integer_sources {
+    ($($type:ty),+ $(,)?) => {$(
+        impl IntegerSource for $type {
+            fn integer_value(&self) -> BigInt {
+                BigInt::from(*self)
+            }
+        }
+    )+};
+}
+
+integer_sources!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+
+/// Destination contract for explicit integer coercions.
+pub trait IntegerDestination: Sized {
+    fn checked_from_big(value: &BigInt) -> Option<Self>;
+    fn wrapping_from_big(value: &BigInt) -> Self;
+    fn saturating_from_big(value: &BigInt) -> Self;
+}
+
+impl IntegerDestination for Int {
+    fn checked_from_big(value: &BigInt) -> Option<Self> {
+        Some(Self::from_big(value.clone()))
+    }
+
+    fn wrapping_from_big(value: &BigInt) -> Self {
+        Self::from_big(value.clone())
+    }
+
+    fn saturating_from_big(value: &BigInt) -> Self {
+        Self::from_big(value.clone())
+    }
+}
+
+macro_rules! signed_destinations {
+    ($(($type:ty, $to:ident)),+ $(,)?) => {$(
+        impl IntegerDestination for $type {
+            fn checked_from_big(value: &BigInt) -> Option<Self> {
+                value.$to()
+            }
+
+            fn wrapping_from_big(value: &BigInt) -> Self {
+                let modulus = BigInt::from(1_u8) << <$type>::BITS;
+                let sign = BigInt::from(1_u8) << (<$type>::BITS - 1);
+                let mut wrapped = value % &modulus;
+                if wrapped < BigInt::from(0_u8) {
+                    wrapped += &modulus;
+                }
+                if wrapped >= sign {
+                    wrapped -= modulus;
+                }
+                wrapped.$to().expect("wrapped integer must fit its destination")
+            }
+
+            fn saturating_from_big(value: &BigInt) -> Self {
+                if value < &BigInt::from(<$type>::MIN) {
+                    <$type>::MIN
+                } else if value > &BigInt::from(<$type>::MAX) {
+                    <$type>::MAX
+                } else {
+                    value.$to().expect("bounded integer must fit its destination")
+                }
+            }
+        }
+    )+};
+}
+
+macro_rules! unsigned_destinations {
+    ($(($type:ty, $to:ident)),+ $(,)?) => {$(
+        impl IntegerDestination for $type {
+            fn checked_from_big(value: &BigInt) -> Option<Self> {
+                value.$to()
+            }
+
+            fn wrapping_from_big(value: &BigInt) -> Self {
+                let modulus = BigInt::from(1_u8) << <$type>::BITS;
+                let mut wrapped = value % &modulus;
+                if wrapped < BigInt::from(0_u8) {
+                    wrapped += modulus;
+                }
+                wrapped.$to().expect("wrapped integer must fit its destination")
+            }
+
+            fn saturating_from_big(value: &BigInt) -> Self {
+                if value < &BigInt::from(0_u8) {
+                    0
+                } else if value > &BigInt::from(<$type>::MAX) {
+                    <$type>::MAX
+                } else {
+                    value.$to().expect("bounded integer must fit its destination")
+                }
+            }
+        }
+    )+};
+}
+
+signed_destinations!(
+    (i8, to_i8),
+    (i16, to_i16),
+    (i32, to_i32),
+    (i64, to_i64),
+    (i128, to_i128),
+);
+unsigned_destinations!(
+    (u8, to_u8),
+    (u16, to_u16),
+    (u32, to_u32),
+    (u64, to_u64),
+    (u128, to_u128),
+);
+
+/// Performs an exact integer coercion.
+///
+/// # Errors
+///
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] when the result is
+/// outside the destination type.
+pub fn coerce<T: IntegerDestination>(value: &impl IntegerSource) -> Result<T, ArithmeticError> {
+    T::checked_from_big(&value.integer_value()).ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Performs a non-failing checked integer coercion.
+pub fn checked_coerce<T: IntegerDestination>(value: &impl IntegerSource) -> Option<T> {
+    T::checked_from_big(&value.integer_value())
+}
+
+/// Performs a two's-complement wrapping integer coercion.
+#[must_use]
+pub fn wrapping_coerce<T: IntegerDestination>(value: &impl IntegerSource) -> T {
+    T::wrapping_from_big(&value.integer_value())
+}
+
+/// Performs a bounded saturating integer coercion.
+#[must_use]
+pub fn saturating_coerce<T: IntegerDestination>(value: &impl IntegerSource) -> T {
+    T::saturating_from_big(&value.integer_value())
+}

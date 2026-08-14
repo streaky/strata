@@ -1,5 +1,8 @@
 use num_bigint::BigInt;
-use terrane_int_support::{ArithmeticError, FixedWidthArithmetic, Int, Tier};
+use terrane_int_support::{
+    ArithmeticError, FixedWidthArithmetic, Int, Tier, checked_coerce, coerce, saturating_coerce,
+    wrapping_coerce,
+};
 
 #[test]
 fn arithmetic_promotes_and_normalizes_exactly() {
@@ -95,6 +98,24 @@ fn fixed_width_operation_families_pin_overflow_modes() {
         1_u8.wrapping_remainder(0),
         Err(ArithmeticError::DivisionByZero)
     );
+}
+
+#[test]
+fn integer_coercion_families_cover_signed_unsigned_and_adaptive_values() {
+    assert_eq!(coerce::<i8>(&127_i128), Ok(127));
+    assert_eq!(
+        coerce::<i8>(&128_i128),
+        Err(ArithmeticError::IntegerConversionOverflow)
+    );
+    assert_eq!(checked_coerce::<u8>(&-1_i16), None);
+    assert_eq!(wrapping_coerce::<i8>(&255_u16), -1);
+    assert_eq!(wrapping_coerce::<u8>(&-1_i16), 255);
+    assert_eq!(saturating_coerce::<i8>(&1000_i128), i8::MAX);
+    assert_eq!(saturating_coerce::<u8>(&-1000_i128), 0);
+
+    let arbitrary = Int::from_big(BigInt::from(u128::MAX) + 1);
+    assert_eq!(wrapping_coerce::<u8>(&arbitrary), 0);
+    assert_eq!(coerce::<Int>(&arbitrary), Ok(arbitrary));
 }
 
 #[test]
