@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     Diagnostic, Package, SourceFile, Span,
@@ -20,11 +20,6 @@ struct SyntaxProgram {
     output_path: String,
     print_binding: String,
     message: String,
-}
-
-struct RustIr<'program> {
-    namespace: &'program str,
-    message: &'program str,
 }
 
 #[derive(Clone, Debug)]
@@ -115,15 +110,28 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         .find(|unit| unit.source.id() == entry_span.file)
         .unwrap_or(&semantic.units[0]);
     let source = &unit.source;
-    let program = project_bootstrap_program(source, &unit.tree).map_err(|diagnostics| {
-        CompilationFailure {
-            source: source.clone(),
-            diagnostics,
+    let program = match project_bootstrap_program(source, &unit.tree) {
+        Ok(program) => resolve(program),
+        Err(diagnostics) => {
+            let literal_diagnostics = diagnostics
+                .into_iter()
+                .filter(|diagnostic| diagnostic.code == "S0004")
+                .collect::<Vec<_>>();
+            if !literal_diagnostics.is_empty() {
+                return Err(CompilationFailure {
+                    source: source.clone(),
+                    diagnostics: literal_diagnostics,
+                });
+            }
+            Program {
+                namespace: unit.namespace.clone(),
+                output_path: "/core/output".to_owned(),
+                print_binding: "print".to_owned(),
+                message: String::new(),
+            }
         }
-    })?;
-    let program = resolve(program);
-    let ir = lower(&program);
-    let rust = emit_rust(&ir, source);
+    };
+    let rust = crate::lowering::emit(&semantic, unit);
     Ok(Compilation {
         source: (*source).clone(),
         program,
@@ -484,28 +492,4 @@ fn resolve(syntax: SyntaxProgram) -> Program {
         print_binding: syntax.print_binding,
         message: syntax.message,
     }
-}
-
-fn lower(program: &Program) -> RustIr<'_> {
-    RustIr {
-        namespace: &program.namespace,
-        message: &program.message,
-    }
-}
-
-fn emit_rust(ir: &RustIr<'_>, source: &SourceFile) -> String {
-    format!(
-        "// Generated deterministically by Terrane {}.\n// Source: {}\n// Namespace: {}\nfn main() {{\n    println!(\"{{}}\", {:?});\n}}\n",
-        crate::VERSION,
-        display_path(source.path()),
-        ir.namespace,
-        ir.message
-    )
-}
-
-fn display_path(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("<source>")
-        .to_owned()
 }

@@ -3,6 +3,7 @@ pub mod diagnostic;
 pub mod display;
 pub mod highlight;
 pub mod lexer;
+mod lowering;
 pub mod package;
 pub mod parser;
 pub mod semantics;
