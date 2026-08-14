@@ -84,13 +84,19 @@ impl Emitter<'_> {
         }) else {
             return;
         };
-        let ty = match binding.value_type {
-            ValueType::Scalar(scalar) => rust_type(scalar),
-            ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => return,
+        let ValueType::Scalar(scalar) = binding.value_type else {
+            return;
         };
+        let ty = rust_type(scalar);
         let value = self.expression_as(initializer, binding.value_type);
         let name = namespace_binding_name(self.source.id(), self.text(name));
-        self.line(&format!("static {name}: {ty} = {value};"));
+        if matches!(scalar, ScalarType::Int | ScalarType::String) {
+            self.line(&format!(
+                "static {name}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {value});"
+            ));
+        } else {
+            self.line(&format!("static {name}: {ty} = {value};"));
+        }
     }
     fn function(&mut self, node: &SyntaxNode) {
         let Some(contract) = self
@@ -382,16 +388,24 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
-        if value_type == ValueType::Scalar(ScalarType::Int) {
-            self.adaptive_expression(node)
-        } else {
-            self.expression(node)
+        match value_type {
+            ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
+            ValueType::Scalar(ScalarType::String)
+                if node.kind == SyntaxKind::Name
+                    && self.lazy_namespace_binding_type(node).is_some() =>
+            {
+                format!("(*{}).clone()", self.namespace_name(node))
+            }
+            _ => self.expression(node),
         }
     }
 
     fn adaptive_expression(&mut self, node: &SyntaxNode) -> String {
         match node.kind {
             SyntaxKind::Literal => adaptive_literal(self.text(node)),
+            SyntaxKind::Name if self.lazy_namespace_binding_type(node).is_some() => {
+                format!("(*{}).clone()", self.namespace_name(node))
+            }
             SyntaxKind::Name => format!("{}.clone()", self.name(node)),
             SyntaxKind::GroupExpression => {
                 node.children.first().map_or_else(String::new, |child| {
@@ -702,8 +716,55 @@ impl Emitter<'_> {
         let Some(span) = symbol.declaration_span else {
             return rust_name(source_name);
         };
-        let is_namespace_binding = self
+        let name = namespace_binding_name(span.file, &symbol.name);
+        if self.lazy_namespace_binding_type(node).is_some() {
+            format!("&*{name}")
+        } else if self.is_namespace_binding_span(span) {
+            name
+        } else {
+            rust_name(source_name)
+        }
+    }
+
+    fn namespace_name(&self, node: &SyntaxNode) -> String {
+        self.package
+            .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+            .and_then(|symbol| {
+                symbol
+                    .declaration_span
+                    .map(|span| namespace_binding_name(span.file, &symbol.name))
+            })
+            .unwrap_or_else(|| rust_name(self.text(node)))
+    }
+
+    fn lazy_namespace_binding_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        let symbol =
+            self.package
+                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
+        let span = symbol.declaration_span?;
+        if !self.is_namespace_binding_span(span) {
+            return None;
+        }
+        let owner = self
             .package
+            .units
+            .iter()
+            .find(|unit| unit.source.id() == span.file)?;
+        owner
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == span)
+            .map(|binding| binding.value_type)
+            .filter(|value_type| {
+                matches!(
+                    value_type,
+                    ValueType::Scalar(ScalarType::Int | ScalarType::String)
+                )
+            })
+    }
+
+    fn is_namespace_binding_span(&self, span: crate::Span) -> bool {
+        self.package
             .units
             .iter()
             .find(|unit| unit.source.id() == span.file)
@@ -712,12 +773,7 @@ impl Emitter<'_> {
                     candidate.span == span
                         && matches!(candidate.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
                 })
-            });
-        if is_namespace_binding {
-            namespace_binding_name(span.file, &symbol.name)
-        } else {
-            rust_name(source_name)
-        }
+            })
     }
 
     fn append_defaults(&self, contract: &FunctionContract, values: &mut [Option<String>]) {

@@ -20,6 +20,12 @@ pub fn scalar_text(value: &impl ScalarDisplay) -> String {
     value.scalar_text()
 }
 
+impl<T: ScalarDisplay + ?Sized> ScalarDisplay for &T {
+    fn write_scalar(&self, output: &mut String) {
+        (*self).write_scalar(output);
+    }
+}
+
 impl ScalarDisplay for bool {
     fn write_scalar(&self, output: &mut String) {
         output.push_str(if *self { "true" } else { "false" });

@@ -8,6 +8,8 @@ fn displays_core_scalars_canonically() {
     assert_eq!(scalar_text(&Int::from(i128::MAX)), i128::MAX.to_string());
     assert_eq!(scalar_text(&"Terrane".to_owned()), "Terrane");
     assert_eq!(scalar_text(&()), "none");
+    let text = "borrowed".to_owned();
+    assert_eq!(scalar_text(&&text), "borrowed");
 }
 
 #[test]
