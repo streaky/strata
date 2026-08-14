@@ -15,7 +15,7 @@ pub(crate) fn emit(package: &SemanticPackage, unit: &SemanticUnit) -> String {
             "// Generated deterministically by Terrane {}.\n// Source: {}\n// Namespace: {}\n",
             crate::VERSION,
             display_path(unit.source.path()),
-            unit.namespace.trim_start_matches('/')
+            unit.namespace.trim_start_matches('/').replace('/', " ")
         ),
         indent: 0,
     };
@@ -247,16 +247,10 @@ impl Emitter<'_> {
         match node.kind {
             SyntaxKind::Literal => literal(self.text(node)),
             SyntaxKind::Name => rust_name(self.text(node)),
-            SyntaxKind::GroupExpression => {
-                node.children.first().map_or_else(String::new, |child| {
-                    let expression = self.expression(child);
-                    if child.kind == SyntaxKind::CallExpression {
-                        expression
-                    } else {
-                        format!("({expression})")
-                    }
-                })
-            }
+            SyntaxKind::GroupExpression => node
+                .children
+                .first()
+                .map_or_else(String::new, |child| self.expression(child)),
             SyntaxKind::UnaryExpression => {
                 let Some(operand) = node.children.last() else {
                     return String::new();

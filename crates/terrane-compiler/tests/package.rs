@@ -94,8 +94,12 @@ fn package_compilation_parses_every_enumerated_unit() {
     let loaded = Package::load(&package.0).unwrap();
     let compilation = compile_package(&loaded).unwrap();
 
-    assert_eq!(compilation.program.namespace, "hello");
-    assert_eq!(compilation.program.message, "package pipeline");
+    assert!(compilation.rust.contains("// Namespace: hello\n"));
+    assert!(
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\"package pipeline\"));")
+    );
 }
 
 #[test]
@@ -105,10 +109,7 @@ fn package_entry_point_comes_from_resolved_function_declarations() {
         "package.toml",
         "package = \"example.entry\"\nsources = [\"decoy.trn\", \"main.trn\"]\n",
     );
-    package.write(
-        "decoy.trn",
-        "namespace decoy\ntext = >>\n  function main\n",
-    );
+    package.write("decoy.trn", "namespace decoy\ntext = >>\n  function main\n");
     package.write(
         "main.trn",
         "namespace actual\nfrom /core output import .print\nprint = .print\nfunction main\n  print; >real entry\n",
@@ -116,8 +117,12 @@ fn package_entry_point_comes_from_resolved_function_declarations() {
 
     let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
 
-    assert_eq!(compilation.program.namespace, "actual");
-    assert_eq!(compilation.program.message, "real entry");
+    assert!(compilation.rust.contains("// Namespace: actual\n"));
+    assert!(
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\"real entry\"));")
+    );
 }
 
 #[test]
@@ -207,14 +212,13 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
         ),
     );
     package.write("exports.trn", "namespace shared\npublic .item = 1\n");
-    package.write(
-        "parent.trn",
-        "namespace app support\npublic .parent = 1\n",
-    );
+    package.write("parent.trn", "namespace app support\npublic .parent = 1\n");
     package.write(
         "consumer.trn",
         concat!(
             "namespace app child\n",
+            "from /core types import .int\n",
+            "int = .int\n",
             "from /shared import .item\n",
             "from .. support import .parent\n",
             "function run; argument int\n",

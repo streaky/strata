@@ -15,17 +15,12 @@ fn hello_lowers_deterministically() {
 }
 
 #[test]
-fn rejects_every_repeated_milestone_construct() {
+fn rejects_duplicate_declarations() {
     let cases = [
         (
             "namespace hello",
             "S0005",
             "duplicate namespace declaration",
-        ),
-        (
-            "from /core output import .print",
-            "S0005",
-            "duplicate output import",
         ),
         ("print = .print", "S2005", "duplicate declaration `print`"),
         ("function main", "S2005", "duplicate declaration `main`"),
@@ -40,15 +35,6 @@ fn rejects_every_repeated_milestone_construct() {
                 .any(|diagnostic| diagnostic.code == code && diagnostic.message == message)
         );
     }
-
-    let source = HELLO.replace("print; >>", "print; >first\n  print; >>");
-    let diagnostics = terrane_compiler::compile("statements.trn", source).unwrap_err();
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "S0005"
-            && diagnostic
-                .message
-                .contains("only one statement is supported")
-    }));
 }
 
 #[test]
@@ -75,19 +61,16 @@ fn blank_lines_do_not_select_indentation_style() {
 }
 
 #[test]
-fn diagnoses_content_after_a_closed_quote() {
+fn permits_a_comment_after_a_closed_quote() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
-        "print; 'hello' # unsupported trailing comment",
+        "print; 'hello' # trailing comment",
     );
-    let failure = terrane_compiler::compile("trailing-content.trn", source).unwrap_err();
-    assert!(failure.iter().any(|diagnostic| {
-        diagnostic.code == "S0004" && diagnostic.message.contains("after closing string quote")
-    }));
+    let compilation = terrane_compiler::compile("trailing-comment.trn", source).unwrap();
     assert!(
-        !failure
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("unterminated"))
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\"hello\"));")
     );
 }
 
@@ -96,10 +79,7 @@ fn compilation_failure_owns_the_original_source() {
     let source = HELLO.replace("print = .print", "print = .missing");
     let failure = terrane_compiler::compile("owned.trn", source.clone()).unwrap_err();
     assert_eq!(failure.source.text(), source);
-    assert_eq!(
-        failure.source.path(),
-        PathBuf::from("owned.trn").as_path()
-    );
+    assert_eq!(failure.source.path(), PathBuf::from("owned.trn").as_path());
     assert!(failure.iter().any(|diagnostic| diagnostic.code == "S2014"));
 }
 
@@ -124,7 +104,11 @@ fn tail_string_can_be_empty() {
         "print; >",
     );
     let compilation = terrane_compiler::compile("empty-tail.trn", source).unwrap();
-    assert!(compilation.rust.contains("println!(\"{}\", \"\");"));
+    assert!(
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\"\"));")
+    );
 }
 
 #[test]
@@ -134,19 +118,23 @@ fn tail_string_preserves_leading_whitespace() {
         "print; > hello",
     );
     let compilation = terrane_compiler::compile("leading-space.trn", source).unwrap();
-    assert!(compilation.rust.contains("println!(\"{}\", \" hello\");"));
+    assert!(
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\" hello\"));")
+    );
 }
 #[test]
-fn rejects_empty_block_string() {
+fn block_string_can_be_empty() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
         "print; >>",
     );
-    let diagnostics = terrane_compiler::compile("string.trn", source).unwrap_err();
+    let compilation = terrane_compiler::compile("string.trn", source).unwrap();
     assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "S0004")
+        compilation
+            .rust
+            .contains("println!(\"{}\", String::from(\"\"));")
     );
 }
 
