@@ -20,6 +20,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             indent: 0,
             continue_label: None,
             loop_counter: 0,
+            return_type: None,
         };
         for node in &unit.tree.root.children {
             match node.kind {
@@ -50,6 +51,7 @@ struct Emitter<'a> {
     indent: usize,
     continue_label: Option<String>,
     loop_counter: usize,
+    return_type: Option<ScalarType>,
 }
 
 impl Emitter<'_> {
@@ -124,6 +126,7 @@ impl Emitter<'_> {
             write!(self.output, " -> {}", rust_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
+        let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
         self.indent += 1;
         if let Some(block) = node
             .children
@@ -132,6 +135,7 @@ impl Emitter<'_> {
         {
             self.block(block);
         }
+        self.return_type = outer_return_type;
         self.indent -= 1;
         self.line("}");
     }
@@ -157,11 +161,21 @@ impl Emitter<'_> {
                     let [left, right] = node.children.as_slice() else {
                         return;
                     };
-                    let value = if self.is_adaptive_expression(left) {
-                        self.adaptive_expression(right)
+                    let value_type = self.value_type(left);
+                    let mut value = if let Some(value_type) = value_type {
+                        self.expression_as(right, value_type)
                     } else {
                         self.expression(right)
                     };
+                    if value_type == Some(ValueType::Scalar(ScalarType::Int))
+                        && right.kind == SyntaxKind::BinaryExpression
+                    {
+                        value = value
+                            .strip_prefix('(')
+                            .and_then(|value| value.strip_suffix(')'))
+                            .unwrap_or(&value)
+                            .to_owned();
+                    }
                     let target = self.expression(left);
                     self.line(&format!("{target} = {value};"));
                 }
@@ -176,7 +190,11 @@ impl Emitter<'_> {
             SyntaxKind::ForStatement => self.for_statement(node),
             SyntaxKind::ReturnStatement => {
                 if let Some(value) = node.children.first() {
-                    let value = self.expression(value);
+                    let value = if let Some(return_type) = self.return_type {
+                        self.expression_as(value, ValueType::Scalar(return_type))
+                    } else {
+                        self.expression(value)
+                    };
                     self.line(&format!("return {value};"));
                 } else {
                     self.line("return;");
@@ -420,6 +438,14 @@ impl Emitter<'_> {
                 format!("{operator}{}", self.adaptive_expression(operand))
             }
             SyntaxKind::BinaryExpression => self.adaptive_binary(node),
+            SyntaxKind::MemberExpression
+                if node
+                    .children
+                    .get(1)
+                    .is_some_and(|member| self.text(member) == "length") =>
+            {
+                format!("terrane_int_support::Int::from({})", self.expression(node))
+            }
             _ => self.expression(node),
         }
     }

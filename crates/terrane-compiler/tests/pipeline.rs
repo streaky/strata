@@ -318,3 +318,32 @@ fn lowers_logical_combinations_of_integer_comparisons() {
 (y.clone() > terrane_int_support::Int::from(2_i128)) {"
     ));
 }
+
+#[test]
+fn lowers_values_in_their_integer_destination_type() {
+    let source = concat!(
+        "namespace destinations\n",
+        "function answer int\n",
+        "  return 41\n",
+        "function main\n",
+        "  text = 'Terrane'\n",
+        "  total int = text.length\n",
+        "  total = total + 1\n",
+    );
+    let compilation = terrane_compiler::compile("destinations.trn", source.to_owned()).unwrap();
+
+    assert!(
+        compilation
+            .rust
+            .contains("return terrane_int_support::Int::from(41_i128);")
+    );
+    assert!(compilation.rust.contains(
+        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(\
+terrane_string_support::length(&text) as i128);"
+    ));
+    assert!(
+        compilation
+            .rust
+            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
+    );
+}
