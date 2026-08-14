@@ -756,6 +756,19 @@ fn rejects_obsolete_flat_integer_coercion_members() {
 }
 
 #[test]
+fn rejects_unbound_integer_coercion_family() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  family = value.coerce\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0018");
+}
+
+#[test]
 fn types_valid_unary_binary_and_comparison_operators() {
     let analyzed = analyze(&package(
         true,

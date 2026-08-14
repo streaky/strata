@@ -1427,6 +1427,17 @@ fn infer_value_type(
             .map(|binding| binding.value_type));
     }
     if node.kind == SyntaxKind::MemberExpression
+        && let [_, member] = node.children.as_slice()
+        && node_text(&unit.source, member) == "coerce"
+    {
+        return Err(failure(
+            &unit.source,
+            "T0018",
+            "`.coerce` must be called with a statically known destination",
+            node.span,
+        ));
+    }
+    if node.kind == SyntaxKind::MemberExpression
         && let [receiver, member] = node.children.as_slice()
         && node_text(&unit.source, member) == "length"
     {
