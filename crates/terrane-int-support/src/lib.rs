@@ -455,18 +455,30 @@ macro_rules! fixed_width_arithmetic {
 fixed_width_arithmetic!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
 
 /// Applies Terrane's checked default addition policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns arithmetic overflow when the exact sum is outside the destination range.
 pub fn fixed_addition<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
     left.checked_addition(right)
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
 /// Applies Terrane's checked default subtraction policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns arithmetic overflow when the exact difference is outside the destination range.
 pub fn fixed_subtraction<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
     left.checked_subtraction(right)
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
 /// Applies Terrane's checked default multiplication policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns arithmetic overflow when the exact product is outside the destination range.
 pub fn fixed_multiplication<T: FixedWidthArithmetic>(
     left: T,
     right: T,
@@ -476,18 +488,30 @@ pub fn fixed_multiplication<T: FixedWidthArithmetic>(
 }
 
 /// Applies Terrane's checked default division policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns division by zero or arithmetic overflow.
 pub fn fixed_division<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
     left.checked_division(right)?
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
 /// Applies Terrane's checked default remainder policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns division by zero or arithmetic overflow.
 pub fn fixed_remainder<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, ArithmeticError> {
     left.checked_remainder(right)?
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
 /// Applies Terrane's checked default left-shift policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns a shift-count error or arithmetic overflow.
 pub fn fixed_shift_left<T: FixedWidthArithmetic>(
     left: T,
     right: &impl IntegerSource,
@@ -498,6 +522,10 @@ pub fn fixed_shift_left<T: FixedWidthArithmetic>(
 }
 
 /// Applies Terrane's checked default right-shift policy to a fixed-width integer.
+///
+/// # Errors
+///
+/// Returns a shift-count error when the count is negative or outside the destination width.
 pub fn fixed_shift_right<T: FixedWidthArithmetic>(
     left: T,
     right: &impl IntegerSource,
