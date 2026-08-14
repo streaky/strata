@@ -379,9 +379,8 @@ impl Emitter<'_> {
                 };
                 format!("{operator}{}", self.expression(operand))
             }
-            SyntaxKind::BinaryExpression | SyntaxKind::TypeMembershipExpression => {
-                self.binary(node)
-            }
+            SyntaxKind::BinaryExpression => self.binary(node),
+            SyntaxKind::TypeMembershipExpression => self.type_membership(node),
             SyntaxKind::MemberExpression => self.member(node),
             SyntaxKind::CallExpression => self.call(node),
             SyntaxKind::PostfixExpression => node
@@ -469,17 +468,11 @@ impl Emitter<'_> {
         };
         let source_operator = self.source.text()[left.span.end..right.span.start].trim();
         if source_operator == "is" {
-            return "false".to_owned();
-        }
-        if source_operator == "is a" {
-            let descriptor = self.text(right).trim();
-            let Some(binding) = self.unit.typed_bindings.iter().rev().find(|item| {
-                item.name == self.text(left).trim() && item.span.start <= left.span.start
-            }) else {
-                return "false".to_owned();
-            };
-            let matches = matches!(binding.value_type, ValueType::Scalar(ty) if ty.source_name() == descriptor);
-            return matches.to_string();
+            return matches!(
+                (self.descriptor_type(left), self.descriptor_type(right)),
+                (Some(left), Some(right)) if left == right
+            )
+            .to_string();
         }
         if self.is_adaptive_expression(left) {
             return self.adaptive_binary(node);
@@ -494,6 +487,49 @@ impl Emitter<'_> {
             self.expression(left),
             self.expression(right)
         )
+    }
+
+    fn type_membership(&self, node: &SyntaxNode) -> String {
+        let [value, descriptor] = node.children.as_slice() else {
+            return String::new();
+        };
+        matches!(
+            (self.value_type(value), self.descriptor_type(descriptor)),
+            (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
+        )
+        .to_string()
+    }
+
+    fn value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        match node.kind {
+            SyntaxKind::Literal => match self.text(node).trim() {
+                "true" | "false" => Some(ValueType::Scalar(ScalarType::Bool)),
+                text if text.starts_with('\'') || text.starts_with('>') => {
+                    Some(ValueType::Scalar(ScalarType::String))
+                }
+                text if text
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '_') =>
+                {
+                    Some(ValueType::Scalar(ScalarType::Int))
+                }
+                _ => None,
+            },
+            SyntaxKind::Name => self
+                .unit
+                .typed_bindings
+                .iter()
+                .rev()
+                .find(|binding| {
+                    binding.name == self.text(node).trim() && binding.span.start <= node.span.start
+                })
+                .map(|binding| binding.value_type),
+            SyntaxKind::GroupExpression | SyntaxKind::UnaryExpression => node
+                .children
+                .last()
+                .and_then(|child| self.value_type(child)),
+            _ => None,
+        }
     }
 
     fn member(&mut self, node: &SyntaxNode) -> String {
@@ -602,7 +638,16 @@ impl Emitter<'_> {
     }
 
     fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
+        if node.kind == SyntaxKind::TypeExpression {
+            return node
+                .children
+                .first()
+                .and_then(|child| self.descriptor_type(child));
+        }
         let name = self.text(node).trim().trim_start_matches('.');
+        if let Some(ty) = ScalarType::from_source_name(name) {
+            return Some(ty);
+        }
         self.unit
             .typed_bindings
             .iter()

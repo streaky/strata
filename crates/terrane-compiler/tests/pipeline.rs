@@ -227,3 +227,26 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
         .unwrap();
     assert!(continue_position < update_position);
 }
+
+#[test]
+fn lowers_scalar_membership_and_descriptor_identity_statically() {
+    let source = concat!(
+        "namespace descriptors\n",
+        "from /core types import .int8\n",
+        "function main\n",
+        "  byte = .int8\n",
+        "  value = 1\n",
+        "  member = value is a int\n",
+        "  same-descriptor = byte is byte\n",
+        "  same-scalar = value is value\n",
+    );
+    let compilation = terrane_compiler::compile("descriptors.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains("let member: bool = true;"));
+    assert!(
+        compilation
+            .rust
+            .contains("let same_descriptor: bool = true;")
+    );
+    assert!(compilation.rust.contains("let same_scalar: bool = false;"));
+}
