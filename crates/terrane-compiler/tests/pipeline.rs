@@ -287,3 +287,16 @@ fn does_not_lower_shadowing_functions_as_builtins() {
     );
     assert!(!compilation.rust.contains("println!"));
 }
+
+#[test]
+fn unwraps_only_syntactic_condition_groups() {
+    let source = concat!(
+        "namespace conditions\n",
+        "function main\n",
+        "  if ((true))\n",
+        "    print; 'yes'\n",
+    );
+    let compilation = terrane_compiler::compile("conditions.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains("if true {"));
+}

@@ -270,7 +270,7 @@ impl Emitter<'_> {
         let Some(block) = node.children.get(1) else {
             return;
         };
-        let condition = control_condition(self.expression(condition));
+        let condition = self.control_condition(condition);
         self.line(&format!("if {condition} {{"));
         self.indent += 1;
         self.block(block);
@@ -283,7 +283,7 @@ impl Emitter<'_> {
                 self.block(&clause.children[0]);
                 self.indent -= 1;
             } else if let [condition, block] = clause.children.as_slice() {
-                let condition = control_condition(self.expression(condition));
+                let condition = self.control_condition(condition);
                 writeln!(self.output, "}} else if {condition} {{").unwrap();
                 self.indent += 1;
                 self.block(block);
@@ -297,7 +297,7 @@ impl Emitter<'_> {
         let [condition, block] = node.children.as_slice() else {
             return;
         };
-        let condition = control_condition(self.expression(condition));
+        let condition = self.control_condition(condition);
         self.line(&format!("while {condition} {{"));
         self.indent += 1;
         let outer_continue = self.continue_label.take();
@@ -327,7 +327,7 @@ impl Emitter<'_> {
             }
             [initial, condition, update, block] => {
                 self.statement(initial);
-                let condition = control_condition(self.expression(condition));
+                let condition = self.control_condition(condition);
                 self.line(&format!("while {condition} {{"));
                 self.indent += 1;
                 let label = format!("__terrane_continue_{}", self.loop_counter);
@@ -812,6 +812,23 @@ impl Emitter<'_> {
         &self.source.text()[node.span.start..node.span.end]
     }
 
+    fn control_condition(&mut self, mut node: &SyntaxNode) -> String {
+        while node.kind == SyntaxKind::GroupExpression
+            && let [grouped] = node.children.as_slice()
+        {
+            node = grouped;
+        }
+        let expression = self.expression(node);
+        if node.kind == SyntaxKind::BinaryExpression
+            && let Some(inner) = expression
+                .strip_prefix('(')
+                .and_then(|value| value.strip_suffix(')'))
+        {
+            return inner.to_owned();
+        }
+        expression
+    }
+
     fn line_start(&mut self) {
         for _ in 0..self.indent {
             self.output.push_str("    ");
@@ -823,14 +840,6 @@ impl Emitter<'_> {
         self.output.push_str(text);
         self.output.push('\n');
     }
-}
-
-fn control_condition(mut expression: String) -> String {
-    if expression.starts_with('(') && expression.ends_with(')') {
-        expression.remove(0);
-        expression.pop();
-    }
-    expression
 }
 
 fn find_node(node: &SyntaxNode, kind: SyntaxKind, span: crate::Span) -> Option<&SyntaxNode> {
