@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: grouped-precedence
 fn main() {
-    println!("{}", ((1 + 2) * 3));
+    println!("{}", terrane_scalar_support::scalar_text(&(((1 + 2) * 3))));
 }

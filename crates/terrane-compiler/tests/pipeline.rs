@@ -76,11 +76,9 @@ fn permits_a_comment_after_a_closed_quote() {
         "print; 'hello' # trailing comment",
     );
     let compilation = terrane_compiler::compile("trailing-comment.trn", source).unwrap();
-    assert!(
-        compilation
-            .rust
-            .contains("println!(\"{}\", String::from(\"hello\"));")
-    );
+    assert!(compilation.rust.contains(
+        "println!(\"{}\", terrane_scalar_support::scalar_text(&(String::from(\"hello\"))));"
+    ));
 }
 
 #[test]
@@ -114,9 +112,9 @@ fn tail_string_can_be_empty() {
     );
     let compilation = terrane_compiler::compile("empty-tail.trn", source).unwrap();
     assert!(
-        compilation
-            .rust
-            .contains("println!(\"{}\", String::from(\"\"));")
+        compilation.rust.contains(
+            "println!(\"{}\", terrane_scalar_support::scalar_text(&(String::from(\"\"))));"
+        )
     );
 }
 
@@ -127,11 +125,9 @@ fn tail_string_preserves_leading_whitespace() {
         "print; > hello",
     );
     let compilation = terrane_compiler::compile("leading-space.trn", source).unwrap();
-    assert!(
-        compilation
-            .rust
-            .contains("println!(\"{}\", String::from(\" hello\"));")
-    );
+    assert!(compilation.rust.contains(
+        "println!(\"{}\", terrane_scalar_support::scalar_text(&(String::from(\" hello\"))));"
+    ));
 }
 #[test]
 fn block_string_can_be_empty() {
@@ -141,9 +137,9 @@ fn block_string_can_be_empty() {
     );
     let compilation = terrane_compiler::compile("string.trn", source).unwrap();
     assert!(
-        compilation
-            .rust
-            .contains("println!(\"{}\", String::from(\"\"));")
+        compilation.rust.contains(
+            "println!(\"{}\", terrane_scalar_support::scalar_text(&(String::from(\"\"))));"
+        )
     );
 }
 
@@ -208,7 +204,7 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
     assert!(
         collection
             .rust
-            .contains("for character in text.chars().map(String::from) {")
+            .contains("for character in terrane_string_support::graphemes(&text) {")
     );
 
     let clauses = terrane_compiler::compile(

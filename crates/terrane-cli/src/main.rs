@@ -151,6 +151,7 @@ fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, CliFailure
     for byte in rust.bytes().chain(
         include_bytes!("../../terrane-int-support/src/lib.rs")
             .iter()
+            .chain(include_bytes!("../../terrane-scalar-support/src/lib.rs"))
             .chain(include_bytes!("../../terrane-string-support/src/lib.rs"))
             .copied(),
     ) {
@@ -165,6 +166,7 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure>
         .map_err(|error| CliFailure::backend(format!("cannot create generated crate: {error}")))?;
     let manifest = "[package]\nname = \"terrane_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
         [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
+        terrane-scalar-support = { path = \"support/terrane-scalar-support\" }\n\
         terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n";
     fs::write(directory.join("Cargo.toml"), manifest).map_err(|error| {
         CliFailure::backend(format!("cannot write generated manifest: {error}"))
@@ -179,8 +181,10 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure>
 
 fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     let int = directory.join("support/terrane-int-support");
+    let scalar = directory.join("support/terrane-scalar-support");
     let string = directory.join("support/terrane-string-support");
     fs::create_dir_all(int.join("src"))?;
+    fs::create_dir_all(scalar.join("src"))?;
     fs::create_dir_all(string.join("src"))?;
     write_if_changed(
         &int.join("Cargo.toml"),
@@ -189,6 +193,14 @@ fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     write_if_changed(
         &int.join("src/lib.rs"),
         include_bytes!("../../terrane-int-support/src/lib.rs"),
+    )?;
+    write_if_changed(
+        &scalar.join("Cargo.toml"),
+        b"[package]\nname = \"terrane-scalar-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nterrane-int-support = { path = \"../terrane-int-support\" }\n",
+    )?;
+    write_if_changed(
+        &scalar.join("src/lib.rs"),
+        include_bytes!("../../terrane-scalar-support/src/lib.rs"),
     )?;
     write_if_changed(
         &string.join("Cargo.toml"),

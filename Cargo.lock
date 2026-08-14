@@ -452,6 +452,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "terrane-scalar-support"
+version = "0.1.0"
+dependencies = [
+ "terrane-int-support",
+]
+
+[[package]]
 name = "terrane-string-support"
 version = "0.1.0"
 dependencies = [

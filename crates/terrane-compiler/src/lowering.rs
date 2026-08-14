@@ -432,6 +432,10 @@ impl Emitter<'_> {
             if values.is_empty() {
                 return "println!()".to_owned();
             }
+            let values = values
+                .into_iter()
+                .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
+                .collect::<Vec<_>>();
             let format = "{}".repeat(values.len());
             return format!("println!(\"{format}\", {})", values.join(", "));
         }
@@ -443,6 +447,10 @@ impl Emitter<'_> {
         {
             let receiver = self.expression(&callee.children[0]);
             values.insert(0, receiver);
+            let values = values
+                .into_iter()
+                .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
+                .collect::<Vec<_>>();
             let format = "{}".repeat(values.len());
             return format!("format!(\"{format}\", {})", values.join(", "));
         }

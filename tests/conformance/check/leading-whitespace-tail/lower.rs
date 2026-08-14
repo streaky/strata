@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: leading-whitespace-tail
 fn main() {
-    println!("{}", String::from(" hello"));
+    println!("{}", terrane_scalar_support::scalar_text(&(String::from(" hello"))));
 }

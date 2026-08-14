@@ -81,6 +81,7 @@ fn compile_and_maybe_run(case: &Path, phase: &str, rust: &str) {
         build_dir.join("Cargo.toml"),
         "[package]\nname = \"terrane_conformance_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
          [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
+         terrane-scalar-support = { path = \"support/terrane-scalar-support\" }\n\
          terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n",
     )
     .unwrap();
@@ -120,8 +121,10 @@ fn compile_and_maybe_run(case: &Path, phase: &str, rust: &str) {
 
 fn write_support_crates(directory: &Path) {
     let int = directory.join("support/terrane-int-support");
+    let scalar = directory.join("support/terrane-scalar-support");
     let string = directory.join("support/terrane-string-support");
     fs::create_dir_all(int.join("src")).unwrap();
+    fs::create_dir_all(scalar.join("src")).unwrap();
     fs::create_dir_all(string.join("src")).unwrap();
     fs::write(
         int.join("Cargo.toml"),
@@ -131,6 +134,16 @@ fn write_support_crates(directory: &Path) {
     fs::write(
         int.join("src/lib.rs"),
         include_bytes!("../../terrane-int-support/src/lib.rs"),
+    )
+    .unwrap();
+    fs::write(
+        scalar.join("Cargo.toml"),
+        "[package]\nname = \"terrane-scalar-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nterrane-int-support = { path = \"../terrane-int-support\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        scalar.join("src/lib.rs"),
+        include_bytes!("../../terrane-scalar-support/src/lib.rs"),
     )
     .unwrap();
     fs::write(

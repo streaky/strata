@@ -5,13 +5,13 @@ fn main() {
     let mut number: i128 = 1;
     while number <= 15 {
         if (number % 15) == 0 {
-            println!("{}", String::from("FizzBuzz"));
+            println!("{}", terrane_scalar_support::scalar_text(&(String::from("FizzBuzz"))));
         } else if (number % 3) == 0 {
-            println!("{}", String::from("Fizz"));
+            println!("{}", terrane_scalar_support::scalar_text(&(String::from("Fizz"))));
         } else if (number % 5) == 0 {
-            println!("{}", String::from("Buzz"));
+            println!("{}", terrane_scalar_support::scalar_text(&(String::from("Buzz"))));
         } else {
-            println!("{}", number);
+            println!("{}", terrane_scalar_support::scalar_text(&(number)));
         }
         number += 1;
     }

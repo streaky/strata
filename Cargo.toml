@@ -3,6 +3,7 @@ members = [
     "crates/terrane-cli",
     "crates/terrane-compiler",
     "crates/terrane-int-support",
+    "crates/terrane-scalar-support",
     "crates/terrane-language-server",
     "crates/terrane-string-support",
 ]

@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: empty-tail
 fn main() {
-    println!("{}", String::from(""));
+    println!("{}", terrane_scalar_support::scalar_text(&(String::from(""))));
 }
