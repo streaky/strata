@@ -400,7 +400,7 @@ Deliver:
 - typed parameters, optional parameters with defaults, and return contracts;
 - initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
 - assignment compatibility without implicit cross-type coercion;
-- explicit throwing `coerce` plus `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` for integer destinations only, covering `int` and every fixed width, including fixed-width-to-`int` widening only when requested explicitly; a floating-point or `string` destination is rejected with an explicit unsupported-destination diagnostic rather than partially implemented, so `.integer-conversion-overflow` remains the only conversion failure version one can raise;
+- explicit throwing `coerce` plus `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` for integer destinations only, covering `int` and every fixed width, including fixed-width-to-`int` widening only when requested explicitly; a floating-point or `string` destination is rejected with an explicit unsupported-destination diagnostic rather than partially implemented, so `.integer-conversion-overflow` remains the only conversion failure version one can raise. Milestone 5 regroups these four spellings under one `.coerce` object without changing their contracts;
 - unary, arithmetic, shift, bitwise, comparison, Boolean, equality, identity/type-membership, and type-appropriate operator checking;
 - exact `int` arithmetic, infinite two's-complement bitwise behavior, exact/arithmetic shifts, and Euclidean division/remainder without inheriting Rust overflow, shift, or signed division behavior;
 - fixed-width checked ordinary arithmetic and explicit checked, wrapping, saturating, and overflowing operation families without host debug/release dependence; fixed-width shift counts receive an explicit source-language operation contract rather than inheriting host behavior;
@@ -448,6 +448,7 @@ Deliver:
 - injective source-name-to-Rust-name encoding;
 - direct fixed-width scalar and function lowering where Rust preserves the source contract;
 - integration of the adaptive core-`int` support component into the explicit Rust IR, preserving checked tier promotion, exact wide operations, result normalization, normative runtime failures, and target capability diagnostics;
+- regrouping the integer coercion families under one compiler-owned `.coerce` object carrying `.checked`, `.wrapping`, and `.saturating` members, resolved statically and erased before lowering, replacing the flat `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` spellings without changing their contracts or result shapes;
 - structured expression/block emission with a pinned formatter policy;
 - generated `Cargo.toml`, source tree, compiler metadata, and entrypoint;
 - deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
@@ -533,6 +534,8 @@ The release pipeline must prove, from a clean checkout:
 - `ref`, borrow families, `move`, linear values, and deterministic user-defined destruction;
 - `throw`/`try`/`catch`/`finally`;
 - floating-point and `string` coercion destinations, including numeric-to-float rounding and text parsing;
+- a truncating (C/Rust-style) signed integer division and remainder family alongside the specified default contract;
+- coercion policies gated across non-integer source and destination pairs, beyond the integer-only table version one implements;
 - variadics, generators, closures if they delay the core pipeline;
 - custom declaration modifiers and package-defined type constructors;
 - custom importers, registries, lockfiles, Rust/system/runtime dependencies;
@@ -544,6 +547,92 @@ The release pipeline must prove, from a clean checkout:
 - parsing or compiling `demos/fork.trn` as an acceptance goal.
 
 Deferral means “diagnose as unsupported,” not “leave behavior accidental.”
+
+### Note on the deferred truncating-division family
+
+Version one specifies exactly one signed division and remainder contract. A later version
+may add an explicit truncating pair. It is deferred rather than rejected because the
+compatibility case is real even though the performance case is weak.
+
+Performance is not the justification, and this should not be reopened on intuition alone.
+Signed division already costs tens of cycles, so the rounding correction is noise beside
+it; where both operands are provably non-negative the two contracts agree and the
+correction folds away entirely; and for a constant power-of-two divisor the specified
+contract is the *cheaper* one, lowering to an arithmetic shift and a mask where truncation
+needs sign correction before and after. Reopen this on a measured hot path.
+
+Compatibility is the justification. Porting an algorithm whose reference implementation is
+specified in C, Java, Go, or Rust semantics, or implementing a published spec that defines
+truncation, otherwise forces a hand-written correction at every division site, which is
+both noisy and easy to get wrong.
+
+Constraints on any future design:
+
+- name the operation for its rounding behavior, never for a backend. A "Rust division"
+  spelling inherits an underspecified contract at signed minimum divided by `-1` and at a
+  zero divisor, and stops being true the moment a second backend exists;
+- ship the division and remainder together, because mixing rounding modes across the two
+  breaks `quotient * divisor + remainder == dividend`;
+- do not cross the rounding axis with the overflow-policy families. Offer truncation at the
+  default failure policy only; `checked-truncating-divide` is where the naming scheme fails
+  and the combination can be composed by hand;
+- no capability gate is warranted. Truncation is well defined, not unsafe, so it belongs in
+  the ordinary named-operation tier beside the other explicit families.
+
+### Note on the `.coerce` object and its policy table
+
+Version one names four flat coercion spellings. Milestone 5 replaces them with a single
+compiler-owned `.coerce` object carrying `.checked`, `.wrapping`, and `.saturating`
+members, reached through ordinary receiver syntax:
+
+```text
+value.coerce; int8              # throwing default
+value.coerce.checked; int8      # int8|none
+value.coerce.wrapping; int8
+value.coerce.saturating; int8
+```
+
+The motivation is the same orthogonality problem recorded for truncating division.
+Conversion and overflow policy are independent axes, and flat names encode their cross
+product, so every later operation family that acquires policies multiplies the name set.
+Coercion is the cheapest place to establish the grouping convention because it is the only
+family in version one with a complete policy set. Scheduling this at milestone 5 keeps it
+before the milestone 7 release gate, so it costs nothing; after that gate it would be a
+breaking change to a released surface.
+
+`.coerce` is one canonical object registered in the bootstrap table, not a protocol each
+type implements separately. **Which policies exist is a property of the source and
+destination pair, not of the object.** Saturating an `int` into a `string` is meaningless
+because a string has no range to clamp against, while saturating a `string` into an `int8`
+is well defined once text parsing exists. Version one already contains one instance of this
+rule: `wrapping` and `saturating` are rejected for an `int` destination because the adaptive
+integer is unbounded and there is nothing to wrap or saturate against. The general model is
+that exception generalized into a table.
+
+Consequences for the implementation:
+
+- applicability is a lookup on the triple `(source type, destination type, policy)`
+  returning either a result shape or a rejection. The version-one table covers integer
+  sources and destinations only; non-integer pairs remain deferred above;
+- the check happens on the complete call, not on the member access, because the destination
+  arrives as the argument after the policy member is selected. This is already how the
+  integer coercion inference is structured;
+- rejection must name both types and the policy, not report an unknown member. Prefer a
+  form such as "saturating coercion is not defined from `int` to `string`" anchored at the
+  policy member, listing the policies that pair does support;
+- `.coerce` and its members resolve statically and erase. Binding one to a name, as in
+  `operation = value.coerce`, requires bound-method values and therefore closures, which
+  section 9 defers; until then a bare `value.coerce` outside a call is rejected with an
+  explicit "coercion operation cannot be used as a value" diagnostic, with an accompanying
+  rejected fixture;
+- the policies do not share a result shape. `.wrapping` and `.saturating` are total,
+  `.checked` is partial, and the bare form raises. Grouping them under one object makes them
+  look more uniform than they are, so the documented contract must state each shape
+  explicitly;
+- arithmetic keeps its flat `checked`, `wrapping`, `saturating`, and `overflowing` family
+  names deliberately, because arithmetic has operator syntax as its default form and the
+  named families are escape hatches from it, whereas coercion has no operator form. This is
+  a reasoned difference, not an inconsistency to be tidied later.
 
 ## 10. Work sequencing inside each milestone
 
@@ -564,6 +653,7 @@ A feature is not complete when it merely parses or emits plausible Rust.
 
 Resolve these through small conformance branches before their dependent milestones are frozen:
 
+- the compiler-side representation of the object protocols the language draft requires in its section 9.6, especially member lookup and coercion: how the compiler answers what members a static type carries, with what contracts, availability conditions, and result shapes, so that member semantics stop being decided by name text independently at each use site. This underlies `.coerce` and its policy table, `.length` and the explicit string views, `.type` and identity, text display, truth, iteration, and equality, so it wants one model rather than one decision per operation;
 - representation and implementation strategy for exact adaptive core `int`, including its arbitrary-precision support dependency and target-capability boundary;
 - whether the selected collection subset needs facilities beyond the already-required integer support component;
 - representation of finite dynamic alternatives in generated Rust;
