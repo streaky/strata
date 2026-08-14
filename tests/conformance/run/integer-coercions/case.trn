@@ -8,7 +8,7 @@ uint8 = .uint8
 function main
   value int = 300
   exact = 120.coerce; int8
-  wrapped = value.coerce.wrap; uint8
+  wrapped = (value + 0).coerce.wrap; uint8
   saturated = value.coerce.saturate; uint8
   print; exact
   print; wrapped
