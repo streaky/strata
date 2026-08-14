@@ -7,14 +7,14 @@ fn main() {
         println!("{}", terrane_scalar_support::scalar_text(&(character)));
     }
     println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::length(&text) as i128)));
-    let mut index: i128 = 0;
-    while index < 3 {
+    let mut index: terrane_int_support::Int = terrane_int_support::Int::from(0_i128);
+    while index.clone() < terrane_int_support::Int::from(3_i128) {
         '__terrane_continue_0: {
-            if index == 1 {
+            if index.clone() == terrane_int_support::Int::from(1_i128) {
                 break '__terrane_continue_0;
             }
             println!("{}", terrane_scalar_support::scalar_text(&(index)));
         }
-        index += 1;
+        index = index.clone() + terrane_int_support::Int::from(1_i128);
     }
 }

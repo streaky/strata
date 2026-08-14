@@ -1,0 +1,9 @@
+namespace integer-euclidean
+from /core output import .print
+print = .print
+
+function main
+  print; -7 / 3
+  print; 7 / -3
+  print; -7 % 3
+  print; 7 % -3

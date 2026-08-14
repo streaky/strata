@@ -88,7 +88,7 @@ impl Emitter<'_> {
             ValueType::Scalar(scalar) => rust_type(scalar),
             ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => return,
         };
-        let value = self.expression(initializer);
+        let value = self.expression_as(initializer, binding.value_type);
         let name = namespace_binding_name(self.source.id(), self.text(name));
         self.line(&format!("static {name}: {ty} = {value};"));
     }
@@ -151,7 +151,11 @@ impl Emitter<'_> {
                     let [left, right] = node.children.as_slice() else {
                         return;
                     };
-                    let value = self.expression(right);
+                    let value = if self.is_adaptive_expression(left) {
+                        self.adaptive_expression(right)
+                    } else {
+                        self.expression(right)
+                    };
                     let target = self.expression(left);
                     self.line(&format!("{target} = {value};"));
                 }
@@ -227,7 +231,11 @@ impl Emitter<'_> {
             write!(self.output, ": {ty}").unwrap();
         }
         if let Some(initializer) = initializer {
-            let initializer = self.expression(initializer);
+            let initializer = if let Some(binding) = binding {
+                self.expression_as(initializer, binding.value_type)
+            } else {
+                self.expression(initializer)
+            };
             write!(self.output, " = {initializer}").unwrap();
         }
         self.output.push_str(";\n");
@@ -254,9 +262,15 @@ impl Emitter<'_> {
             return;
         };
         let operator = &self.source.text()[value.span.end..node.span.end];
-        let operation = if operator.trim() == "++" { "+=" } else { "-=" };
-        let value = self.expression(value);
-        self.line(&format!("{value} {operation} 1;"));
+        let operation = if operator.trim() == "++" { "+" } else { "-" };
+        let target = self.expression(value);
+        if self.is_adaptive_expression(value) {
+            self.line(&format!(
+                "{target} = {target}.clone() {operation} terrane_int_support::Int::from(1_i128);"
+            ));
+        } else {
+            self.line(&format!("{target} {operation}= 1;"));
+        }
     }
 
     fn if_statement(&mut self, node: &SyntaxNode) {
@@ -355,6 +369,9 @@ impl Emitter<'_> {
                 let Some(operand) = node.children.last() else {
                     return String::new();
                 };
+                if self.is_adaptive_expression(operand) {
+                    return self.adaptive_expression(node);
+                }
                 let operator = self.source.text()[node.span.start..operand.span.start].trim();
                 let operator = match operator {
                     "not" => "!",
@@ -372,6 +389,77 @@ impl Emitter<'_> {
                 .first()
                 .map_or_else(String::new, |child| self.expression(child)),
             _ => self.text(node).trim().to_owned(),
+        }
+    }
+
+    fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if value_type == ValueType::Scalar(ScalarType::Int) {
+            self.adaptive_expression(node)
+        } else {
+            self.expression(node)
+        }
+    }
+
+    fn adaptive_expression(&mut self, node: &SyntaxNode) -> String {
+        match node.kind {
+            SyntaxKind::Literal => adaptive_literal(self.text(node)),
+            SyntaxKind::Name => format!("{}.clone()", self.name(node)),
+            SyntaxKind::GroupExpression => {
+                node.children.first().map_or_else(String::new, |child| {
+                    format!("({})", self.adaptive_expression(child))
+                })
+            }
+            SyntaxKind::UnaryExpression => {
+                let Some(operand) = node.children.last() else {
+                    return String::new();
+                };
+                let operator = self.source.text()[node.span.start..operand.span.start].trim();
+                format!("{operator}{}", self.adaptive_expression(operand))
+            }
+            SyntaxKind::BinaryExpression => self.adaptive_binary(node),
+            _ => self.expression(node),
+        }
+    }
+
+    fn adaptive_binary(&mut self, node: &SyntaxNode) -> String {
+        let [left, right] = node.children.as_slice() else {
+            return String::new();
+        };
+        let operator = self.source.text()[left.span.end..right.span.start].trim();
+        let left = self.adaptive_expression(left);
+        let right = self.adaptive_expression(right);
+        match operator {
+            "/" => {
+                format!("terrane_int_support::unwrap_or_fail(({left}).euclidean_div(&({right})))")
+            }
+            "%" => format!("terrane_int_support::unwrap_or_fail(({left}).modulo(&({right})))"),
+            _ => format!("({left} {operator} {right})"),
+        }
+    }
+
+    fn is_adaptive_expression(&self, node: &SyntaxNode) -> bool {
+        match node.kind {
+            SyntaxKind::Literal => self
+                .text(node)
+                .chars()
+                .all(|character| character.is_ascii_digit() || character == '_'),
+            SyntaxKind::Name => {
+                let name = self.text(node).trim();
+                self.unit.typed_bindings.iter().rev().any(|binding| {
+                    binding.name == name
+                        && binding.span.start <= node.span.start
+                        && binding.value_type == ValueType::Scalar(ScalarType::Int)
+                })
+            }
+            SyntaxKind::GroupExpression | SyntaxKind::UnaryExpression => node
+                .children
+                .last()
+                .is_some_and(|child| self.is_adaptive_expression(child)),
+            SyntaxKind::BinaryExpression => node
+                .children
+                .first()
+                .is_some_and(|child| self.is_adaptive_expression(child)),
+            _ => false,
         }
     }
 
@@ -393,10 +481,12 @@ impl Emitter<'_> {
             let matches = matches!(binding.value_type, ValueType::Scalar(ty) if ty.source_name() == descriptor);
             return matches.to_string();
         }
+        if self.is_adaptive_expression(left) {
+            return self.adaptive_binary(node);
+        }
         let operator = match source_operator {
             "and" => "&&",
             "or" => "||",
-            "//" => "/",
             other => other,
         };
         format!(
@@ -458,6 +548,17 @@ impl Emitter<'_> {
             return format!("format!(\"{format}\", {})", values.join(", "));
         }
         let contract = self.contract_for_call(callee).cloned();
+        if let Some(contract) = &contract {
+            values.clear();
+            for (argument, parameter) in arguments.children.iter().zip(&contract.parameters) {
+                let value = argument.children.last().unwrap_or(argument);
+                values.push(if let Some(ty) = parameter.value_type {
+                    self.expression_as(value, ValueType::Scalar(ty))
+                } else {
+                    self.expression(value)
+                });
+            }
+        }
         let name = contract
             .as_ref()
             .map_or_else(|| self.expression(callee), function_name);
@@ -566,7 +667,7 @@ impl Emitter<'_> {
     }
 
     fn append_defaults(
-        &self,
+        &mut self,
         contract: &FunctionContract,
         supplied: usize,
         values: &mut Vec<String>,
@@ -596,14 +697,21 @@ impl Emitter<'_> {
         else {
             return;
         };
-        for parameter in parameters.children.iter().skip(supplied) {
+        for (index, parameter) in parameters.children.iter().enumerate().skip(supplied) {
             if let Some(default) = parameter.children.last().filter(|child| {
                 !matches!(
                     child.kind,
                     SyntaxKind::Name | SyntaxKind::TypeExpression | SyntaxKind::ObjectName
                 )
             }) {
-                values.push(literal_or_text(&owner.source, default));
+                let value = literal_or_text(&owner.source, default);
+                values.push(
+                    if contract.parameters[index].value_type == Some(ScalarType::Int) {
+                        adaptive_literal(&value)
+                    } else {
+                        value
+                    },
+                );
             }
         }
     }
@@ -696,6 +804,15 @@ fn literal(text: &str) -> String {
     format!("String::from({value:?})")
 }
 
+fn adaptive_literal(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.parse::<i128>().is_ok() {
+        format!("terrane_int_support::Int::from({trimmed}_i128)")
+    } else {
+        format!("terrane_int_support::Int::from_decimal({trimmed:?})")
+    }
+}
+
 fn block_string(text: &str) -> String {
     let mut lines = text.lines();
     let first = lines.next().unwrap_or_default();
@@ -738,11 +855,7 @@ fn unescape(value: &str) -> String {
 }
 
 fn rust_type(ty: ScalarType) -> &'static str {
-    ty.rust_type().unwrap_or(match ty {
-        ScalarType::String => "String",
-        ScalarType::None => "()",
-        _ => "i128",
-    })
+    ty.lowering_type()
 }
 
 fn function_name(contract: &FunctionContract) -> String {

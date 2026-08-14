@@ -19,8 +19,14 @@ fn inferred_local_first_assignment_lowers_as_a_declaration() {
     let source = "namespace inferred\nfunction main\n  total = 5\n  total = total + 1\n";
     let compilation = terrane_compiler::compile("inferred.trn", source.to_owned()).unwrap();
 
-    assert!(compilation.rust.contains("let mut total: i128 = 5;"));
-    assert!(compilation.rust.contains("total = (total + 1);"));
+    assert!(compilation.rust.contains(
+        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
+    ));
+    assert!(
+        compilation
+            .rust
+            .contains("total = (total.clone() + terrane_int_support::Int::from(1_i128));")
+    );
 }
 
 #[test]
@@ -215,6 +221,9 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
     .unwrap();
     assert!(clauses.rust.contains("'__terrane_continue_0: {"));
     let continue_position = clauses.rust.find("break '__terrane_continue_0;").unwrap();
-    let update_position = clauses.rust.find("index += 1;").unwrap();
+    let update_position = clauses
+        .rust
+        .find("index = index.clone() + terrane_int_support::Int::from(1_i128);")
+        .unwrap();
     assert!(continue_position < update_position);
 }

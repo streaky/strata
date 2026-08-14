@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 
@@ -98,16 +99,29 @@ impl Int {
         }
     }
 
+    /// Constructs an exact integer from a compiler-validated decimal literal.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is not a decimal integer. Generated code only calls this
+    /// function with literals validated by the Terrane compiler.
+    #[must_use]
+    pub fn from_decimal(value: &str) -> Self {
+        let value = BigInt::parse_bytes(value.as_bytes(), 10)
+            .expect("Terrane compiler emitted an invalid integer literal");
+        Self::from_big(value)
+    }
+
     fn binary_big(&self, rhs: &Self, operation: impl FnOnce(BigInt, BigInt) -> BigInt) -> Self {
         Self::from_big(operation(self.as_big(), rhs.as_big()))
     }
 
-    /// Exact flooring division, matching Terrane's signed integer contract.
+    /// Exact Euclidean division, matching Terrane's signed integer contract.
     ///
     /// # Errors
     ///
     /// Returns [`ArithmeticError::DivisionByZero`] for a zero divisor.
-    pub fn floor_div(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
+    pub fn euclidean_div(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
         let rhs = rhs.as_big();
         if rhs == BigInt::from(0_u8) {
             return Err(ArithmeticError::DivisionByZero);
@@ -115,22 +129,24 @@ impl Int {
         let left = self.as_big();
         let quotient = &left / &rhs;
         let remainder = &left % &rhs;
-        let floors_down = remainder != BigInt::from(0_u8)
-            && ((remainder < BigInt::from(0_u8)) != (rhs < BigInt::from(0_u8)));
-        Ok(Self::from_big(if floors_down {
-            quotient - 1
+        Ok(Self::from_big(if remainder < BigInt::from(0_u8) {
+            if rhs < BigInt::from(0_u8) {
+                quotient + 1
+            } else {
+                quotient - 1
+            }
         } else {
             quotient
         }))
     }
 
-    /// Remainder paired with [`Self::floor_div`], carrying the divisor's sign.
+    /// Nonnegative remainder paired with [`Self::euclidean_div`].
     ///
     /// # Errors
     ///
     /// Returns [`ArithmeticError::DivisionByZero`] for a zero divisor.
     pub fn modulo(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
-        let quotient = self.floor_div(rhs)?;
+        let quotient = self.euclidean_div(rhs)?;
         Ok(Self::from_big(
             self.as_big() - quotient.as_big() * rhs.as_big(),
         ))
@@ -185,6 +201,23 @@ impl From<i128> for Int {
         } else {
             Self::Wide(value)
         }
+    }
+}
+
+impl Ord for Int {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Small(left), Self::Small(right)) => left.cmp(right),
+            (Self::Wide(left), Self::Wide(right)) => left.cmp(right),
+            (Self::Big(left), Self::Big(right)) => left.cmp(right),
+            _ => self.as_big().cmp(&other.as_big()),
+        }
+    }
+}
+
+impl PartialOrd for Int {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
