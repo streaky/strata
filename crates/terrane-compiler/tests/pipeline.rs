@@ -248,32 +248,40 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     );
     let compilation = terrane_compiler::compile("descriptors.trn", source.to_owned()).unwrap();
 
-    assert!(compilation.rust.contains("let member: bool = true;"));
     assert!(
         compilation
             .rust
-            .contains("let parameter_member: bool = true;")
+            .contains("let member: bool = { let _ = value; true };")
     );
     assert!(
         compilation
             .rust
-            .contains("let same_descriptor: bool = true;")
+            .contains("let parameter_member: bool = { let _ = item; true };")
     );
     assert!(
         compilation
             .rust
-            .contains("let different_alias: bool = false;")
-    );
-    assert!(compilation.rust.contains("let same_scalar: bool = false;"));
-    assert!(
-        compilation
-            .rust
-            .contains("let same_value_type: bool = true;")
+            .contains("let same_descriptor: bool = {  true };")
     );
     assert!(
         compilation
             .rust
-            .contains("let different_value_type: bool = false;")
+            .contains("let different_alias: bool = {  false };")
+    );
+    assert!(
+        compilation
+            .rust
+            .contains("let same_scalar: bool = { let _ = value; let _ = value; false };")
+    );
+    assert!(
+        compilation
+            .rust
+            .contains("let same_value_type: bool = { let _ = value; let _ = value; true };")
+    );
+    assert!(
+        compilation
+            .rust
+            .contains("let different_value_type: bool = { let _ = value; false };")
     );
 }
 

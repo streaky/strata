@@ -132,6 +132,19 @@ pub struct SemanticUnit {
     pub evaluation_steps: Vec<EvaluationStep>,
 }
 
+impl SemanticUnit {
+    /// Returns the compiler-resolved value type for an expression when it is statically known.
+    pub(crate) fn inferred_value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        let aliases = ScalarType::ALL
+            .into_iter()
+            .map(|ty| (ty.source_name().to_owned(), ty))
+            .collect();
+        infer_value_type(self, node, &aliases, &self.typed_bindings)
+            .ok()
+            .flatten()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LexicalScope {
     pub span: Span,
@@ -863,6 +876,16 @@ fn validate_call_nodes<'a>(
         )?;
         return Ok(());
     }
+    if node.kind == SyntaxKind::MemberExpression
+        && node
+            .children
+            .get(1)
+            .is_some_and(|member| node_text(&unit.source, member) == "length")
+    {
+        let mut bindings = unit.typed_bindings.clone();
+        bindings.extend_from_slice(contextual_bindings);
+        infer_value_type(unit, node, aliases, &bindings)?;
+    }
     for child in &node.children {
         validate_call_nodes(
             package,
@@ -1395,7 +1418,7 @@ fn infer_value_type(
         return Ok(bindings
             .iter()
             .rev()
-            .find(|binding| binding.name == name)
+            .find(|binding| binding.name == name && binding.span.start <= node.span.start)
             .map(|binding| binding.value_type));
     }
     if node.kind == SyntaxKind::MemberExpression
@@ -1418,7 +1441,21 @@ fn infer_value_type(
         ));
     }
     if node.kind == SyntaxKind::CallExpression {
-        return infer_integer_coercion_type(unit, node, aliases, bindings);
+        if let Some(value_type) = infer_integer_coercion_type(unit, node, aliases, bindings)? {
+            return Ok(Some(value_type));
+        }
+        if let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::Name
+        {
+            let name = node_text(&unit.source, callee);
+            return Ok(unit
+                .functions
+                .iter()
+                .find(|contract| contract.name == name)
+                .and_then(|contract| contract.return_type)
+                .map(ValueType::Scalar));
+        }
+        return Ok(None);
     }
     Ok(None)
 }

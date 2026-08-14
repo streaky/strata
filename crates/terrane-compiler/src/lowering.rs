@@ -482,35 +482,7 @@ impl Emitter<'_> {
     }
 
     fn is_adaptive_expression(&self, node: &SyntaxNode) -> bool {
-        match node.kind {
-            SyntaxKind::Literal => self
-                .text(node)
-                .chars()
-                .all(|character| character.is_ascii_digit() || character == '_'),
-            SyntaxKind::Name => {
-                let name = self.text(node).trim();
-                self.unit.typed_bindings.iter().rev().any(|binding| {
-                    binding.name == name
-                        && binding.span.start <= node.span.start
-                        && binding.value_type == ValueType::Scalar(ScalarType::Int)
-                })
-            }
-            SyntaxKind::GroupExpression | SyntaxKind::UnaryExpression => node
-                .children
-                .last()
-                .is_some_and(|child| self.is_adaptive_expression(child)),
-            SyntaxKind::BinaryExpression => {
-                let [left, right] = node.children.as_slice() else {
-                    return false;
-                };
-                let operator = self.source.text()[left.span.end..right.span.start].trim();
-                matches!(
-                    operator,
-                    "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | "&" | "|" | "^"
-                ) && self.is_adaptive_expression(left)
-            }
-            _ => false,
-        }
+        self.value_type(node) == Some(ValueType::Scalar(ScalarType::Int))
     }
 
     fn binary(&mut self, node: &SyntaxNode) -> String {
@@ -519,14 +491,21 @@ impl Emitter<'_> {
         };
         let source_operator = self.source.text()[left.span.end..right.span.start].trim();
         if source_operator == "is" {
-            return matches!(
+            let result = matches!(
                 (
                     self.descriptor_identity(left),
                     self.descriptor_identity(right),
                 ),
                 (Some(left), Some(right)) if left == right
-            )
-            .to_string();
+            );
+            let mut effects = Vec::new();
+            if let Some(effect) = self.identity_operand_effect(left) {
+                effects.push(effect);
+            }
+            if let Some(effect) = self.identity_operand_effect(right) {
+                effects.push(effect);
+            }
+            return format!("{{ {} {result} }}", effects.join(" "));
         }
         if self.is_adaptive_expression(left) {
             return self.adaptive_binary(node);
@@ -568,18 +547,60 @@ impl Emitter<'_> {
         )
     }
 
-    fn type_membership(&self, node: &SyntaxNode) -> String {
+    fn type_membership(&mut self, node: &SyntaxNode) -> String {
         let [value, descriptor] = node.children.as_slice() else {
             return String::new();
         };
-        matches!(
+        let result = matches!(
             (self.value_type(value), self.descriptor_type(descriptor)),
             (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
-        )
-        .to_string()
+        );
+        let effect = Self::discarded_expression(self.expression(value));
+        format!("{{ {effect} {result} }}")
+    }
+
+    fn identity_operand_effect(&mut self, node: &SyntaxNode) -> Option<String> {
+        let effect = if node.kind == SyntaxKind::MemberExpression
+            && node
+                .children
+                .get(1)
+                .is_some_and(|member| self.text(member) == "type")
+        {
+            node.children.first()?
+        } else {
+            node
+        };
+        matches!(self.value_type(effect), Some(ValueType::Scalar(_)))
+            .then(|| Self::discarded_expression(self.expression(effect)))
+    }
+
+    fn discarded_expression(mut expression: String) -> String {
+        loop {
+            let bytes = expression.as_bytes();
+            if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+                break;
+            }
+            let mut depth = 0_usize;
+            let wraps_expression = bytes.iter().enumerate().all(|(index, byte)| {
+                match byte {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                depth != 0 || index == bytes.len() - 1
+            });
+            if !wraps_expression {
+                break;
+            }
+            expression = expression[1..expression.len() - 1].to_owned();
+        }
+        format!("let _ = {expression};")
     }
 
     fn value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        if let Some(value_type) = self.unit.inferred_value_type(node) {
+            return Some(value_type);
+        }
         match node.kind {
             SyntaxKind::Literal => match self.text(node).trim() {
                 "true" | "false" => Some(ValueType::Scalar(ScalarType::Bool)),
