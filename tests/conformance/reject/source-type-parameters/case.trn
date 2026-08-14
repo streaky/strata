@@ -1,0 +1,2 @@
+namespace generics
+function map of T; value T
