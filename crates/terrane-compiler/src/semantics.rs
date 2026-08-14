@@ -919,7 +919,21 @@ fn validate_call_nodes<'a>(
         bindings.extend_from_slice(contextual_bindings);
         infer_value_type(unit, node, aliases, &bindings)?;
     }
-    for child in &node.children {
+    if node.kind == SyntaxKind::MemberExpression && coercion_family_receiver(unit, node) {
+        return Err(failure(
+            &unit.source,
+            "T0018",
+            "`.coerce` and its policy members are not storable values before bound methods exist",
+            node.span,
+        ));
+    }
+    for (index, child) in node.children.iter().enumerate() {
+        if node.kind == SyntaxKind::CallExpression
+            && index == 0
+            && coercion_family_receiver(unit, child)
+        {
+            continue;
+        }
         validate_call_nodes(
             package,
             unit,
@@ -1567,7 +1581,7 @@ fn infer_integer_coercion_type(
                 &unit.source,
                 "T0017",
                 format!(
-                    "`{member}` is obsolete; use `.coerce.{}`",
+                    "`{member}` is not valid syntax; use `.coerce.{}`",
                     match member {
                         "checked-coerce" => "checked",
                         "wrapping-coerce" => "wrap",
@@ -1575,6 +1589,14 @@ fn infer_integer_coercion_type(
                         _ => unreachable!("obsolete coercion members are matched above"),
                     }
                 ),
+                callee.span,
+            ));
+        }
+        if let Some(policy) = invalid_coercion_policy(unit, callee) {
+            return Err(failure(
+                &unit.source,
+                "T0010",
+                format!("`.coerce.{policy}` is not an available coercion policy"),
                 callee.span,
             ));
         }
@@ -1628,13 +1650,13 @@ fn infer_integer_coercion_type(
             destination_node.span,
         ));
     }
-    let result = integer_coercion_result_type(destination, policy).map_err(|message| {
-        failure(&unit.source, "T0010", message, destination_node.span)
-    })?;
+    let result = integer_coercion_result_type(source_type, destination, policy)
+        .map_err(|message| failure(&unit.source, "T0010", message, destination_node.span))?;
     Ok(Some(result))
 }
 
 fn integer_coercion_result_type(
+    source: ScalarType,
     destination: ScalarType,
     policy: CoercionPolicy,
 ) -> Result<ValueType, String> {
@@ -1676,6 +1698,29 @@ pub(crate) fn integer_coercion_call<'a>(
         .flatten()
 }
 
+fn invalid_coercion_policy<'a>(unit: &'a SemanticUnit, callee: &'a SyntaxNode) -> Option<&'a str> {
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
+    if callee.kind != SyntaxKind::MemberExpression
+        || matches!(
+            node_text(&unit.source, member),
+            "coerce" | "checked" | "wrap" | "saturate"
+        )
+    {
+        return None;
+    }
+    coercion_family_receiver(unit, receiver).then(|| node_text(&unit.source, member))
+}
+
+fn coercion_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+    let [receiver, member] = node.children.as_slice() else {
+        return false;
+    };
+    node.kind == SyntaxKind::MemberExpression
+        && (node_text(&unit.source, member) == "coerce" || coercion_family_receiver(unit, receiver))
+}
+
 fn obsolete_integer_coercion_member<'a>(
     unit: &'a SemanticUnit,
     callee: &'a SyntaxNode,
@@ -1685,7 +1730,12 @@ fn obsolete_integer_coercion_member<'a>(
     };
     (callee.kind == SyntaxKind::MemberExpression)
         .then(|| node_text(&unit.source, member))
-        .filter(|member| matches!(*member, "checked-coerce" | "wrapping-coerce" | "saturating-coerce"))
+        .filter(|member| {
+            matches!(
+                *member,
+                "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
+            )
+        })
 }
 fn infer_binary_type(
     unit: &SemanticUnit,

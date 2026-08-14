@@ -554,8 +554,18 @@ impl Emitter<'_> {
         let [value, descriptor] = node.children.as_slice() else {
             return String::new();
         };
+        let value_type = self.value_type(value);
+        let descriptor_type = self.descriptor_type(descriptor);
+        if let Some(ValueType::ScalarOrNone(inner)) = value_type {
+            let value = self.expression(value);
+            return match descriptor_type {
+                Some(ScalarType::None) => format!("({value}).is_none()"),
+                Some(descriptor) if descriptor == inner => format!("({value}).is_some()"),
+                _ => format!("{{ let _ = {value}; false }}"),
+            };
+        }
         let result = matches!(
-            (self.value_type(value), self.descriptor_type(descriptor)),
+            (value_type, descriptor_type),
             (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
         );
         let effect = Self::discarded_expression(self.expression(value));
