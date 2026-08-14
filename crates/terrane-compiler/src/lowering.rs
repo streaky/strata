@@ -2,29 +2,42 @@ use std::fmt::Write as _;
 
 use crate::{
     ScalarType, SourceFile,
-    semantics::{FunctionContract, SemanticPackage, SemanticUnit, ValueType},
+    semantics::{FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType},
     syntax::{SyntaxKind, SyntaxNode},
 };
 
-pub(crate) fn emit(package: &SemanticPackage, unit: &SemanticUnit) -> String {
-    let mut emitter = Emitter {
-        package,
-        unit,
-        source: &unit.source,
-        output: format!(
-            "// Generated deterministically by Terrane {}.\n// Source: {}\n// Namespace: {}\n",
-            crate::VERSION,
-            display_path(unit.source.path()),
-            unit.namespace.trim_start_matches('/').replace('/', " ")
-        ),
-        indent: 0,
-    };
-    for node in &unit.tree.root.children {
-        if node.kind == SyntaxKind::FunctionDeclaration {
-            emitter.function(node);
+pub(crate) fn emit(package: &SemanticPackage) -> String {
+    let mut output = format!(
+        "// Generated deterministically by Terrane {}.\n",
+        crate::VERSION
+    );
+    for unit in &package.units {
+        let mut emitter = Emitter {
+            package,
+            unit,
+            source: &unit.source,
+            output: String::new(),
+            indent: 0,
+        };
+        for node in &unit.tree.root.children {
+            match node.kind {
+                SyntaxKind::Binding | SyntaxKind::Assignment => emitter.namespace_binding(node),
+                SyntaxKind::FunctionDeclaration => emitter.function(node),
+                _ => {}
+            }
+        }
+        if !emitter.output.is_empty() {
+            writeln!(
+                output,
+                "// Source: {}\n// Namespace: {}",
+                display_path(unit.source.path()),
+                unit.namespace.trim_start_matches('/').replace('/', " ")
+            )
+            .unwrap();
+            output.push_str(&emitter.output);
         }
     }
-    emitter.output
+    output
 }
 
 struct Emitter<'a> {
@@ -36,6 +49,45 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
+    fn namespace_binding(&mut self, node: &SyntaxNode) {
+        if Self::is_compiler_object_binding(node) {
+            return;
+        }
+        let Some(binding) = self
+            .unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == node.span)
+        else {
+            return;
+        };
+        let Some(name) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        else {
+            return;
+        };
+        let Some(initializer) = node.children.iter().rev().find(|child| {
+            !matches!(
+                child.kind,
+                SyntaxKind::Name
+                    | SyntaxKind::TypeExpression
+                    | SyntaxKind::DeclarationModifier
+                    | SyntaxKind::Visibility
+                    | SyntaxKind::DeclarationQualifier
+            )
+        }) else {
+            return;
+        };
+        let ty = match binding.value_type {
+            ValueType::Scalar(scalar) => rust_type(scalar),
+            ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => return,
+        };
+        let value = self.expression(initializer);
+        let name = namespace_binding_name(self.source.id(), self.text(name));
+        self.line(&format!("static {name}: {ty} = {value};"));
+    }
     fn function(&mut self, node: &SyntaxNode) {
         let Some(contract) = self
             .unit
@@ -46,7 +98,7 @@ impl Emitter<'_> {
             return;
         };
         self.line_start();
-        let name = rust_name(&contract.name);
+        let name = function_name(contract);
         write!(self.output, "fn {name}(").unwrap();
         for (index, parameter) in contract.parameters.iter().enumerate() {
             if index != 0 {
@@ -84,12 +136,21 @@ impl Emitter<'_> {
         match node.kind {
             SyntaxKind::Binding => self.binding(node),
             SyntaxKind::Assignment => {
-                let [left, right] = node.children.as_slice() else {
-                    return;
-                };
-                let value = self.expression(right);
-                let target = self.expression(left);
-                self.line(&format!("{target} = {value};"));
+                if self
+                    .unit
+                    .typed_bindings
+                    .iter()
+                    .any(|binding| binding.span == node.span)
+                {
+                    self.binding(node);
+                } else {
+                    let [left, right] = node.children.as_slice() else {
+                        return;
+                    };
+                    let value = self.expression(right);
+                    let target = self.expression(left);
+                    self.line(&format!("{target} = {value};"));
+                }
             }
             SyntaxKind::CallExpression => {
                 let expression = self.expression(node);
@@ -246,7 +307,7 @@ impl Emitter<'_> {
     fn expression(&mut self, node: &SyntaxNode) -> String {
         match node.kind {
             SyntaxKind::Literal => literal(self.text(node)),
-            SyntaxKind::Name => rust_name(self.text(node)),
+            SyntaxKind::Name => self.name(node),
             SyntaxKind::GroupExpression => node
                 .children
                 .first()
@@ -346,8 +407,11 @@ impl Emitter<'_> {
             let format = "{}".repeat(values.len());
             return format!("format!(\"{format}\", {})", values.join(", "));
         }
-        let name = self.expression(callee);
-        if let Some(contract) = self.contract_for_call(callee).cloned() {
+        let contract = self.contract_for_call(callee).cloned();
+        let name = contract
+            .as_ref()
+            .map_or_else(|| self.expression(callee), function_name);
+        if let Some(contract) = contract {
             self.append_defaults(&contract, arguments.children.len(), &mut values);
         }
         format!("{name}({})", values.join(", "))
@@ -366,6 +430,38 @@ impl Emitter<'_> {
             .iter()
             .flat_map(|unit| &unit.functions)
             .find(|contract| contract.span == span)
+    }
+
+    fn name(&self, node: &SyntaxNode) -> String {
+        let source_name = self.text(node);
+        let Some(symbol) =
+            self.package
+                .resolve_ordinary_at(self.unit, node.span.start, source_name)
+        else {
+            return rust_name(source_name);
+        };
+        if symbol.kind != SymbolKind::Binding {
+            return rust_name(source_name);
+        }
+        let Some(span) = symbol.declaration_span else {
+            return rust_name(source_name);
+        };
+        let is_namespace_binding = self
+            .package
+            .units
+            .iter()
+            .find(|unit| unit.source.id() == span.file)
+            .is_some_and(|unit| {
+                unit.tree.root.children.iter().any(|candidate| {
+                    candidate.span == span
+                        && matches!(candidate.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                })
+            });
+        if is_namespace_binding {
+            namespace_binding_name(span.file, &symbol.name)
+        } else {
+            rust_name(source_name)
+        }
     }
 
     fn append_defaults(
@@ -546,6 +642,14 @@ fn rust_type(ty: ScalarType) -> &'static str {
         ScalarType::None => "()",
         _ => "i128",
     })
+}
+
+fn function_name(contract: &FunctionContract) -> String {
+    rust_name(&contract.name)
+}
+
+fn namespace_binding_name(file: u32, name: &str) -> String {
+    format!("__TERRANE_F{file}_{}", rust_name(name).to_uppercase())
 }
 
 fn rust_name(name: &str) -> String {

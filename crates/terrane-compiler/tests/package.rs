@@ -103,6 +103,37 @@ fn package_compilation_parses_every_enumerated_unit() {
 }
 
 #[test]
+fn package_compilation_emits_functions_and_bindings_from_every_unit() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"example.multi\"\nsources = [\"main.trn\", \"support.trn\"]\n",
+    );
+    package.write(
+        "main.trn",
+        "namespace hello\nfrom /core output import .print\nprint = .print\nfunction main\n  print; (helper;)\n",
+    );
+    package.write(
+        "support.trn",
+        "namespace hello\nvalue int = 41\nfunction helper int\n  return value + 1\n",
+    );
+
+    let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
+
+    assert!(
+        compilation
+            .rust
+            .contains("static __TERRANE_F1_VALUE: i128 = 41;")
+    );
+    assert!(compilation.rust.contains("fn helper() -> i128"));
+    assert!(
+        compilation
+            .rust
+            .contains("return (__TERRANE_F1_VALUE + 1);")
+    );
+}
+
+#[test]
 fn package_entry_point_comes_from_resolved_function_declarations() {
     let package = TempPackage::new();
     package.write(

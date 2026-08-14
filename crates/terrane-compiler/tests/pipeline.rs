@@ -15,6 +15,15 @@ fn hello_lowers_deterministically() {
 }
 
 #[test]
+fn inferred_local_first_assignment_lowers_as_a_declaration() {
+    let source = "namespace inferred\nfunction main\n  total = 5\n  total = total + 1\n";
+    let compilation = terrane_compiler::compile("inferred.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains("let mut total: i128 = 5;"));
+    assert!(compilation.rust.contains("total = (total + 1);"));
+}
+
+#[test]
 fn rejects_duplicate_declarations() {
     let cases = [
         (

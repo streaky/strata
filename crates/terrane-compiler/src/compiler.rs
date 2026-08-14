@@ -92,7 +92,7 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         .find(|unit| unit.source.id() == entry_span.file)
         .unwrap_or(&semantic.units[0]);
     let source = &unit.source;
-    let rust = crate::lowering::emit(&semantic, unit);
+    let rust = crate::lowering::emit(&semantic);
     Ok(Compilation {
         source: (*source).clone(),
         rust,
