@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance")
@@ -32,6 +33,7 @@ fn every_manifest_drives_a_conformance_case() {
                     .rust
                     .replace(terrane_compiler::VERSION, "<version>");
                 assert_eq!(normalized, expected, "{}", case.display());
+                compile_and_maybe_run(case, phase, &compilation.rust);
             }
             ("check", "reject") => {
                 let code = field(&manifest, "code").unwrap();
@@ -58,6 +60,63 @@ fn every_manifest_drives_a_conformance_case() {
             ),
         }
     }
+}
+
+fn compile_and_maybe_run(case: &Path, phase: &str, rust: &str) {
+    let case_name = case
+        .strip_prefix(corpus())
+        .unwrap()
+        .to_string_lossy()
+        .replace(['/', '\\'], "-");
+    let build_dir = std::env::temp_dir().join(format!(
+        "terrane-conformance-{}-{case_name}",
+        std::process::id()
+    ));
+    if build_dir.exists() {
+        fs::remove_dir_all(&build_dir).unwrap();
+    }
+    fs::create_dir_all(&build_dir).unwrap();
+    let rust_path = build_dir.join("main.rs");
+    let binary_path = build_dir.join("program");
+    fs::write(&rust_path, rust).unwrap();
+    let output = Command::new("rustc")
+        .args(["--edition=2024", "-Dwarnings"])
+        .arg(&rust_path)
+        .arg("-o")
+        .arg(&binary_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{} generated Rust failed to compile:\n{}",
+        case.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if phase == "run" {
+        let output = Command::new(&binary_path).output().unwrap();
+        let expected_stdout = fs::read(case.join("stdout.txt")).unwrap();
+        let expected_stderr = optional_bytes(case.join("stderr.txt"));
+        let expected_code = optional_text(case.join("exit-code.txt"))
+            .map_or(0, |text| text.trim().parse().unwrap());
+        assert_eq!(output.stdout, expected_stdout, "{} stdout", case.display());
+        assert_eq!(output.stderr, expected_stderr, "{} stderr", case.display());
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "{} exit code",
+            case.display()
+        );
+    }
+    fs::remove_dir_all(build_dir).unwrap();
+}
+
+fn optional_bytes(path: PathBuf) -> Vec<u8> {
+    fs::read(path).unwrap_or_default()
+}
+
+fn optional_text(path: PathBuf) -> Option<String> {
+    fs::read_to_string(path).ok()
 }
 
 fn manifests_below(root: &Path) -> Vec<PathBuf> {
