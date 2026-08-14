@@ -494,7 +494,7 @@ impl Emitter<'_> {
             rust_type(destination)
         );
         Some(if operation == "coerce" {
-            format!("{call}.unwrap_or_else(|failure| panic!(\"{{}}\", failure.render()))")
+            format!("terrane_int_support::unwrap_or_fail({call})")
         } else {
             call
         })

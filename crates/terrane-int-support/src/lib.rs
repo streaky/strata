@@ -57,6 +57,17 @@ impl ArithmeticError {
     }
 }
 
+/// Unwraps a runtime arithmetic result or terminates with stable source-oriented output.
+pub fn unwrap_or_fail<T>(result: Result<T, ArithmeticError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{}", error.render());
+            std::process::exit(1);
+        }
+    }
+}
+
 impl Int {
     #[must_use]
     pub fn from_big(value: BigInt) -> Self {
