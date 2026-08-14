@@ -1600,20 +1600,24 @@ fn infer_integer_coercion_type(
             destination_node.span,
         ));
     }
-    if destination == ScalarType::Int && matches!(policy, "wrap" | "saturate") {
-        return Err(failure(
-            &unit.source,
-            "T0010",
-            format!("`.coerce.{policy}` requires a fixed-width integer destination"),
-            destination_node.span,
-        ));
-    }
-    let result = if policy == "checked" {
-        ValueType::ScalarOrNone(destination)
-    } else {
-        ValueType::Scalar(destination)
-    };
+    let result = integer_coercion_result_type(destination, policy).map_err(|message| {
+        failure(&unit.source, "T0010", message, destination_node.span)
+    })?;
     Ok(Some(result))
+}
+
+fn integer_coercion_result_type(
+    destination: ScalarType,
+    policy: &str,
+) -> Result<ValueType, String> {
+    match (destination, policy) {
+        (ScalarType::Int, "wrap" | "saturate") => Err(format!(
+            "`.coerce.{policy}` requires a fixed-width integer destination"
+        )),
+        (_, "checked") => Ok(ValueType::ScalarOrNone(destination)),
+        (_, "default" | "wrap" | "saturate") => Ok(ValueType::Scalar(destination)),
+        _ => unreachable!("only canonical coercion policies reach the lookup table"),
+    }
 }
 
 fn integer_coercion_call<'a>(
