@@ -233,11 +233,15 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     let source = concat!(
         "namespace descriptors\n",
         "from /core types import .int8\n",
+        "function accepts; item int\n",
+        "  parameter-member = item is a int\n",
         "function main\n",
         "  byte = .int8\n",
+        "  other-byte = .int8\n",
         "  value = 1\n",
         "  member = value is a int\n",
         "  same-descriptor = byte is byte\n",
+        "  different-alias = byte is other-byte\n",
         "  same-scalar = value is value\n",
     );
     let compilation = terrane_compiler::compile("descriptors.trn", source.to_owned()).unwrap();
@@ -246,7 +250,17 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     assert!(
         compilation
             .rust
+            .contains("let parameter_member: bool = true;")
+    );
+    assert!(
+        compilation
+            .rust
             .contains("let same_descriptor: bool = true;")
+    );
+    assert!(
+        compilation
+            .rust
+            .contains("let different_alias: bool = false;")
     );
     assert!(compilation.rust.contains("let same_scalar: bool = false;"));
 }

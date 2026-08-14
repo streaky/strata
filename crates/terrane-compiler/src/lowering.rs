@@ -21,6 +21,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             continue_label: None,
             loop_counter: 0,
             return_type: None,
+            parameter_types: Vec::new(),
         };
         for node in &unit.tree.root.children {
             match node.kind {
@@ -52,6 +53,7 @@ struct Emitter<'a> {
     continue_label: Option<String>,
     loop_counter: usize,
     return_type: Option<ScalarType>,
+    parameter_types: Vec<(String, ScalarType)>,
 }
 
 impl Emitter<'_> {
@@ -127,6 +129,18 @@ impl Emitter<'_> {
         }
         self.output.push_str(" {\n");
         let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
+        let outer_parameter_types = std::mem::replace(
+            &mut self.parameter_types,
+            contract
+                .parameters
+                .iter()
+                .filter_map(|parameter| {
+                    parameter
+                        .value_type
+                        .map(|value_type| (parameter.name.clone(), value_type))
+                })
+                .collect(),
+        );
         self.indent += 1;
         if let Some(block) = node
             .children
@@ -136,6 +150,7 @@ impl Emitter<'_> {
             self.block(block);
         }
         self.return_type = outer_return_type;
+        self.parameter_types = outer_parameter_types;
         self.indent -= 1;
         self.line("}");
     }
@@ -505,7 +520,10 @@ impl Emitter<'_> {
         let source_operator = self.source.text()[left.span.end..right.span.start].trim();
         if source_operator == "is" {
             return matches!(
-                (self.descriptor_type(left), self.descriptor_type(right)),
+                (
+                    self.descriptor_identity(left),
+                    self.descriptor_identity(right),
+                ),
                 (Some(left), Some(right)) if left == right
             )
             .to_string();
@@ -551,15 +569,21 @@ impl Emitter<'_> {
                 }
                 _ => None,
             },
-            SyntaxKind::Name => self
-                .unit
-                .typed_bindings
-                .iter()
-                .rev()
-                .find(|binding| {
-                    binding.name == self.text(node).trim() && binding.span.start <= node.span.start
-                })
-                .map(|binding| binding.value_type),
+            SyntaxKind::Name => {
+                let name = self.text(node).trim();
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .rev()
+                    .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+                    .map(|binding| binding.value_type)
+                    .or_else(|| {
+                        self.parameter_types
+                            .iter()
+                            .find(|(parameter, _)| parameter == name)
+                            .map(|(_, value_type)| ValueType::Scalar(*value_type))
+                    })
+            }
             SyntaxKind::GroupExpression | SyntaxKind::UnaryExpression => node
                 .children
                 .last()
@@ -690,6 +714,31 @@ impl Emitter<'_> {
         } else {
             call
         })
+    }
+
+    fn descriptor_identity(&self, node: &SyntaxNode) -> Option<String> {
+        if node.kind == SyntaxKind::TypeExpression {
+            return node
+                .children
+                .first()
+                .and_then(|child| self.descriptor_identity(child));
+        }
+        let name = self.text(node).trim().trim_start_matches('.');
+        if let Some(binding) = self.unit.typed_bindings.iter().rev().find(|binding| {
+            binding.name == name
+                && binding.span.start <= node.span.start
+                && matches!(binding.value_type, ValueType::TypeDescriptor(_))
+        }) {
+            return Some(format!(
+                "{}:{}:{}",
+                binding.span.file, binding.span.start, binding.span.end
+            ));
+        }
+        self.package
+            .resolve_object_at(self.unit, node.span.start, name)
+            .filter(|symbol| symbol.descriptor_type().is_some())
+            .map(|symbol| symbol.identity.clone())
+            .or_else(|| ScalarType::from_source_name(name).map(|scalar| format!("type:{scalar}")))
     }
 
     fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
