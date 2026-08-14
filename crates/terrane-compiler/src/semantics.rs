@@ -763,24 +763,45 @@ type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);
 
 fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     for unit in &package.units {
-        validate_call_nodes(unit, &unit.tree.root)?;
+        let aliases = ScalarType::ALL
+            .into_iter()
+            .map(|ty| (ty.source_name().to_owned(), ty))
+            .collect();
+        validate_call_nodes(package, unit, &unit.tree.root, &aliases, None)?;
     }
     Ok(())
 }
 
-fn validate_call_nodes(unit: &SemanticUnit, node: &SyntaxNode) -> Result<(), SemanticFailure> {
+fn validate_call_nodes<'a>(
+    package: &SemanticPackage,
+    unit: &'a SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    active_function: Option<&'a FunctionContract>,
+) -> Result<(), SemanticFailure> {
+    let active_function = if node.kind == SyntaxKind::FunctionDeclaration {
+        unit.functions
+            .iter()
+            .find(|contract| contract.span == node.span)
+    } else {
+        active_function
+    };
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
+        && let Some(symbol) =
+            package.resolve_ordinary_at(unit, callee.span.start, node_text(&unit.source, callee))
+        && symbol.kind == SymbolKind::Function
+        && let Some(declaration_span) = symbol.declaration_span
         && let Some(contract) = unit
             .functions
             .iter()
-            .find(|contract| contract.name == node_text(&unit.source, callee))
+            .find(|contract| contract.span == declaration_span)
     {
-        validate_call_arguments(unit, arguments, contract)?;
+        validate_call_arguments(unit, arguments, contract, aliases, active_function)?;
     }
     for child in &node.children {
-        validate_call_nodes(unit, child)?;
+        validate_call_nodes(package, unit, child, aliases, active_function)?;
     }
     Ok(())
 }
@@ -789,6 +810,8 @@ fn validate_call_arguments(
     unit: &SemanticUnit,
     arguments: &SyntaxNode,
     contract: &FunctionContract,
+    aliases: &BTreeMap<String, ScalarType>,
+    active_function: Option<&FunctionContract>,
 ) -> Result<(), SemanticFailure> {
     let mut bound = BTreeSet::new();
     let mut positional = 0;
@@ -844,6 +867,23 @@ fn validate_call_arguments(
                 argument.span,
             ));
         }
+        if let Some(expected) = parameter.value_type {
+            let value = argument.children.last().unwrap_or(argument);
+            let bindings = call_site_bindings(unit, active_function);
+            if let Some(actual) = infer_value_type(unit, value, aliases, &bindings)?
+                && actual != ValueType::Scalar(expected)
+            {
+                return Err(failure(
+                    &unit.source,
+                    "T0012",
+                    format!(
+                        "argument for parameter `{}` has type `{actual}`, expected `{expected}`",
+                        parameter.name
+                    ),
+                    value.span,
+                ));
+            }
+        }
     }
     if let Some(missing) = contract
         .parameters
@@ -858,6 +898,39 @@ fn validate_call_arguments(
         ));
     }
     Ok(())
+}
+
+fn call_site_bindings(
+    unit: &SemanticUnit,
+    active_function: Option<&FunctionContract>,
+) -> Vec<TypedBinding> {
+    let mut bindings = unit
+        .typed_bindings
+        .iter()
+        .filter(|binding| {
+            let owner = unit
+                .functions
+                .iter()
+                .filter(|function| {
+                    function.span.start <= binding.span.start
+                        && binding.span.end <= function.span.end
+                })
+                .min_by_key(|function| function.span.end - function.span.start);
+            owner
+                .is_none_or(|owner| active_function.is_some_and(|active| active.span == owner.span))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(function) = active_function {
+        bindings.extend(function.parameters.iter().filter_map(|parameter| {
+            parameter.value_type.map(|value_type| TypedBinding {
+                name: parameter.name.clone(),
+                span: parameter.span,
+                value_type: ValueType::Scalar(value_type),
+            })
+        }));
+    }
+    bindings
 }
 
 fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, SemanticFailure> {

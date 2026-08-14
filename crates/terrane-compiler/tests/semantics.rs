@@ -872,6 +872,50 @@ fn rejects_invalid_function_argument_binding() {
 }
 
 #[test]
+fn rejects_statically_incompatible_typed_arguments() {
+    for call in ["consume; true", "consume; value"] {
+        let source = format!(
+            "namespace app\nfunction consume; item int\nfunction main\n  value = 'text'\n  {call}\n"
+        );
+        let failure = analyze(&package(true, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0012", "{call}");
+        assert!(
+            failure.diagnostics[0].message.contains("expected `int`"),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn typed_call_checks_follow_callee_and_argument_scope() {
+    let parameter_failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction consume; item int\nfunction main; value bool\n  consume; value\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(parameter_failure.diagnostics[0].code, "T0012");
+
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "value = 1\n",
+                "function consume; item int\n",
+                "function main\n",
+                "  consume = false\n",
+                "  consume; value\n",
+            ),
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
 fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
     let analyzed = analyze(&package(
         true,
