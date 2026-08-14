@@ -786,6 +786,41 @@ fn types_valid_unary_binary_and_comparison_operators() {
 }
 
 #[test]
+fn string_length_has_integer_type_and_rejects_other_receivers() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  text = 'Terrane'\n  size = text.length\n",
+        )],
+    ))
+    .unwrap();
+    assert_eq!(
+        analyzed.units[0]
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.name == "size")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Int)
+    );
+
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  count = 1\n  size = count.length\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0013");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "`.length` requires `string`, found `int`"
+    );
+}
+
+#[test]
 fn type_membership_is_boolean_in_bindings_and_conditions() {
     let analyzed = analyze(&package(
         true,

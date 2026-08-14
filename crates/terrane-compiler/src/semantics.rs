@@ -1398,6 +1398,25 @@ fn infer_value_type(
             .find(|binding| binding.name == name)
             .map(|binding| binding.value_type));
     }
+    if node.kind == SyntaxKind::MemberExpression
+        && let [receiver, member] = node.children.as_slice()
+        && node_text(&unit.source, member) == "length"
+    {
+        let receiver_type = infer_value_type(unit, receiver, aliases, bindings)?;
+        if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+            return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+        }
+        return Err(failure(
+            &unit.source,
+            "T0013",
+            format!(
+                "`.length` requires `string`, found `{}`",
+                receiver_type
+                    .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
+            ),
+            receiver.span,
+        ));
+    }
     if node.kind == SyntaxKind::CallExpression {
         return infer_integer_coercion_type(unit, node, aliases, bindings);
     }
