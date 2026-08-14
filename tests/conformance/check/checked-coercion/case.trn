@@ -1,0 +1,12 @@
+namespace checked-coercion
+from /core output import .print
+from /core types import .int8, .none
+print = .print
+int8 = .int8
+none = .none
+
+function main
+ value int = 300
+ checked = value.coerce.checked; int8
+ absent = checked is a none
+ print; absent
