@@ -919,14 +919,7 @@ fn validate_call_nodes<'a>(
         bindings.extend_from_slice(contextual_bindings);
         infer_value_type(unit, node, aliases, &bindings)?;
     }
-    if node.kind == SyntaxKind::MemberExpression && coercion_family_receiver(unit, node) {
-        return Err(failure(
-            &unit.source,
-            "T0018",
-            "`.coerce` and its policy members are not storable values before bound methods exist",
-            node.span,
-        ));
-    }
+    validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
         if node.kind == SyntaxKind::CallExpression
             && index == 0
@@ -943,6 +936,21 @@ fn validate_call_nodes<'a>(
             active_function,
             contextual_bindings,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_coercion_family_expression(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::MemberExpression && coercion_family_receiver(unit, node) {
+        return Err(failure(
+            &unit.source,
+            "T0018",
+            "`.coerce` and its policy members are not storable values before bound methods exist",
+            node.span,
+        ));
     }
     Ok(())
 }
