@@ -76,6 +76,34 @@ impl std::fmt::Display for ValueType {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CoercionPolicy {
+    Default,
+    Checked,
+    Wrap,
+    Saturate,
+}
+
+impl CoercionPolicy {
+    fn from_member(member: &str) -> Option<Self> {
+        match member {
+            "checked" => Some(Self::Checked),
+            "wrap" => Some(Self::Wrap),
+            "saturate" => Some(Self::Saturate),
+            _ => None,
+        }
+    }
+
+    fn source_name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Checked => "checked",
+            Self::Wrap => "wrap",
+            Self::Saturate => "saturate",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedBinding {
     pub name: String,
@@ -1533,7 +1561,7 @@ fn infer_integer_coercion_type(
     let Some(callee) = node.children.first() else {
         return Ok(None);
     };
-    let Some((source_node, policy)) = integer_coercion_call(unit, callee) else {
+    let Some((source_node, policy)) = integer_coercion_call(&unit.source, callee) else {
         if let Some(member) = obsolete_integer_coercion_member(unit, callee) {
             return Err(failure(
                 &unit.source,
@@ -1608,47 +1636,44 @@ fn infer_integer_coercion_type(
 
 fn integer_coercion_result_type(
     destination: ScalarType,
-    policy: &str,
+    policy: CoercionPolicy,
 ) -> Result<ValueType, String> {
-    match (destination, policy) {
-        (ScalarType::Int, "wrap" | "saturate") => Err(format!(
-            "`.coerce.{policy}` requires a fixed-width integer destination"
+    match (source, destination, policy) {
+        (
+            _,
+            ScalarType::Int,
+            CoercionPolicy::Checked | CoercionPolicy::Wrap | CoercionPolicy::Saturate,
+        ) => Err(format!(
+            "`.coerce.{}` from `{source}` requires a fixed-width integer destination",
+            policy.source_name()
         )),
-        (_, "checked") => Ok(ValueType::ScalarOrNone(destination)),
-        (_, "default" | "wrap" | "saturate") => Ok(ValueType::Scalar(destination)),
-        _ => unreachable!("only canonical coercion policies reach the lookup table"),
+        (_, _, CoercionPolicy::Checked) => Ok(ValueType::ScalarOrNone(destination)),
+        (_, _, CoercionPolicy::Default | CoercionPolicy::Wrap | CoercionPolicy::Saturate) => {
+            Ok(ValueType::Scalar(destination))
+        }
     }
 }
 
-fn integer_coercion_call<'a>(
-    unit: &SemanticUnit,
+pub(crate) fn integer_coercion_call<'a>(
+    source: &SourceFile,
     callee: &'a SyntaxNode,
-) -> Option<(&'a SyntaxNode, &'static str)> {
+) -> Option<(&'a SyntaxNode, CoercionPolicy)> {
     let [receiver, member] = callee.children.as_slice() else {
         return None;
     };
     if callee.kind != SyntaxKind::MemberExpression {
         return None;
     }
-    let member = node_text(&unit.source, member);
+    let member = node_text(source, member);
     if member == "coerce" {
-        return Some((receiver, "default"));
+        return Some((receiver, CoercionPolicy::Default));
     }
-    let [source, family] = receiver.children.as_slice() else {
+    let [source_node, family] = receiver.children.as_slice() else {
         return None;
     };
-    if receiver.kind == SyntaxKind::MemberExpression
-        && node_text(&unit.source, family) == "coerce"
-        && matches!(member, "checked" | "wrap" | "saturate")
-    {
-        return Some((source, match member {
-            "checked" => "checked",
-            "wrap" => "wrap",
-            "saturate" => "saturate",
-            _ => unreachable!("policy is matched above"),
-        }));
-    }
-    None
+    (receiver.kind == SyntaxKind::MemberExpression && node_text(source, family) == "coerce")
+        .then(|| CoercionPolicy::from_member(member).map(|policy| (source_node, policy)))
+        .flatten()
 }
 
 fn obsolete_integer_coercion_member<'a>(
