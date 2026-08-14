@@ -458,10 +458,16 @@ impl Emitter<'_> {
                 .children
                 .last()
                 .is_some_and(|child| self.is_adaptive_expression(child)),
-            SyntaxKind::BinaryExpression => node
-                .children
-                .first()
-                .is_some_and(|child| self.is_adaptive_expression(child)),
+            SyntaxKind::BinaryExpression => {
+                let [left, right] = node.children.as_slice() else {
+                    return false;
+                };
+                let operator = self.source.text()[left.span.end..right.span.start].trim();
+                matches!(
+                    operator,
+                    "+" | "-" | "*" | "/" | "%" | "<<" | ">>" | "&" | "|" | "^"
+                ) && self.is_adaptive_expression(left)
+            }
             _ => false,
         }
     }

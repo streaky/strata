@@ -300,3 +300,21 @@ fn unwraps_only_syntactic_condition_groups() {
 
     assert!(compilation.rust.contains("if true {"));
 }
+
+#[test]
+fn lowers_logical_combinations_of_integer_comparisons() {
+    let source = concat!(
+        "namespace conditions\n",
+        "function main\n",
+        "  x int = 5\n",
+        "  y int = 9\n",
+        "  if x > 1 and y > 2\n",
+        "    result = true\n",
+    );
+    let compilation = terrane_compiler::compile("conditions.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains(
+        "if (x.clone() > terrane_int_support::Int::from(1_i128)) && \
+(y.clone() > terrane_int_support::Int::from(2_i128)) {"
+    ));
+}
