@@ -20,6 +20,17 @@ fn arithmetic_promotes_and_normalizes_exactly() {
 }
 
 #[test]
+fn mixed_compact_tiers_compute_without_arbitrary_promotion() {
+    let wide = Int::from(i128::from(i64::MAX) + 1);
+    assert_eq!((wide.clone() + Int::from(-1_i64)).tier(), Tier::I64);
+    assert_eq!((Int::from(-1_i64) + wide.clone()).tier(), Tier::I64);
+    assert_eq!((wide.clone() * Int::from(2_i64)).tier(), Tier::I128);
+    assert_eq!(wide.clone() & Int::from(i64::MAX), Int::from(0_i64));
+    assert_eq!((!wide.clone()).tier(), Tier::I128);
+    assert!(wide > Int::from(i64::MAX));
+}
+
+#[test]
 fn signed_minimum_negation_promotes_without_overflow() {
     assert_eq!((-Int::from(i64::MIN)).tier(), Tier::I128);
     assert_eq!((-Int::from(i128::MIN)).tier(), Tier::Arbitrary);

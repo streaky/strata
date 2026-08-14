@@ -237,6 +237,8 @@ impl Ord for Int {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Small(left), Self::Small(right)) => left.cmp(right),
+            (Self::Small(left), Self::Wide(right)) => i128::from(*left).cmp(right),
+            (Self::Wide(left), Self::Small(right)) => left.cmp(&i128::from(*right)),
             (Self::Wide(left), Self::Wide(right)) => left.cmp(right),
             (Self::Big(left), Self::Big(right)) => left.cmp(right),
             _ => self.as_big().cmp(&other.as_big()),
@@ -267,12 +269,28 @@ macro_rules! exact_binary {
 
             fn $method(self, rhs: Self) -> Self::Output {
                 match (&self, &rhs) {
-                    (Self::Small(left), Self::Small(right)) => left
+                    (Self::Small(left), Self::Small(right)) => left.$checked(*right).map_or_else(
+                        || Self::from(i128::from(*left) $operator i128::from(*right)),
+                        Self::Small,
+                    ),
+                    (Self::Small(left), Self::Wide(right)) => i128::from(*left)
                         .$checked(*right)
-                        .map_or_else(|| Self::from(i128::from(*left) $operator i128::from(*right)), Self::Small),
+                        .map_or_else(
+                            || self.binary_big(&rhs, |left, right| left $operator right),
+                            Self::from,
+                        ),
+                    (Self::Wide(left), Self::Small(right)) => left
+                        .$checked(i128::from(*right))
+                        .map_or_else(
+                            || self.binary_big(&rhs, |left, right| left $operator right),
+                            Self::from,
+                        ),
                     (Self::Wide(left), Self::Wide(right)) => left
                         .$checked(*right)
-                        .map_or_else(|| self.binary_big(&rhs, |left, right| left $operator right), Self::from),
+                        .map_or_else(
+                            || self.binary_big(&rhs, |left, right| left $operator right),
+                            Self::from,
+                        ),
                     _ => self.binary_big(&rhs, |left, right| left $operator right),
                 }
             }
@@ -284,21 +302,31 @@ exact_binary!(Add, add, checked_add, +);
 exact_binary!(Sub, sub, checked_sub, -);
 exact_binary!(Mul, mul, checked_mul, *);
 
-macro_rules! big_binary {
+macro_rules! exact_bitwise {
     ($trait:ident, $method:ident, $operator:tt) => {
         impl $trait for Int {
             type Output = Self;
 
             fn $method(self, rhs: Self) -> Self::Output {
-                self.binary_big(&rhs, |left, right| left $operator right)
+                match (&self, &rhs) {
+                    (Self::Small(left), Self::Small(right)) => Self::from(*left $operator *right),
+                    (Self::Small(left), Self::Wide(right)) => {
+                        Self::from(i128::from(*left) $operator *right)
+                    }
+                    (Self::Wide(left), Self::Small(right)) => {
+                        Self::from(*left $operator i128::from(*right))
+                    }
+                    (Self::Wide(left), Self::Wide(right)) => Self::from(*left $operator *right),
+                    _ => self.binary_big(&rhs, |left, right| left $operator right),
+                }
             }
         }
     };
 }
 
-big_binary!(BitAnd, bitand, &);
-big_binary!(BitOr, bitor, |);
-big_binary!(BitXor, bitxor, ^);
+exact_bitwise!(BitAnd, bitand, &);
+exact_bitwise!(BitOr, bitor, |);
+exact_bitwise!(BitXor, bitxor, ^);
 
 impl Neg for Int {
     type Output = Self;
@@ -320,7 +348,11 @@ impl Not for Int {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        Self::from_big(!self.as_big())
+        match self {
+            Self::Small(value) => Self::from(!value),
+            Self::Wide(value) => Self::from(!value),
+            Self::Big(value) => Self::from_big(!value),
+        }
     }
 }
 
