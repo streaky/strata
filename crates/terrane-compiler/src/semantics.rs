@@ -778,7 +778,15 @@ fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
             .into_iter()
             .map(|ty| (ty.source_name().to_owned(), ty))
             .collect();
-        validate_call_nodes(package, unit, &unit.tree.root, &aliases, &contracts, None)?;
+        validate_call_nodes(
+            package,
+            unit,
+            &unit.tree.root,
+            &aliases,
+            &contracts,
+            None,
+            &[],
+        )?;
     }
     Ok(())
 }
@@ -790,6 +798,7 @@ fn validate_call_nodes<'a>(
     aliases: &BTreeMap<String, ScalarType>,
     contracts: &BTreeMap<(u32, usize, usize), &FunctionContract>,
     active_function: Option<&'a FunctionContract>,
+    contextual_bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     let active_function = if node.kind == SyntaxKind::FunctionDeclaration {
         unit.functions
@@ -811,10 +820,55 @@ fn validate_call_nodes<'a>(
             declaration_span.end,
         ))
     {
-        validate_call_arguments(unit, arguments, contract, aliases, active_function)?;
+        validate_call_arguments(
+            unit,
+            arguments,
+            contract,
+            aliases,
+            active_function,
+            contextual_bindings,
+        )?;
+    }
+    if let [target, collection, block] = node.children.as_slice()
+        && node.kind == SyntaxKind::ForStatement
+        && target.kind == SyntaxKind::ForTarget
+    {
+        validate_call_nodes(
+            package,
+            unit,
+            collection,
+            aliases,
+            contracts,
+            active_function,
+            contextual_bindings,
+        )?;
+        let mut loop_bindings = contextual_bindings.to_vec();
+        loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
+            name: node_text(&unit.source, name).to_owned(),
+            span: name.span,
+            value_type: ValueType::Scalar(ScalarType::String),
+        }));
+        validate_call_nodes(
+            package,
+            unit,
+            block,
+            aliases,
+            contracts,
+            active_function,
+            &loop_bindings,
+        )?;
+        return Ok(());
     }
     for child in &node.children {
-        validate_call_nodes(package, unit, child, aliases, contracts, active_function)?;
+        validate_call_nodes(
+            package,
+            unit,
+            child,
+            aliases,
+            contracts,
+            active_function,
+            contextual_bindings,
+        )?;
     }
     Ok(())
 }
@@ -825,6 +879,7 @@ fn validate_call_arguments(
     contract: &FunctionContract,
     aliases: &BTreeMap<String, ScalarType>,
     active_function: Option<&FunctionContract>,
+    contextual_bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     let mut bound = BTreeSet::new();
     let mut positional = 0;
@@ -882,7 +937,8 @@ fn validate_call_arguments(
         }
         if let Some(expected) = parameter.value_type {
             let value = argument.children.last().unwrap_or(argument);
-            let bindings = call_site_bindings(unit, active_function);
+            let mut bindings = call_site_bindings(unit, active_function);
+            bindings.extend_from_slice(contextual_bindings);
             if let Some(actual) = infer_value_type(unit, value, aliases, &bindings)?
                 && actual != ValueType::Scalar(expected)
             {
@@ -1667,6 +1723,35 @@ fn populate_node(
         SyntaxKind::Block => {
             add_lexical_scope(unit, namespaces, scopes, node, Some(index), false)?;
         }
+        SyntaxKind::ForStatement => {
+            let loop_index = scopes.len();
+            scopes.push(LexicalScope {
+                span: node.span,
+                parent: Some(index),
+                ordinary: BTreeMap::new(),
+                objects: BTreeMap::new(),
+            });
+            if let Some(first) = node.children.first() {
+                if first.kind == SyntaxKind::ForTarget {
+                    for name in &first.children {
+                        insert_local(
+                            unit,
+                            scopes,
+                            loop_index,
+                            node_text(&unit.source, name).to_owned(),
+                            name.span,
+                        )?;
+                    }
+                } else {
+                    populate_node(unit, namespaces, scopes, loop_index, first)?;
+                }
+            }
+            if let Some(block) = node.children.last()
+                && block.kind == SyntaxKind::Block
+            {
+                add_lexical_scope(unit, namespaces, scopes, block, Some(loop_index), false)?;
+            }
+        }
         _ => {
             for child in &node.children {
                 if child.kind == SyntaxKind::Block {
@@ -1949,6 +2034,7 @@ fn validate_flow_statement(
             Ok(true)
         }
         SyntaxKind::ForStatement => {
+            let mut loop_bindings = bindings.to_vec();
             if statement.children.len() == 4 {
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
@@ -1970,13 +2056,25 @@ fn validate_flow_statement(
                         target.span,
                     ));
                 }
+                loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
+                    name: node_text(&unit.source, name).to_owned(),
+                    span: name.span,
+                    value_type: ValueType::Scalar(ScalarType::String),
+                }));
             }
             if let Some(block) = statement
                 .children
                 .iter()
                 .find(|child| child.kind == SyntaxKind::Block)
             {
-                validate_flow_block(unit, block, contract, bindings, loop_depth + 1, unreachable)?;
+                validate_flow_block(
+                    unit,
+                    block,
+                    contract,
+                    &loop_bindings,
+                    loop_depth + 1,
+                    unreachable,
+                )?;
             }
             Ok(true)
         }

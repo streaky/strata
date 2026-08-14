@@ -196,3 +196,29 @@ fn compilation_uses_the_shared_parser_before_semantics() {
             .any(|diagnostic| diagnostic.code == "S0005")
     );
 }
+
+#[test]
+fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates() {
+    let collection = terrane_compiler::compile(
+        "collection.trn",
+        "namespace app\nfunction main\n  text string = 'ab'\n  for character in text\n    value = character\n"
+            .to_owned(),
+    )
+    .unwrap();
+    assert!(
+        collection
+            .rust
+            .contains("for character in text.chars().map(String::from) {")
+    );
+
+    let clauses = terrane_compiler::compile(
+        "clauses.trn",
+        "namespace app\nfunction main\n  for index = 0; index < 3; index++\n    if index == 1\n      continue\n"
+            .to_owned(),
+    )
+    .unwrap();
+    assert!(clauses.rust.contains("'__terrane_continue_0: {"));
+    let continue_position = clauses.rust.find("break '__terrane_continue_0;").unwrap();
+    let update_position = clauses.rust.find("index += 1;").unwrap();
+    assert!(continue_position < update_position);
+}

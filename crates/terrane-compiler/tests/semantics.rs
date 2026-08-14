@@ -617,6 +617,29 @@ fn branch_assignment_is_definite_only_when_every_path_assigns() {
 }
 
 #[test]
+fn collection_for_targets_are_typed_only_inside_the_loop_body() {
+    let wrong_argument = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction consume; item int\nfunction main\n  text string = 'ab'\n  for value in text\n    consume; value\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(wrong_argument.diagnostics[0].code, "T0012");
+
+    let wrong_collection = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  for value in value\n    item = value\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(wrong_collection.diagnostics[0].code, "T0016");
+}
+
+#[test]
 fn rejects_implicit_cross_type_reassignment() {
     let failure = analyze(&package(
         true,

@@ -18,6 +18,8 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             source: &unit.source,
             output: String::new(),
             indent: 0,
+            continue_label: None,
+            loop_counter: 0,
         };
         for node in &unit.tree.root.children {
             match node.kind {
@@ -46,6 +48,8 @@ struct Emitter<'a> {
     source: &'a SourceFile,
     output: String,
     indent: usize,
+    continue_label: Option<String>,
+    loop_counter: usize,
 }
 
 impl Emitter<'_> {
@@ -169,7 +173,13 @@ impl Emitter<'_> {
                 }
             }
             SyntaxKind::BreakStatement => self.line("break;"),
-            SyntaxKind::ContinueStatement => self.line("continue;"),
+            SyntaxKind::ContinueStatement => {
+                if let Some(label) = &self.continue_label {
+                    self.line(&format!("break '{label};"));
+                } else {
+                    self.line("continue;");
+                }
+            }
             _ => {}
         }
     }
@@ -286,21 +296,50 @@ impl Emitter<'_> {
         let condition = control_condition(self.expression(condition));
         self.line(&format!("while {condition} {{"));
         self.indent += 1;
+        let outer_continue = self.continue_label.take();
         self.block(block);
+        self.continue_label = outer_continue;
         self.indent -= 1;
         self.line("}");
     }
 
     fn for_statement(&mut self, node: &SyntaxNode) {
-        if let [initial, condition, update, block] = node.children.as_slice() {
-            self.statement(initial);
-            let condition = control_condition(self.expression(condition));
-            self.line(&format!("while {condition} {{"));
-            self.indent += 1;
-            self.block(block);
-            self.statement(update);
-            self.indent -= 1;
-            self.line("}");
+        match node.children.as_slice() {
+            [target, collection, block] if target.kind == SyntaxKind::ForTarget => {
+                let Some(name) = target.children.first() else {
+                    return;
+                };
+                let name = rust_name(self.text(name));
+                let collection = self.expression(collection);
+                self.line(&format!(
+                    "for {name} in {collection}.chars().map(String::from) {{"
+                ));
+                self.indent += 1;
+                let outer_continue = self.continue_label.take();
+                self.block(block);
+                self.continue_label = outer_continue;
+                self.indent -= 1;
+                self.line("}");
+            }
+            [initial, condition, update, block] => {
+                self.statement(initial);
+                let condition = control_condition(self.expression(condition));
+                self.line(&format!("while {condition} {{"));
+                self.indent += 1;
+                let label = format!("__terrane_continue_{}", self.loop_counter);
+                self.loop_counter += 1;
+                self.line(&format!("'{label}: {{"));
+                self.indent += 1;
+                let outer_continue = self.continue_label.replace(label);
+                self.block(block);
+                self.continue_label = outer_continue;
+                self.indent -= 1;
+                self.line("}");
+                self.statement(update);
+                self.indent -= 1;
+                self.line("}");
+            }
+            _ => {}
         }
     }
 

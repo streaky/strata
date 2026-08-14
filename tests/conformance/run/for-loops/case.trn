@@ -1,0 +1,11 @@
+namespace for-loops
+from /core output import .print
+print = .print
+function main
+  text string = 'ab'
+  for character in text
+    print; character
+  for index = 0; index < 3; index++
+    if index == 1
+      continue
+    print; index
