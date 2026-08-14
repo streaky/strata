@@ -113,9 +113,12 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
     let program = match project_bootstrap_program(source, &unit.tree) {
         Ok(program) => resolve(program),
         Err(diagnostics) => {
+            // The bootstrap projector remains solely to preserve its literal-boundary
+            // diagnostic until that check moves into the shared parser. Its structural
+            // one-statement restrictions do not constrain the generalized syntax tree.
             let literal_diagnostics = diagnostics
                 .into_iter()
-                .filter(|diagnostic| diagnostic.code == "S0004")
+                .filter(|diagnostic| diagnostic.message.contains("after closing string quote"))
                 .collect::<Vec<_>>();
             if !literal_diagnostics.is_empty() {
                 return Err(CompilationFailure {

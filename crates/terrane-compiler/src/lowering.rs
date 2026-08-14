@@ -247,10 +247,16 @@ impl Emitter<'_> {
         match node.kind {
             SyntaxKind::Literal => literal(self.text(node)),
             SyntaxKind::Name => rust_name(self.text(node)),
-            SyntaxKind::GroupExpression => node
-                .children
-                .first()
-                .map_or_else(String::new, |child| format!("({})", self.expression(child))),
+            SyntaxKind::GroupExpression => {
+                node.children.first().map_or_else(String::new, |child| {
+                    let expression = self.expression(child);
+                    if child.kind == SyntaxKind::CallExpression {
+                        expression
+                    } else {
+                        format!("({expression})")
+                    }
+                })
+            }
             SyntaxKind::UnaryExpression => {
                 let Some(operand) = node.children.last() else {
                     return String::new();
@@ -496,7 +502,7 @@ fn literal(text: &str) -> String {
     } else {
         trimmed.to_owned()
     };
-    format!("{value:?}")
+    format!("String::from({value:?})")
 }
 
 fn block_string(text: &str) -> String {

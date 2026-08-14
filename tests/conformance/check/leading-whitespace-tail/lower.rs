@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: leading-whitespace-tail
 fn main() {
-    println!("{}", " hello");
+    println!("{}", String::from(" hello"));
 }

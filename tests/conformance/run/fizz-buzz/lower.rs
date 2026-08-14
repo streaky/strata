@@ -5,11 +5,11 @@ fn main() {
     let mut number: i128 = 1;
     while number <= 15 {
         if (number % 15) == 0 {
-            println!("{}", "FizzBuzz");
+            println!("{}", String::from("FizzBuzz"));
         } else if (number % 3) == 0 {
-            println!("{}", "Fizz");
+            println!("{}", String::from("Fizz"));
         } else if (number % 5) == 0 {
-            println!("{}", "Buzz");
+            println!("{}", String::from("Buzz"));
         } else {
             println!("{}", number);
         }

@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: hello
 fn main() {
-    println!("{}", "Hello from Terrane!\n\nTail strings make punctuation literal: >, #, \"quotes\".");
+    println!("{}", String::from("Hello from Terrane!\n\nTail strings make punctuation literal: >, #, \"quotes\"."));
 }

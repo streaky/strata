@@ -2,5 +2,5 @@
 // Source: case.trn
 // Namespace: empty-tail
 fn main() {
-    println!("{}", "");
+    println!("{}", String::from(""));
 }

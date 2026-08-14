@@ -2,5 +2,5 @@
 // Source: main.trn
 // Namespace: app
 fn main() {
-    println!("{}", " namespace package");
+    println!("{}", String::from(" namespace package"));
 }
