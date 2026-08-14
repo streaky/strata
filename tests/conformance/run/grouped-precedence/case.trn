@@ -1,0 +1,5 @@
+namespace grouped-precedence
+from /core output import .print
+print = .print
+function main
+  print; (1 + 2) * 3
