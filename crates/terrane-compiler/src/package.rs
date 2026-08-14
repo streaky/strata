@@ -276,9 +276,7 @@ fn load_source_units(
 fn valid_relative_source(value: &str) -> bool {
     let path = Path::new(value);
     !value.is_empty()
-        && path
-            .extension()
-            .is_some_and(|extension| extension == "trn")
+        && path.extension().is_some_and(|extension| extension == "trn")
         && !path.is_absolute()
         && !path
             .components()
