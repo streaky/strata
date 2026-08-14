@@ -300,13 +300,13 @@ negative_shift: throws .negative-shift-count
 - Division by zero throws `.division-by-zero`.
 - Fixed widths require explicit checked/wrapping/saturating/overflowing contracts, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
 - Literal initializers are range-checked against the destination over the whole constant expression; a syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude.
-- Conversions are explicit (`coerce`, `checked-coerce`, `wrapping-coerce`, `saturating-coerce`).
+- Conversions are explicit through the `coerce` method family.
 
 ## COERCION
 
 ```yaml
-form: receiver operation; 'value.coerce; destination-type'
-families: coerce (throwing) | checked-coerce | wrapping-coerce | saturating-coerce
+form: receiver family/policy; 'value.coerce; destination-type' | 'value.coerce.checked; destination-type'
+family: coerce.default (throwing) | coerce.checked | coerce.wrap | coerce.saturate
 integer_to_integer: per full spec §17.7; fixed-width-to-int always exact but still explicit
 fixed_to_int: exact, explicit, cannot overflow
 to_float: IEEE-754 round-to-nearest, ties-to-even
@@ -317,6 +317,9 @@ locale_parse: imported formatting facilities only, never coerce
 universality: no guarantee any type coerces to any other
 destination: version-one destinations resolve to finite compiler-known descriptors
 ```
+
+- The receiver evaluates once before policy selection and destination arguments. The whole call resolves policy availability statically; a selected family is not a storable bound-method value in version one.
+- `checked` returns `T|none`; `wrap` and `saturate` exist only for supported fixed-width destinations. Flat `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` spellings are invalid.
 
 ## TEXT DISPLAY
 

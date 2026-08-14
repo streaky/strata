@@ -1389,24 +1389,21 @@ ratio float = 42
 is a type error because the value is an `int`.
 ### 11.5 Explicit coercion
 
-Coercion is an object operation on the source value:
+Coercion is a callable method family on the source value:
 
 ```text
 x = 42
 x = x.coerce; float
+x = x.coerce.checked; int8
 ```
 
-A constrained binding may combine coercion and checking:
-
-```text
-x float = '42'.coerce; float
-```
+The bare invocation is its throwing default. `coerce.checked` returns an absence-aware result without a representability throw; `coerce.wrap` and `coerce.saturate` are available only where the source/destination policy table defines them. A receiver is evaluated exactly once before policy selection and arguments. The complete call, including its statically resolved destination descriptor, determines whether a policy exists; selecting a family alone does not make it a freely storable bound method value in version one.
 
 `coerce` either returns an object compatible with the requested type or throws `.coercion-error`.
 
 There is no universal guarantee that every type can coerce to every other type.
 
-Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range coerces to the corresponding infinity only when the source type's protocol declares that behaviour; otherwise it throws `.coercion-error`. Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` for text it cannot represent exactly under the rounding rule above. Locale-sensitive or format-directed parsing belongs to explicitly imported facilities, not to `coerce`.
+Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range coerces to the corresponding infinity only when the source type's protocol declares that behaviour; otherwise it throws `.coercion-error`. Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` when parsing fails. Locale-dependent parsing belongs to an imported formatting facility, never to `coerce`.
 
 ### 11.6 Type objects
 
@@ -2466,19 +2463,19 @@ converted = value.coerce; int64
 
 It returns the exact destination value when representable and otherwise throws `.integer-conversion-overflow`, a numeric error distinct from `.arithmetic-overflow`. It never silently truncates, wraps, saturates, changes signedness interpretation, or promotes the destination.
 
-Every integer source exposes:
+Every integer source exposes one canonical family:
 
 ```text
-value.checked-coerce; T
-value.wrapping-coerce; T
-value.saturating-coerce; T
+value.coerce.checked; T
+value.coerce.wrap; T
+value.coerce.saturate; T
 ```
 
-`checked-coerce` returns `T|none`. `wrapping-coerce` reduces the mathematical value modulo `2^N` and interprets the resulting bits using the destination signedness. `saturating-coerce` clamps to the destination bounds. Therefore `-1.wrapping-coerce; uint8` is `255`, `255.wrapping-coerce; int8` is `-1`, and `300.saturating-coerce; uint8` is `255`.
+`checked` returns `T|none`. `wrap` reduces the mathematical value modulo `2^N` and interprets the resulting bits using the destination signedness. `saturate` clamps to the destination bounds. Therefore `-1.coerce.wrap; uint8` is `255`, `255.coerce.wrap; int8` is `-1`, and `300.coerce.saturate; uint8` is `255`.
 
 Conversion from any fixed-width integer to `int` is exact and cannot overflow, though it remains explicit under the no-implicit-cross-type rule. Conversion among fixed-width types follows the same checked, wrapping, or saturating contract; widening is not a privileged implicit coercion. Compile-time literal initialization remains governed by §11.2.
 
-Wrapping and saturation have no arithmetic meaning for unbounded `int` itself because it has no maximum width. They are defined only for an explicitly fixed-width destination or fixed-width arithmetic receiver.
+Wrapping and saturation have no arithmetic meaning for an unbounded `int` destination because it has no maximum width. They are defined only for an explicitly fixed-width destination or fixed-width arithmetic receiver. The flat spellings `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` are not language syntax.
 
 ---
 
@@ -5209,7 +5206,7 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 66. multiplying two small `int` values uses an exact `i128` intermediate, wider multiplication produces the exact arbitrary-precision result, and multiplication by `0`, `1`, or `-1` preserves promotion and normalisation edge cases.
 67. signed `/`, `%`, and `div-rem` obey the Euclidean quotient/remainder invariant for every sign combination; division by zero throws `.division-by-zero`, `int` division promotes for a representation `MIN / -1`, and fixed-width `MIN / -1` follows its selected overflow mode.
 68. every signed and unsigned fixed width through 128 bits keeps its declared type under arithmetic and implements throwing ordinary, checked, wrapping, saturating, and overflowing operation contracts without build-mode-dependent behaviour.
-69. `coerce`, `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, and fixed-width-to-`int` conversion cannot overflow.
+69. `coerce`, `coerce.checked`, `coerce.wrap`, and `coerce.saturate` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, fixed-width-to-`int` conversion cannot overflow, and the obsolete flat spellings are rejected.
 70. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `.negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
 71. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
 72. fixed-width numeric descriptor objects resolve only through explicit `/core types` object-form imports and ordinary bindings; they are not added to the exact default prelude or treated as reserved type words.
