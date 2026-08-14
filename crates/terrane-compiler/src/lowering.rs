@@ -220,7 +220,7 @@ impl Emitter<'_> {
                     | SyntaxKind::DeclarationQualifier
             )
         });
-        let mutable = self.is_mutated(node, name_node);
+        let mutable = binding.is_some_and(|binding| binding.mutable);
         self.line_start();
         self.output.push_str("let ");
         if mutable {
@@ -245,16 +245,6 @@ impl Emitter<'_> {
         node.children
             .last()
             .is_some_and(|child| child.kind == SyntaxKind::ObjectName)
-    }
-
-    fn is_mutated(&self, declaration: &SyntaxNode, name: &SyntaxNode) -> bool {
-        let target = self.text(name);
-        contains_mutation_after(
-            &self.unit.tree.root,
-            declaration.span.end,
-            target,
-            self.source,
-        )
     }
 
     fn postfix(&mut self, node: &SyntaxNode) {
@@ -841,29 +831,6 @@ fn control_condition(mut expression: String) -> String {
         expression.pop();
     }
     expression
-}
-
-fn contains_mutation_after(
-    node: &SyntaxNode,
-    offset: usize,
-    name: &str,
-    source: &SourceFile,
-) -> bool {
-    if node.span.start >= offset
-        && matches!(
-            node.kind,
-            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-        )
-        && node.children.first().is_some_and(|target| {
-            target.kind == SyntaxKind::Name
-                && &source.text()[target.span.start..target.span.end] == name
-        })
-    {
-        return true;
-    }
-    node.children
-        .iter()
-        .any(|child| contains_mutation_after(child, offset, name, source))
 }
 
 fn find_node(node: &SyntaxNode, kind: SyntaxKind, span: crate::Span) -> Option<&SyntaxNode> {

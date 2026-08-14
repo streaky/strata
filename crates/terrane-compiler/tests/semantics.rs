@@ -1112,6 +1112,32 @@ fn records_left_to_right_calls_and_short_circuit_boundaries() {
     assert!(boundary.conditional);
 }
 
+#[test]
+fn records_mutability_against_resolved_binding_identity() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "value = 1\n",
+                "function main\n",
+                "  value int = 2\n",
+                "  value = 3\n",
+            ),
+        )],
+    ))
+    .unwrap();
+    let values = analyzed.units[0]
+        .typed_bindings
+        .iter()
+        .filter(|binding| binding.name == "value")
+        .map(|binding| binding.mutable)
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, [false, true]);
+}
+
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
 }

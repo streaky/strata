@@ -81,6 +81,7 @@ pub struct TypedBinding {
     pub name: String,
     pub span: Span,
     pub value_type: ValueType,
+    pub mutable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,6 +251,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         unit.typed_bindings = typed_bindings;
         unit.functions = functions;
     }
+    record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
     let unreachable_units = validate_control_flow(&semantic)?;
@@ -848,6 +850,7 @@ fn validate_call_nodes<'a>(
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
             value_type: ValueType::Scalar(ScalarType::String),
+            mutable: false,
         }));
         validate_call_nodes(
             package,
@@ -1068,6 +1071,7 @@ fn call_site_bindings(
                 name: parameter.name.clone(),
                 span: parameter.span,
                 value_type: ValueType::Scalar(value_type),
+                mutable: false,
             })
         }));
     }
@@ -1270,6 +1274,7 @@ fn analyze_binding_node(
                 name,
                 span: node.span,
                 value_type: ValueType::TypeDescriptor(ty),
+                mutable: false,
             });
         }
         return Ok(());
@@ -1316,6 +1321,7 @@ fn analyze_binding_node(
         name,
         span: node.span,
         value_type,
+        mutable: false,
     });
     Ok(())
 }
@@ -2023,6 +2029,7 @@ fn validate_control_flow(package: &SemanticPackage) -> Result<Vec<Vec<Span>>, Se
                     name: parameter.name.clone(),
                     span: parameter.span,
                     value_type: ValueType::Scalar(value_type),
+                    mutable: false,
                 })
             }));
             let falls_through =
@@ -2132,6 +2139,7 @@ fn validate_flow_statement(
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
                     value_type: ValueType::Scalar(ScalarType::String),
+                    mutable: false,
                 }));
             }
             if let Some(block) = statement
@@ -2502,6 +2510,55 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     );
     namespaces.insert("/collections".to_owned(), Namespace::default());
     namespaces
+}
+
+fn record_binding_mutability(package: &mut SemanticPackage) {
+    let mutable_units = package
+        .units
+        .iter()
+        .map(|unit| {
+            unit.typed_bindings
+                .iter()
+                .map(|binding| binding_is_mutated(package, unit, binding))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for (unit, mutable_bindings) in package.units.iter_mut().zip(mutable_units) {
+        for (binding, mutable) in unit.typed_bindings.iter_mut().zip(mutable_bindings) {
+            binding.mutable = mutable;
+        }
+    }
+}
+
+fn binding_is_mutated(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    binding: &TypedBinding,
+) -> bool {
+    fn visit(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        binding: &TypedBinding,
+        node: &SyntaxNode,
+    ) -> bool {
+        if matches!(
+            node.kind,
+            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+        ) && node.span != binding.span
+            && let Some(target) = node.children.first()
+            && target.kind == SyntaxKind::Name
+            && package
+                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+                .is_some_and(|symbol| symbol.declaration_span == Some(binding.span))
+        {
+            return true;
+        }
+        node.children
+            .iter()
+            .any(|child| visit(package, unit, binding, child))
+    }
+
+    visit(package, unit, binding, &unit.tree.root)
 }
 
 fn namespace_with_objects<'a>(
