@@ -312,7 +312,7 @@ impl Emitter<'_> {
                 let name = rust_name(self.text(name));
                 let collection = self.expression(collection);
                 self.line(&format!(
-                    "for {name} in {collection}.chars().map(String::from) {{"
+                    "for {name} in terrane_string_support::graphemes(&{collection}) {{"
                 ));
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();
@@ -412,7 +412,7 @@ impl Emitter<'_> {
         };
         let receiver = self.expression(receiver);
         match self.text(member) {
-            "length" => format!("{receiver}.chars().count()"),
+            "length" => format!("terrane_string_support::length(&{receiver}) as i128"),
             "type" => "()".to_owned(),
             name => format!("{receiver}.{}", rust_name(name)),
         }

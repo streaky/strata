@@ -12,5 +12,5 @@ fn main() {
     report(String::from("lexer"), true, 1);
     report(String::from("parser"), true, 2);
     let title: String = String::from("Terrane");
-    println!("{}", format!("{}{}{}", title, String::from(" length: "), title.chars().count()));
+    println!("{}", format!("{}{}{}", title, String::from(" length: "), terrane_string_support::length(&title) as i128));
 }

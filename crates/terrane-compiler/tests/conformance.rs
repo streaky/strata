@@ -75,17 +75,24 @@ fn compile_and_maybe_run(case: &Path, phase: &str, rust: &str) {
     if build_dir.exists() {
         fs::remove_dir_all(&build_dir).unwrap();
     }
-    fs::create_dir_all(&build_dir).unwrap();
-    let rust_path = build_dir.join("main.rs");
-    let binary_path = build_dir.join("program");
-    fs::write(&rust_path, rust).unwrap();
-    let output = Command::new("rustc")
-        .args(["--edition=2024", "-Dwarnings"])
-        .arg(&rust_path)
-        .arg("-o")
-        .arg(&binary_path)
+    fs::create_dir_all(build_dir.join("src")).unwrap();
+    write_support_crates(&build_dir);
+    fs::write(
+        build_dir.join("Cargo.toml"),
+        "[package]\nname = \"terrane_conformance_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+         [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
+         terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(build_dir.join("src/main.rs"), rust).unwrap();
+    let output = Command::new("cargo")
+        .args(["build", "--quiet", "--manifest-path"])
+        .arg(build_dir.join("Cargo.toml"))
+        .env("RUSTFLAGS", "-Dwarnings")
         .output()
         .unwrap();
+    let mut binary_path = build_dir.join("target/debug/terrane_conformance_program");
+    binary_path.set_extension(std::env::consts::EXE_EXTENSION);
     assert!(
         output.status.success(),
         "{} generated Rust failed to compile:\n{}",
@@ -109,6 +116,33 @@ fn compile_and_maybe_run(case: &Path, phase: &str, rust: &str) {
         );
     }
     fs::remove_dir_all(build_dir).unwrap();
+}
+
+fn write_support_crates(directory: &Path) {
+    let int = directory.join("support/terrane-int-support");
+    let string = directory.join("support/terrane-string-support");
+    fs::create_dir_all(int.join("src")).unwrap();
+    fs::create_dir_all(string.join("src")).unwrap();
+    fs::write(
+        int.join("Cargo.toml"),
+        "[package]\nname = \"terrane-int-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nnum-bigint = \"0.4\"\nnum-integer = \"0.1\"\nnum-traits = \"0.2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        int.join("src/lib.rs"),
+        include_bytes!("../../terrane-int-support/src/lib.rs"),
+    )
+    .unwrap();
+    fs::write(
+        string.join("Cargo.toml"),
+        "[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-segmentation = \"1\"\n",
+    )
+    .unwrap();
+    fs::write(
+        string.join("src/lib.rs"),
+        include_bytes!("../../terrane-string-support/src/lib.rs"),
+    )
+    .unwrap();
 }
 
 fn optional_bytes(path: PathBuf) -> Vec<u8> {

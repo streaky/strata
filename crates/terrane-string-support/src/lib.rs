@@ -7,6 +7,11 @@ pub fn length(value: &str) -> usize {
     value.graphemes(true).count()
 }
 
+/// Iterates over owned user-perceived characters.
+pub fn graphemes(value: &str) -> impl Iterator<Item = String> + '_ {
+    value.graphemes(true).map(String::from)
+}
+
 /// Returns the number of Unicode scalar values.
 #[must_use]
 pub fn scalar_length(value: &str) -> usize {
