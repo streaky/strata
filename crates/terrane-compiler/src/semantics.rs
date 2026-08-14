@@ -762,12 +762,23 @@ fn collect_evaluation_steps(source: &SourceFile, root: &SyntaxNode) -> Vec<Evalu
 type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);
 
 fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    let contracts = package
+        .units
+        .iter()
+        .flat_map(|unit| &unit.functions)
+        .map(|contract| {
+            (
+                (contract.span.file, contract.span.start, contract.span.end),
+                contract,
+            )
+        })
+        .collect();
     for unit in &package.units {
         let aliases = ScalarType::ALL
             .into_iter()
             .map(|ty| (ty.source_name().to_owned(), ty))
             .collect();
-        validate_call_nodes(package, unit, &unit.tree.root, &aliases, None)?;
+        validate_call_nodes(package, unit, &unit.tree.root, &aliases, &contracts, None)?;
     }
     Ok(())
 }
@@ -777,6 +788,7 @@ fn validate_call_nodes<'a>(
     unit: &'a SemanticUnit,
     node: &SyntaxNode,
     aliases: &BTreeMap<String, ScalarType>,
+    contracts: &BTreeMap<(u32, usize, usize), &FunctionContract>,
     active_function: Option<&'a FunctionContract>,
 ) -> Result<(), SemanticFailure> {
     let active_function = if node.kind == SyntaxKind::FunctionDeclaration {
@@ -793,15 +805,16 @@ fn validate_call_nodes<'a>(
             package.resolve_ordinary_at(unit, callee.span.start, node_text(&unit.source, callee))
         && symbol.kind == SymbolKind::Function
         && let Some(declaration_span) = symbol.declaration_span
-        && let Some(contract) = unit
-            .functions
-            .iter()
-            .find(|contract| contract.span == declaration_span)
+        && let Some(contract) = contracts.get(&(
+            declaration_span.file,
+            declaration_span.start,
+            declaration_span.end,
+        ))
     {
         validate_call_arguments(unit, arguments, contract, aliases, active_function)?;
     }
     for child in &node.children {
-        validate_call_nodes(package, unit, child, aliases, active_function)?;
+        validate_call_nodes(package, unit, child, aliases, contracts, active_function)?;
     }
     Ok(())
 }

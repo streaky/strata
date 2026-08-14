@@ -916,6 +916,22 @@ fn typed_call_checks_follow_callee_and_argument_scope() {
 }
 
 #[test]
+fn typed_call_checks_cross_source_unit_contracts() {
+    let failure = analyze(&package(
+        true,
+        &[
+            ("api.trn", "namespace app\nfunction consume; item int\n"),
+            (
+                "main.trn",
+                "namespace app\nfunction main\n  consume; 'text'\n",
+            ),
+        ],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0012");
+}
+
+#[test]
 fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
     let analyzed = analyze(&package(
         true,
