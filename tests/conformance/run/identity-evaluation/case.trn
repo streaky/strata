@@ -1,0 +1,9 @@
+namespace identity-evaluation
+from /core output import .print
+print = .print
+function observed int; item int
+  print; item
+  return item
+function main
+  print; (((observed; 1) + 1) is a int)
+  print; ((observed; 2).type is (observed; 3).type)

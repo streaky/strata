@@ -1,0 +1,10 @@
+1
+true
+true
+false
+2
+3
+true
+4
+five
+false

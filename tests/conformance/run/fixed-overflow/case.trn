@@ -1,0 +1,8 @@
+namespace fixed-overflow
+from /core output import .print
+from /core types import .int8
+print = .print
+function main
+  left int8 = 120
+  right int8 = 10
+  print; (left + right)

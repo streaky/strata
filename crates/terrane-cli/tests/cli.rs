@@ -94,7 +94,11 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
         std::process::id(),
         std::thread::current().name().unwrap_or("cli")
     ));
-    fs::write(&invalid_path, "namespace invalid\nfunction main\n").unwrap();
+    fs::write(
+        &invalid_path,
+        "namespace invalid\nfunction main\n  .missing;\n",
+    )
+    .unwrap();
     let invalid = Command::new(binary)
         .args(["check", invalid_path.to_str().unwrap()])
         .output()
@@ -104,6 +108,6 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
     assert!(
         String::from_utf8(invalid.stderr)
             .unwrap()
-            .contains("error[S0003]")
+            .contains("unresolved object `.missing`")
     );
 }

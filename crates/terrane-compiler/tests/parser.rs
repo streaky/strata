@@ -239,11 +239,7 @@ fn rejects_tighter_operators_after_type_membership() {
 
 #[test]
 fn deferred_spellings_receive_canonical_fixes() {
-    let source = SourceFile::new(
-        0,
-        "case.trn".into(),
-        "same = left === right\n".to_owned(),
-    );
+    let source = SourceFile::new(0, "case.trn".into(), "same = left === right\n".to_owned());
     let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
     assert_eq!(
         diagnostics[0].help.as_deref(),
@@ -459,11 +455,7 @@ fn rejects_non_associative_identity_and_recovers_layout_errors_once() {
         assert_eq!(diagnostics[0].code, code);
     }
 
-    let source = SourceFile::new(
-        0,
-        "case.trn".into(),
-        "if a = b\n    value = 1\n".to_owned(),
-    );
+    let source = SourceFile::new(0, "case.trn".into(), "if a = b\n    value = 1\n".to_owned());
     let diagnostics = parse(&source, lex(&source).unwrap()).diagnostics;
     assert_eq!(
         diagnostics[0].help.as_deref(),

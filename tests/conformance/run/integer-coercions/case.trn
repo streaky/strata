@@ -1,0 +1,15 @@
+namespace integer-coercions
+from /core output import .print
+from /core types import .int8, .uint8
+print = .print
+int8 = .int8
+uint8 = .uint8
+
+function main
+  value int = 300
+  exact = 120.coerce; int8
+  wrapped = value.wrapping-coerce; uint8
+  saturated = value.saturating-coerce; uint8
+  print; exact
+  print; wrapped
+  print; saturated

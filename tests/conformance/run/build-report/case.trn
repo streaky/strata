@@ -1,0 +1,15 @@
+namespace build-report
+from /core output import .print
+print = .print
+title string = 'Terrane'
+
+function report; name string, passed bool, attempts int = 1
+  if ((passed))
+    print; (name.concat; ': passed in ', attempts, ' attempt(s)')
+  else
+    print; (name.concat; ': failed')
+
+function main
+  report; 'lexer', true
+  report; attempts = 2, name = 'parser', passed = true
+  print; (title.concat; ' length: ', title.length)
