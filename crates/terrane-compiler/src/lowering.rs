@@ -557,7 +557,7 @@ impl Emitter<'_> {
             .map(|argument| argument.children.last().unwrap_or(argument))
             .map(|value| self.expression(value))
             .collect::<Vec<_>>();
-        if callee.kind == SyntaxKind::Name && self.text(callee) == "print" {
+        if self.is_builtin(callee, "/core/output::print") {
             if values.is_empty() {
                 return "println!()".to_owned();
             }
@@ -776,6 +776,46 @@ impl Emitter<'_> {
                 );
             }
         }
+    }
+
+    fn is_builtin(&self, node: &SyntaxNode, identity: &str) -> bool {
+        let SyntaxKind::Name = node.kind else {
+            return false;
+        };
+        let Some(symbol) =
+            self.package
+                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+        else {
+            return false;
+        };
+        if symbol.identity == identity {
+            return true;
+        }
+        let Some(declaration) = symbol.declaration_span else {
+            return false;
+        };
+        let Some(owner) = self
+            .package
+            .units
+            .iter()
+            .find(|unit| unit.source.id() == declaration.file)
+        else {
+            return false;
+        };
+        let binding = find_node(&owner.tree.root, SyntaxKind::Binding, declaration)
+            .or_else(|| find_node(&owner.tree.root, SyntaxKind::Assignment, declaration));
+        let Some(object) = binding.and_then(|binding| {
+            binding
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::ObjectName)
+        }) else {
+            return false;
+        };
+        let name = owner.source.text()[object.span.start..object.span.end].trim_start_matches('.');
+        self.package
+            .resolve_object_at(owner, object.span.start, name)
+            .is_some_and(|symbol| symbol.identity == identity)
     }
 
     fn text(&self, node: &SyntaxNode) -> &str {

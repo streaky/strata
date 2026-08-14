@@ -268,3 +268,22 @@ terrane_int_support::Int::from(2_i128), \
 terrane_int_support::Int::from(9_i128))"
     ));
 }
+
+#[test]
+fn does_not_lower_shadowing_functions_as_builtins() {
+    let source = concat!(
+        "namespace shadowing\n",
+        "function print int; value int\n",
+        "  return value\n",
+        "function main\n",
+        "  result = print; 1\n",
+    );
+    let compilation = terrane_compiler::compile("shadowing.trn", source.to_owned()).unwrap();
+
+    assert!(
+        compilation
+            .rust
+            .contains("print(terrane_int_support::Int::from(1_i128))")
+    );
+    assert!(!compilation.rust.contains("println!"));
+}
