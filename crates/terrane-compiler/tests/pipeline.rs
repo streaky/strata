@@ -243,6 +243,8 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
         "  same-descriptor = byte is byte\n",
         "  different-alias = byte is other-byte\n",
         "  same-scalar = value is value\n",
+        "  same-value-type = value.type is value.type\n",
+        "  different-value-type = value.type is byte.type\n",
     );
     let compilation = terrane_compiler::compile("descriptors.trn", source.to_owned()).unwrap();
 
@@ -263,6 +265,16 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
             .contains("let different_alias: bool = false;")
     );
     assert!(compilation.rust.contains("let same_scalar: bool = false;"));
+    assert!(
+        compilation
+            .rust
+            .contains("let same_value_type: bool = true;")
+    );
+    assert!(
+        compilation
+            .rust
+            .contains("let different_value_type: bool = false;")
+    );
 }
 
 #[test]

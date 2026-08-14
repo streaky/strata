@@ -748,6 +748,17 @@ impl Emitter<'_> {
                 .first()
                 .and_then(|child| self.descriptor_identity(child));
         }
+        if node.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = node.children.as_slice()
+            && self.text(member) == "type"
+        {
+            return self
+                .value_type(receiver)
+                .and_then(|value_type| match value_type {
+                    ValueType::Scalar(value_type) => Some(format!("type:{value_type}")),
+                    ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => None,
+                });
+        }
         let name = self.text(node).trim().trim_start_matches('.');
         if let Some(binding) = self.unit.typed_bindings.iter().rev().find(|binding| {
             binding.name == name
