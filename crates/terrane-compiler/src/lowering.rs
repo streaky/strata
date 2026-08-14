@@ -585,22 +585,41 @@ impl Emitter<'_> {
         }
         let contract = self.contract_for_call(callee).cloned();
         if let Some(contract) = &contract {
-            values.clear();
-            for (argument, parameter) in arguments.children.iter().zip(&contract.parameters) {
+            let mut ordered = vec![None; contract.parameters.len()];
+            let mut positional = 0;
+            for argument in &arguments.children {
+                let named = argument
+                    .children
+                    .first()
+                    .filter(|child| child.kind == SyntaxKind::Name && argument.children.len() > 1);
+                let index = named.map_or_else(
+                    || {
+                        let index = positional;
+                        positional += 1;
+                        index
+                    },
+                    |name| {
+                        contract
+                            .parameters
+                            .iter()
+                            .position(|parameter| parameter.name == self.text(name))
+                            .expect("validated named argument")
+                    },
+                );
                 let value = argument.children.last().unwrap_or(argument);
-                values.push(if let Some(ty) = parameter.value_type {
+                let parameter = &contract.parameters[index];
+                ordered[index] = Some(if let Some(ty) = parameter.value_type {
                     self.expression_as(value, ValueType::Scalar(ty))
                 } else {
                     self.expression(value)
                 });
             }
+            self.append_defaults(contract, &mut ordered);
+            values = ordered.into_iter().flatten().collect();
         }
         let name = contract
             .as_ref()
             .map_or_else(|| self.expression(callee), function_name);
-        if let Some(contract) = contract {
-            self.append_defaults(&contract, arguments.children.len(), &mut values);
-        }
         format!("{name}({})", values.join(", "))
     }
 
@@ -711,13 +730,8 @@ impl Emitter<'_> {
         }
     }
 
-    fn append_defaults(
-        &mut self,
-        contract: &FunctionContract,
-        supplied: usize,
-        values: &mut Vec<String>,
-    ) {
-        if supplied >= contract.parameters.len() {
+    fn append_defaults(&self, contract: &FunctionContract, values: &mut [Option<String>]) {
+        if values.iter().all(Option::is_some) {
             return;
         }
         let Some(owner) = self
@@ -742,7 +756,10 @@ impl Emitter<'_> {
         else {
             return;
         };
-        for (index, parameter) in parameters.children.iter().enumerate().skip(supplied) {
+        for (index, parameter) in parameters.children.iter().enumerate() {
+            if values[index].is_some() {
+                continue;
+            }
             if let Some(default) = parameter.children.last().filter(|child| {
                 !matches!(
                     child.kind,
@@ -750,7 +767,7 @@ impl Emitter<'_> {
                 )
             }) {
                 let value = literal_or_text(&owner.source, default);
-                values.push(
+                values[index] = Some(
                     if contract.parameters[index].value_type == Some(ScalarType::Int) {
                         adaptive_literal(&value)
                     } else {

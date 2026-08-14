@@ -250,3 +250,21 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     );
     assert!(compilation.rust.contains("let same_scalar: bool = false;"));
 }
+
+#[test]
+fn lowers_named_arguments_into_parameter_order_with_defaults() {
+    let source = concat!(
+        "namespace calls\n",
+        "function combine int; first int, second int = 2, third int = 3\n",
+        "  return first + second + third\n",
+        "function main\n",
+        "  result = combine; 1, third = 9\n",
+    );
+    let compilation = terrane_compiler::compile("calls.trn", source.to_owned()).unwrap();
+
+    assert!(compilation.rust.contains(
+        "combine(terrane_int_support::Int::from(1_i128), \
+terrane_int_support::Int::from(2_i128), \
+terrane_int_support::Int::from(9_i128))"
+    ));
+}
