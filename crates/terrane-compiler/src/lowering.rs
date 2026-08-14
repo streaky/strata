@@ -422,6 +422,9 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
+        if let Some(coercion) = self.integer_coercion(callee, arguments) {
+            return coercion;
+        }
         let mut values = arguments
             .children
             .iter()
@@ -462,6 +465,57 @@ impl Emitter<'_> {
             self.append_defaults(&contract, arguments.children.len(), &mut values);
         }
         format!("{name}({})", values.join(", "))
+    }
+
+    fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
+        let [receiver, operation] = callee.children.as_slice() else {
+            return None;
+        };
+        if callee.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let operation = self.text(operation).to_owned();
+        if !matches!(
+            operation.as_str(),
+            "coerce" | "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
+        ) {
+            return None;
+        }
+        let destination = arguments
+            .children
+            .first()
+            .and_then(|argument| argument.children.last())
+            .unwrap_or_else(|| &arguments.children[0]);
+        let destination = self.descriptor_type(destination)?;
+        let helper = operation.replace('-', "_");
+        let receiver = self.expression(receiver);
+        let call = format!(
+            "terrane_int_support::{helper}::<{}>(&({receiver}))",
+            rust_type(destination)
+        );
+        Some(if operation == "coerce" {
+            format!("{call}.unwrap_or_else(|failure| panic!(\"{{}}\", failure.render()))")
+        } else {
+            call
+        })
+    }
+
+    fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
+        let name = self.text(node).trim().trim_start_matches('.');
+        self.unit
+            .typed_bindings
+            .iter()
+            .rev()
+            .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+            .and_then(|binding| match binding.value_type {
+                ValueType::TypeDescriptor(ty) => Some(ty),
+                _ => None,
+            })
+            .or_else(|| {
+                self.package
+                    .resolve_object_at(self.unit, node.span.start, name)
+                    .and_then(crate::semantics::Symbol::descriptor_type)
+            })
     }
 
     fn contract_for_call(&self, callee: &SyntaxNode) -> Option<&FunctionContract> {
