@@ -430,14 +430,17 @@ Exit criterion: semantic and lowering conformance for a program that exercises t
 Implemented evidence: the compiler now resolves compiler-owned and imported scalar
 descriptors, infers and checks typed bindings, parameters, defaults, returns, calls,
 operators, assignments, branches, loops, updates, and finite descriptor alternatives.
-Native fixed-width values lower directly to Rust where their contracts agree; adaptive
-`int` operations use the dedicated exact-integer support crate, and deterministic
-source-oriented failures cover unsupported or invalid arithmetic and coercion paths.
-Canonical scalar display, grapheme-counted string length, descriptor identity, and the
-supported collection iteration slice are checked before lowering. Manifest-driven
-accepted and rejected cases cover the plausible semantic boundaries named above, while
-the `fizz-buzz`, `build-report`, and grouped-precedence run cases compile generated
-crates with warnings denied and verify their observable output.
+Native fixed-width values lower directly to Rust with checked default arithmetic and
+shift operations; adaptive `int` operations use the dedicated exact-integer support
+crate, and deterministic source-oriented failures cover unsupported or invalid arithmetic
+and coercion paths. Canonical scalar display, grapheme-counted string length, descriptor
+and value-type identity, and the supported collection iteration slice are checked before
+lowering. Manifest-driven accepted and rejected cases cover the plausible semantic
+boundaries named above, including adaptive logical comparisons, destination-aware
+returns/assignments/lengths, fixed-width overflow, and invalid member receivers. The
+`fizz-buzz`, `build-report`, grouped-precedence, and focused regression run cases compile
+generated crates with warnings denied and verify their observable output, stderr, and
+exit status.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
