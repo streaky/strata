@@ -25,7 +25,7 @@ fn inferred_local_first_assignment_lowers_as_a_declaration() {
     assert!(
         compilation
             .rust
-            .contains("total = (total.clone() + terrane_int_support::Int::from(1_i128));")
+            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
     );
 }
 
