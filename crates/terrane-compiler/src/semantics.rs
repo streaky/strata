@@ -807,6 +807,7 @@ fn validate_call_nodes<'a>(
     } else {
         active_function
     };
+    validate_resolved_assignment(package, unit, node, contracts)?;
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
@@ -871,6 +872,77 @@ fn validate_call_nodes<'a>(
         )?;
     }
     Ok(())
+}
+
+fn validate_resolved_assignment(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    contracts: &BTreeMap<(u32, usize, usize), &FunctionContract>,
+) -> Result<(), SemanticFailure> {
+    if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
+        return Ok(());
+    }
+    let Some(name_node) = node
+        .children
+        .iter()
+        .find(|child| child.kind == SyntaxKind::Name)
+    else {
+        return Ok(());
+    };
+    let Some(initializer) = node.children.iter().rev().find(|child| {
+        child.span != name_node.span
+            && !matches!(
+                child.kind,
+                SyntaxKind::DeclarationModifier
+                    | SyntaxKind::Visibility
+                    | SyntaxKind::DeclarationQualifier
+                    | SyntaxKind::TypeExpression
+            )
+    }) else {
+        return Ok(());
+    };
+    let Some(actual) = resolved_call_type(package, unit, initializer, contracts) else {
+        return Ok(());
+    };
+    let name = node_text(&unit.source, name_node);
+    let Some(ValueType::Scalar(expected)) = unit
+        .typed_bindings
+        .iter()
+        .rev()
+        .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+        .map(|binding| binding.value_type)
+    else {
+        return Ok(());
+    };
+    validate_value_assignment(&unit.source, name, expected, actual, initializer)
+}
+
+fn resolved_call_type(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    contracts: &BTreeMap<(u32, usize, usize), &FunctionContract>,
+) -> Option<ValueType> {
+    if node.kind == SyntaxKind::GroupExpression {
+        return node
+            .children
+            .first()
+            .and_then(|child| resolved_call_type(package, unit, child, contracts));
+    }
+    let [callee, _arguments] = node.children.as_slice() else {
+        return None;
+    };
+    if node.kind != SyntaxKind::CallExpression || callee.kind != SyntaxKind::Name {
+        return None;
+    }
+    let symbol =
+        package.resolve_ordinary_at(unit, callee.span.start, node_text(&unit.source, callee))?;
+    let declaration = symbol.declaration_span?;
+    contracts
+        .get(&(declaration.file, declaration.start, declaration.end))?
+        .return_type
+        .map(ValueType::Scalar)
 }
 
 fn validate_call_arguments(

@@ -910,6 +910,24 @@ fn rejects_statically_incompatible_typed_arguments() {
 }
 
 #[test]
+fn rejects_function_results_assigned_to_incompatible_scalar_types() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction enabled bool\n  return true\nfunction main\n  count int = enabled;\n",
+        )],
+    ))
+    .unwrap_err();
+
+    assert_eq!(failure.diagnostics[0].code, "T0002");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "cannot assign `bool` to `count` of type `int`"
+    );
+}
+
+#[test]
 fn typed_call_checks_follow_callee_and_argument_scope() {
     let parameter_failure = analyze(&package(
         true,
