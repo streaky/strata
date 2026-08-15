@@ -400,7 +400,7 @@ Deliver:
 - typed parameters, optional parameters with defaults, and return contracts;
 - initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
 - assignment compatibility without implicit cross-type coercion;
-- explicit throwing `coerce` plus `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` for integer destinations only, covering `int` and every fixed width; milestone 4.5 performs the required clean cutover to the canonical `.coerce` callable family. Floating-point or `string` destinations remain rejected with an explicit unsupported-destination diagnostic rather than partially implemented, so `.integer-conversion-overflow` remains the only conversion failure version one can raise.
+- explicit throwing integer coercion plus checked, wrapping, and saturating policies for `int` and fixed-width integer sources and fixed-width integer destinations, now exposed through the canonical `.coerce`, `.coerce.checked`, `.coerce.wrap`, and `.coerce.saturate` callable family; floating-point and `string` destinations remain rejected with an explicit unsupported-destination diagnostic rather than partially implemented, so `.integer-conversion-overflow` remains the only conversion failure version one can raise.
 - unary, arithmetic, shift, bitwise, comparison, Boolean, equality, identity/type-membership, and type-appropriate operator checking;
 - exact `int` arithmetic, infinite two's-complement bitwise behavior, exact/arithmetic shifts, and Euclidean division/remainder without inheriting Rust overflow, shift, or signed division behavior;
 - fixed-width checked ordinary arithmetic and explicit checked, wrapping, saturating, and overflowing operation families without host debug/release dependence; fixed-width shift counts receive an explicit source-language operation contract rather than inheriting host behavior;
@@ -470,6 +470,16 @@ Deliver:
 Exit criterion: canonical grouped coercion cases compile and run with warnings denied,
 flat spellings fail at Terrane source spans, and no compiler-facing documentation or
 fixture presents them as valid syntax.
+
+Implemented evidence: the compiler resolves the canonical `.coerce` family and its
+`.checked`, `.wrap`, and `.saturate` children through one typed policy resolver shared by
+semantic analysis and lowering. Availability is keyed by source type, destination type, and
+policy; unsupported pairs, unknown policy chains, escaped family values, and obsolete flat
+spellings fail at Terrane source spans. Accepted conformance cases cover every policy,
+including `none` membership for checked results, and a side-effecting function-call receiver
+proves exactly-once evaluation. Reviewed generated-Rust goldens preserve the throwing,
+partial, wrapping, and saturating helper contracts, and every accepted generated crate
+compiles with warnings denied.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
