@@ -165,6 +165,7 @@ pub struct SemanticUnit {
     pub scopes: Vec<LexicalScope>,
     pub typed_bindings: Vec<TypedBinding>,
     pub functions: Vec<FunctionContract>,
+    descriptor_aliases: BTreeMap<String, ScalarType>,
     pub unreachable_spans: Vec<Span>,
     pub evaluation_steps: Vec<EvaluationStep>,
 }
@@ -172,11 +173,7 @@ pub struct SemanticUnit {
 impl SemanticUnit {
     /// Returns the compiler-resolved value type for an expression when it is statically known.
     pub(crate) fn inferred_value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
-        let aliases = ScalarType::ALL
-            .into_iter()
-            .map(|ty| (ty.source_name().to_owned(), ty))
-            .collect();
-        infer_value_type(self, node, &aliases, &self.typed_bindings)
+        infer_value_type(self, node, &self.descriptor_aliases, &self.typed_bindings)
             .ok()
             .flatten()
     }
@@ -235,6 +232,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
+            descriptor_aliases: BTreeMap::new(),
             unreachable_spans: Vec::new(),
             evaluation_steps: Vec::new(),
         });
@@ -291,21 +289,11 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_references(&semantic)?;
-    let (typed_units, function_units) = analyze_types(&semantic)?;
-    for ((unit, typed_bindings), functions) in semantic
-        .units
-        .iter_mut()
-        .zip(typed_units)
-        .zip(function_units)
-    {
-        unit.typed_bindings = typed_bindings;
-        unit.functions = functions;
-    }
+    analyze_types(&mut semantic)?;
     record_binding_mutability(&mut semantic);
-    let validation_semantic = with_namespace_function_contracts(&semantic);
-    validate_calls(&validation_semantic)?;
-    validate_definite_assignment(&validation_semantic)?;
-    let unreachable_units = validate_control_flow(&validation_semantic)?;
+    validate_calls(&semantic)?;
+    validate_definite_assignment(&semantic)?;
+    let unreachable_units = validate_control_flow(&semantic)?;
     for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
         unit.unreachable_spans = unreachable_spans;
         unit.evaluation_steps = collect_evaluation_steps(&unit.source, &unit.tree.root);
@@ -313,18 +301,25 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     Ok(semantic)
 }
 
-fn with_namespace_function_contracts(package: &SemanticPackage) -> SemanticPackage {
-    let mut result = package.clone();
-    for index in 0..result.units.len() {
-        let namespace = &result.units[index].namespace;
-        result.units[index].functions = package
-            .units
+fn populate_namespace_function_contracts(package: &mut SemanticPackage) {
+    let namespaces = package
+        .units
+        .iter()
+        .map(|unit| unit.namespace.clone())
+        .collect::<Vec<_>>();
+    let functions = package
+        .units
+        .iter()
+        .map(|unit| unit.functions.clone())
+        .collect::<Vec<_>>();
+    for (unit, namespace) in package.units.iter_mut().zip(&namespaces) {
+        unit.functions = namespaces
             .iter()
-            .filter(|unit| &unit.namespace == namespace)
-            .flat_map(|unit| unit.functions.iter().cloned())
+            .zip(&functions)
+            .filter(|(candidate, _)| *candidate == namespace)
+            .flat_map(|(_, functions)| functions.iter().cloned())
             .collect();
     }
-    result
 }
 
 impl SemanticPackage {
@@ -826,8 +821,6 @@ fn collect_evaluation_steps(source: &SourceFile, root: &SyntaxNode) -> Vec<Evalu
     steps
 }
 
-type UnitTypeAnalysis = (Vec<Vec<TypedBinding>>, Vec<Vec<FunctionContract>>);
-
 fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     let contracts = package
         .units
@@ -841,15 +834,12 @@ fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
         })
         .collect();
     for unit in &package.units {
-        let aliases = ScalarType::ALL
-            .into_iter()
-            .map(|ty| (ty.source_name().to_owned(), ty))
-            .collect();
+        let aliases = &unit.descriptor_aliases;
         validate_call_nodes(
             package,
             unit,
             &unit.tree.root,
-            &aliases,
+            aliases,
             &contracts,
             None,
             &[],
@@ -1199,51 +1189,55 @@ fn call_site_bindings(
     bindings
 }
 
-fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, SemanticFailure> {
-    let mut alias_units = Vec::with_capacity(package.units.len());
-    let mut function_units = Vec::with_capacity(package.units.len());
-    for unit in &package.units {
-        let mut aliases = BTreeMap::new();
-        if package.prelude {
-            for ty in ScalarType::ALL {
-                aliases.insert(ty.source_name().to_owned(), ty);
-            }
-        }
-        collect_descriptor_aliases(package, unit, &unit.tree.root, &mut aliases);
-        let mut functions = Vec::new();
-        collect_function_contracts(unit, &unit.tree.root, &aliases, &mut functions)?;
-        alias_units.push(aliases);
-        function_units.push(functions);
+fn prelude_descriptor_aliases(package: &SemanticPackage) -> BTreeMap<String, ScalarType> {
+    if !package.prelude {
+        return BTreeMap::new();
     }
-
-    let mut typed_package = package.clone();
-    for index in 0..typed_package.units.len() {
-        let namespace = &typed_package.units[index].namespace;
-        typed_package.units[index].functions = package
-            .units
-            .iter()
-            .zip(&function_units)
-            .filter(|(unit, _)| &unit.namespace == namespace)
-            .flat_map(|(_, functions)| functions.iter().cloned())
-            .collect();
-    }
-
-    let mut binding_units = Vec::with_capacity(package.units.len());
-    for (unit, mut aliases) in typed_package.units.iter().zip(alias_units) {
-        let mut bindings = Vec::new();
-        collect_typed_bindings(
-            &typed_package,
-            unit,
-            &unit.tree.root,
-            &mut aliases,
-            &mut bindings,
-        )?;
-        binding_units.push(bindings);
-    }
-    Ok((binding_units, function_units))
+    ScalarType::ALL
+        .into_iter()
+        .map(|ty| (ty.source_name().to_owned(), ty))
+        .collect()
 }
 
-fn collect_descriptor_aliases(
+fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
+    for index in 0..package.units.len() {
+        let unit = &package.units[index];
+        let mut aliases = prelude_descriptor_aliases(package);
+        let mut functions = Vec::new();
+        collect_type_declarations(package, unit, &unit.tree.root, &mut aliases, &mut functions)?;
+        package.units[index].descriptor_aliases = aliases;
+        package.units[index].functions = functions;
+    }
+    populate_namespace_function_contracts(package);
+
+    for index in 0..package.units.len() {
+        let unit = &package.units[index];
+        let mut aliases = prelude_descriptor_aliases(package);
+        let mut bindings = Vec::new();
+        collect_typed_bindings(package, unit, &unit.tree.root, &mut aliases, &mut bindings)?;
+        package.units[index].typed_bindings = bindings;
+    }
+    Ok(())
+}
+
+fn collect_type_declarations(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &mut BTreeMap<String, ScalarType>,
+    functions: &mut Vec<FunctionContract>,
+) -> Result<(), SemanticFailure> {
+    collect_descriptor_alias(package, unit, node, aliases);
+    if node.kind == SyntaxKind::FunctionDeclaration {
+        functions.push(analyze_function_contract(unit, node, aliases)?);
+    }
+    for child in &node.children {
+        collect_type_declarations(package, unit, child, aliases, functions)?;
+    }
+    Ok(())
+}
+
+fn collect_descriptor_alias(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -1265,24 +1259,6 @@ fn collect_descriptor_aliases(
             aliases.insert(node_text(&unit.source, name).to_owned(), ty);
         }
     }
-    for child in &node.children {
-        collect_descriptor_aliases(package, unit, child, aliases);
-    }
-}
-
-fn collect_function_contracts(
-    unit: &SemanticUnit,
-    node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
-    functions: &mut Vec<FunctionContract>,
-) -> Result<(), SemanticFailure> {
-    if node.kind == SyntaxKind::FunctionDeclaration {
-        functions.push(analyze_function_contract(unit, node, aliases)?);
-    }
-    for child in &node.children {
-        collect_function_contracts(unit, child, aliases, functions)?;
-    }
-    Ok(())
 }
 
 fn collect_typed_bindings(
@@ -1619,35 +1595,11 @@ fn infer_value_type(
             {
                 return Ok(Some(ValueType::Scalar(return_type)));
             }
-            return declared_function_return_type(unit, name, aliases)
-                .map(|return_type| return_type.map(ValueType::Scalar));
+            return Ok(None);
         }
         return Ok(None);
     }
     Ok(None)
-}
-
-fn declared_function_return_type(
-    unit: &SemanticUnit,
-    name: &str,
-    aliases: &BTreeMap<String, ScalarType>,
-) -> Result<Option<ScalarType>, SemanticFailure> {
-    let declaration = unit.tree.root.children.iter().find(|node| {
-        node.kind == SyntaxKind::FunctionDeclaration
-            && node
-                .children
-                .iter()
-                .find(|child| child.kind == SyntaxKind::Name)
-                .is_some_and(|name_node| node_text(&unit.source, name_node) == name)
-    });
-    declaration
-        .and_then(|node| {
-            node.children
-                .iter()
-                .find(|child| child.kind == SyntaxKind::TypeExpression)
-        })
-        .map(|type_node| resolve_scalar_type(&unit.source, type_node, aliases))
-        .transpose()
 }
 
 fn infer_unary_type(
@@ -1724,11 +1676,11 @@ fn infer_integer_coercion_type(
                 callee.span,
             ));
         }
-        if let Some(policy) = invalid_coercion_policy(unit, callee) {
+        if let Some(chain) = invalid_coercion_policy(unit, callee) {
             return Err(failure(
                 &unit.source,
                 "T0010",
-                format!("`.coerce.{policy}` is not an available coercion policy"),
+                format!("`{chain}` is not an available coercion policy"),
                 callee.span,
             ));
         }
@@ -1842,16 +1794,14 @@ pub(crate) fn integer_coercion_call<'a>(
         .flatten()
 }
 
-fn invalid_coercion_policy<'a>(unit: &'a SemanticUnit, callee: &'a SyntaxNode) -> Option<&'a str> {
-    if callee.kind != SyntaxKind::MemberExpression {
-        return None;
-    }
-    let [receiver, member] = callee.children.as_slice() else {
-        return None;
-    };
-    (coercion_family_receiver(unit, receiver)
+fn invalid_coercion_policy(unit: &SemanticUnit, callee: &SyntaxNode) -> Option<String> {
+    (coercion_family_receiver(unit, callee)
         && integer_coercion_call(&unit.source, callee).is_none())
-    .then(|| node_text(&unit.source, member))
+    .then(|| {
+        let callee_text = node_text(&unit.source, callee);
+        let family_start = callee_text.find(".coerce").unwrap_or(0);
+        callee_text[family_start..].to_owned()
+    })
 }
 
 fn coercion_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
@@ -1878,6 +1828,7 @@ fn obsolete_integer_coercion_member<'a>(
             )
         })
 }
+
 fn infer_binary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,

@@ -525,6 +525,44 @@ fn records_typed_parameters_defaults_and_return_contracts() {
 }
 
 #[test]
+fn descriptor_aliases_resolve_function_contracts_in_source_order() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .uint8\n",
+                "byte = .uint8\n",
+                "function identity byte; value byte\n",
+                "  return value\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    let contract = &analyzed.units[0].functions[0];
+    assert_eq!(contract.return_type, Some(ScalarType::Uint8));
+    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::Uint8));
+
+    let failure = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .uint8\n",
+                "function identity byte; value byte\n",
+                "  return value\n",
+                "byte = .uint8\n",
+            ),
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0001");
+}
+
+#[test]
 fn rejects_required_parameters_after_optional_parameters() {
     let failure = analyze(&package(
         true,
@@ -795,6 +833,16 @@ fn rejects_nested_and_escaped_coercion_family_shapes() {
         ))
         .unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "T0010");
+        assert_eq!(
+            failure.diagnostics[0].message,
+            format!(
+                "`{}` is not an available coercion policy",
+                expression
+                    .split_once("; ")
+                    .map_or(expression, |(callee, _)| callee)
+                    .trim_start_matches("value")
+            )
+        );
     }
 
     for expression in ["value.coerce.checked", "value.coerce.wrap + 1"] {
