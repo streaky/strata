@@ -1249,7 +1249,7 @@ fn collect_descriptor_aliases(
     node: &SyntaxNode,
     aliases: &mut BTreeMap<String, ScalarType>,
 ) {
-    if node.kind == SyntaxKind::Binding
+    if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
         && let Some(name) = node
             .children
             .iter()
