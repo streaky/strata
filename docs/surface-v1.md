@@ -1,6 +1,6 @@
-# Terrane version-one language map
+# Terrane object surface — version one
 
-This document maps the proposed **version-one language contract**, not the compiler's present implementation. It reorganises the language draft around the object relationships that source authors and tooling should see. The surface the compiler implements today is recorded separately in `docs/map.md`.
+This document maps the proposed **version-one language contract**, not the compiler's present implementation. It reorganises the language draft around the object relationships that source authors and tooling should see. The surface the compiler implements today is recorded separately in `docs/surface-today.md`.
 
 The map is deliberately opinionated in one important respect: a member may be both a callable object and a namespace of related callable modes. Selecting `value.coerce` produces a method object; invoking that object selects its default behaviour, while selecting `value.coerce.checked` selects a child method object.
 

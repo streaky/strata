@@ -1,4 +1,4 @@
-# Terrane implemented object surface map
+# Terrane object surface — implemented today
 
 This map describes the language surface implemented by the compiler today. It is not a map of every object proposed by the language draft.
 

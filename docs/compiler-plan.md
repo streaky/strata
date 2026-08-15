@@ -447,7 +447,7 @@ warnings denied and verify their observable output, stderr, and exit status.
 
 Milestone 4 delivered the integer contracts but its flat `checked-coerce`,
 `wrapping-coerce`, and `saturating-coerce` spellings contradict the canonical callable
-family specified by `docs/lang-map.md`. This is release-blocking semantic debt, not a
+family specified by `docs/surface-v1.md`. This is release-blocking semantic debt, not a
 compatibility layer or a deferred additive feature.
 
 Deliver:
