@@ -5,9 +5,9 @@ print = .print
 uint8 = .uint8
 
 function observed int
- print; 'once'
- return 300
+  print; 'once'
+  return 300
 
 function main
- value = (observed;).coerce.wrap; uint8
- print; value
+  value = (observed;).coerce.wrap; uint8
+  print; value

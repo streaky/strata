@@ -6,7 +6,9 @@ int8 = .int8
 none = .none
 
 function main
- value int = 300
- checked = value.coerce.checked; int8
- absent = checked is a none
- print; absent
+  value int = 300
+  checked = value.coerce.checked; int8
+  absent = checked is a none
+  present = checked is a int8
+  print; absent
+  print; present

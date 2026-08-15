@@ -476,9 +476,10 @@ Implemented evidence: the compiler resolves the canonical `.coerce` family and i
 semantic analysis and lowering. Availability is keyed by source type, destination type, and
 policy; unsupported pairs, unknown policy chains, escaped family values, and obsolete flat
 spellings fail at Terrane source spans. Accepted conformance cases cover every policy,
-including `none` membership for checked results, and a side-effecting function-call receiver
-proves exactly-once evaluation. Reviewed generated-Rust goldens preserve the throwing,
-partial, wrapping, and saturating helper contracts, and every accepted generated crate
+including both absent and present membership for checked results, and a side-effecting
+function-call receiver proves exactly-once evaluation. Reviewed generated-Rust goldens
+preserve the throwing, partial, wrapping, and saturating helper contracts, and every accepted
+generated crate
 compiles with warnings denied.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
