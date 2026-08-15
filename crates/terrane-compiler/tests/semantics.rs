@@ -731,28 +731,36 @@ fn rejects_unsupported_integer_coercion_destinations() {
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0008");
 
-    let failure = analyze(&package(
-        true,
-        &[(
-            "main.trn",
-            "namespace app\nfunction main\n  value int = 1\n  converted = value.coerce.wrap; int\n",
-        )],
-    ))
-    .unwrap_err();
-    assert_eq!(failure.diagnostics[0].code, "T0010");
+    for expression in ["value.coerce.wrap; int", "value.coerce.checked; int"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0010");
+    }
 }
 
 #[test]
 fn rejects_obsolete_flat_integer_coercion_members() {
-    let failure = analyze(&package(
-        true,
-        &[(
-            "main.trn",
-            "namespace app\nfunction main\n  value int = 1\n  converted = value.wrapping-coerce; int\n",
-        )],
-    ))
-    .unwrap_err();
-    assert_eq!(failure.diagnostics[0].code, "T0017");
+    for member in ["checked-coerce", "wrapping-coerce", "saturating-coerce"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = value.{member}; int\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0017");
+    }
 }
 
 #[test]
@@ -766,6 +774,86 @@ fn rejects_unbound_integer_coercion_family() {
     ))
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0018");
+}
+
+#[test]
+fn rejects_nested_and_escaped_coercion_family_shapes() {
+    for expression in [
+        "value.coerce.clamp; int8",
+        "value.coerce.wrap.checked; int8",
+        "value.coerce.checked.wrap; int8",
+        "value.coerce.clamp.wrap; int8",
+    ] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0010");
+    }
+
+    for expression in ["value.coerce.checked", "value.coerce.wrap + 1"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0018");
+    }
+}
+
+#[test]
+fn validates_calls_inside_coercion_receivers() {
+    for arguments in ["'text'", "1, 2"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0012");
+    }
+}
+
+#[test]
+fn infers_cross_unit_call_results_before_binding_types() {
+    let analyzed = analyze(&package(
+        true,
+        &[
+            (
+                "helper.trn",
+                "namespace app\nfunction helper int\n  return 300\n",
+            ),
+            (
+                "main.trn",
+                "namespace app\nfrom /core types import .uint8\nuint8 = .uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
+            ),
+        ],
+    ))
+    .unwrap();
+    assert_eq!(
+        analyzed.units[1]
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.name == "value")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Uint8)
+    );
 }
 
 #[test]

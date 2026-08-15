@@ -102,6 +102,15 @@ impl CoercionPolicy {
             Self::Saturate => "saturate",
         }
     }
+
+    fn invocation_name(self) -> &'static str {
+        match self {
+            Self::Default => ".coerce",
+            Self::Checked => ".coerce.checked",
+            Self::Wrap => ".coerce.wrap",
+            Self::Saturate => ".coerce.saturate",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -293,14 +302,29 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         unit.functions = functions;
     }
     record_binding_mutability(&mut semantic);
-    validate_calls(&semantic)?;
-    validate_definite_assignment(&semantic)?;
-    let unreachable_units = validate_control_flow(&semantic)?;
+    let validation_semantic = with_namespace_function_contracts(&semantic);
+    validate_calls(&validation_semantic)?;
+    validate_definite_assignment(&validation_semantic)?;
+    let unreachable_units = validate_control_flow(&validation_semantic)?;
     for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
         unit.unreachable_spans = unreachable_spans;
         unit.evaluation_steps = collect_evaluation_steps(&unit.source, &unit.tree.root);
     }
     Ok(semantic)
+}
+
+fn with_namespace_function_contracts(package: &SemanticPackage) -> SemanticPackage {
+    let mut result = package.clone();
+    for index in 0..result.units.len() {
+        let namespace = &result.units[index].namespace;
+        result.units[index].functions = package
+            .units
+            .iter()
+            .filter(|unit| &unit.namespace == namespace)
+            .flat_map(|unit| unit.functions.iter().cloned())
+            .collect();
+    }
+    result
 }
 
 impl SemanticPackage {
@@ -851,11 +875,7 @@ fn validate_call_nodes<'a>(
         active_function
     };
     validate_resolved_assignment(package, unit, node, contracts)?;
-    if node.kind == SyntaxKind::CallExpression {
-        let mut bindings = unit.typed_bindings.clone();
-        bindings.extend_from_slice(contextual_bindings);
-        infer_integer_coercion_type(unit, node, aliases, &bindings)?;
-    }
+    validate_integer_coercion_call(unit, node, aliases, contextual_bindings)?;
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
@@ -923,8 +943,17 @@ fn validate_call_nodes<'a>(
     for (index, child) in node.children.iter().enumerate() {
         if node.kind == SyntaxKind::CallExpression
             && index == 0
-            && coercion_family_receiver(unit, child)
+            && let Some((source, _)) = integer_coercion_call(&unit.source, child)
         {
+            validate_call_nodes(
+                package,
+                unit,
+                source,
+                aliases,
+                contracts,
+                active_function,
+                contextual_bindings,
+            )?;
             continue;
         }
         validate_call_nodes(
@@ -936,6 +965,20 @@ fn validate_call_nodes<'a>(
             active_function,
             contextual_bindings,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_integer_coercion_call(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    contextual_bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::CallExpression {
+        let mut bindings = unit.typed_bindings.clone();
+        bindings.extend_from_slice(contextual_bindings);
+        infer_integer_coercion_type(unit, node, aliases, &bindings)?;
     }
     Ok(())
 }
@@ -1157,7 +1200,7 @@ fn call_site_bindings(
 }
 
 fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, SemanticFailure> {
-    let mut binding_units = Vec::with_capacity(package.units.len());
+    let mut alias_units = Vec::with_capacity(package.units.len());
     let mut function_units = Vec::with_capacity(package.units.len());
     for unit in &package.units {
         let mut aliases = BTreeMap::new();
@@ -1166,37 +1209,94 @@ fn analyze_types(package: &SemanticPackage) -> Result<UnitTypeAnalysis, Semantic
                 aliases.insert(ty.source_name().to_owned(), ty);
             }
         }
-        let mut bindings = Vec::new();
+        collect_descriptor_aliases(package, unit, &unit.tree.root, &mut aliases);
         let mut functions = Vec::new();
-        analyze_type_nodes(
-            package,
+        collect_function_contracts(unit, &unit.tree.root, &aliases, &mut functions)?;
+        alias_units.push(aliases);
+        function_units.push(functions);
+    }
+
+    let mut typed_package = package.clone();
+    for index in 0..typed_package.units.len() {
+        let namespace = &typed_package.units[index].namespace;
+        typed_package.units[index].functions = package
+            .units
+            .iter()
+            .zip(&function_units)
+            .filter(|(unit, _)| &unit.namespace == namespace)
+            .flat_map(|(_, functions)| functions.iter().cloned())
+            .collect();
+    }
+
+    let mut binding_units = Vec::with_capacity(package.units.len());
+    for (unit, mut aliases) in typed_package.units.iter().zip(alias_units) {
+        let mut bindings = Vec::new();
+        collect_typed_bindings(
+            &typed_package,
             unit,
             &unit.tree.root,
             &mut aliases,
             &mut bindings,
-            &mut functions,
         )?;
         binding_units.push(bindings);
-        function_units.push(functions);
     }
     Ok((binding_units, function_units))
 }
 
-fn analyze_type_nodes(
+fn collect_descriptor_aliases(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &mut BTreeMap<String, ScalarType>,
+) {
+    if node.kind == SyntaxKind::Binding
+        && let Some(name) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        && let Some(initializer) = node.children.last()
+        && initializer.kind == SyntaxKind::ObjectName
+    {
+        let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
+        if let Some(ty) = package
+            .resolve_object_at(unit, initializer.span.start, object_name)
+            .and_then(Symbol::descriptor_type)
+        {
+            aliases.insert(node_text(&unit.source, name).to_owned(), ty);
+        }
+    }
+    for child in &node.children {
+        collect_descriptor_aliases(package, unit, child, aliases);
+    }
+}
+
+fn collect_function_contracts(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+    functions: &mut Vec<FunctionContract>,
+) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::FunctionDeclaration {
+        functions.push(analyze_function_contract(unit, node, aliases)?);
+    }
+    for child in &node.children {
+        collect_function_contracts(unit, child, aliases, functions)?;
+    }
+    Ok(())
+}
+
+fn collect_typed_bindings(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
     aliases: &mut BTreeMap<String, ScalarType>,
     bindings: &mut Vec<TypedBinding>,
-    functions: &mut Vec<FunctionContract>,
 ) -> Result<(), SemanticFailure> {
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         analyze_binding_node(package, unit, node, aliases, bindings)?;
-    } else if node.kind == SyntaxKind::FunctionDeclaration {
-        functions.push(analyze_function_contract(unit, node, aliases)?);
     }
     for child in &node.children {
-        analyze_type_nodes(package, unit, child, aliases, bindings, functions)?;
+        collect_typed_bindings(package, unit, child, aliases, bindings)?;
     }
     Ok(())
 }
@@ -1476,14 +1576,11 @@ fn infer_value_type(
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
             .map(|binding| binding.value_type));
     }
-    if node.kind == SyntaxKind::MemberExpression
-        && let [_, member] = node.children.as_slice()
-        && node_text(&unit.source, member) == "coerce"
-    {
+    if coercion_family_receiver(unit, node) {
         return Err(failure(
             &unit.source,
             "T0018",
-            "`.coerce` must be called with a statically known destination",
+            "`.coerce` and its policy members are not storable values before bound methods exist",
             node.span,
         ));
     }
@@ -1651,7 +1748,10 @@ fn infer_integer_coercion_type(
         return Err(failure(
             &unit.source,
             "T0009",
-            format!("`.coerce` requires an integer source, found `{source_type}`"),
+            format!(
+                "`{}` requires an integer source, found `{source_type}`",
+                policy.invocation_name()
+            ),
             source_node.span,
         ));
     }
@@ -1664,7 +1764,10 @@ fn infer_integer_coercion_type(
             failure(
                 &unit.source,
                 "T0008",
-                "`.coerce` requires one integer destination",
+                format!(
+                    "`{}` from `{source_type}` requires one integer destination",
+                    policy.invocation_name()
+                ),
                 node.span,
             )
         })?;
@@ -1673,7 +1776,10 @@ fn infer_integer_coercion_type(
         failure(
             &unit.source,
             "T0008",
-            format!("`{destination_name}` is not a supported integer coercion destination"),
+            format!(
+                "`{destination_name}` is not a supported destination for `{}` from `{source_type}`",
+                policy.invocation_name()
+            ),
             destination_node.span,
         )
     })?;
@@ -1681,7 +1787,10 @@ fn infer_integer_coercion_type(
         return Err(failure(
             &unit.source,
             "T0008",
-            format!("`{destination}` is not a supported integer coercion destination"),
+            format!(
+                "`{destination}` is not a supported destination for `{}` from `{source_type}`",
+                policy.invocation_name()
+            ),
             destination_node.span,
         ));
     }
@@ -1715,12 +1824,12 @@ pub(crate) fn integer_coercion_call<'a>(
     source: &SourceFile,
     callee: &'a SyntaxNode,
 ) -> Option<(&'a SyntaxNode, CoercionPolicy)> {
-    let [receiver, member] = callee.children.as_slice() else {
-        return None;
-    };
     if callee.kind != SyntaxKind::MemberExpression {
         return None;
     }
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
     let member = node_text(source, member);
     if member == "coerce" {
         return Some((receiver, CoercionPolicy::Default));
@@ -1734,18 +1843,15 @@ pub(crate) fn integer_coercion_call<'a>(
 }
 
 fn invalid_coercion_policy<'a>(unit: &'a SemanticUnit, callee: &'a SyntaxNode) -> Option<&'a str> {
+    if callee.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
     let [receiver, member] = callee.children.as_slice() else {
         return None;
     };
-    if callee.kind != SyntaxKind::MemberExpression
-        || matches!(
-            node_text(&unit.source, member),
-            "coerce" | "checked" | "wrap" | "saturate"
-        )
-    {
-        return None;
-    }
-    coercion_family_receiver(unit, receiver).then(|| node_text(&unit.source, member))
+    (coercion_family_receiver(unit, receiver)
+        && integer_coercion_call(&unit.source, callee).is_none())
+    .then(|| node_text(&unit.source, member))
 }
 
 fn coercion_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
