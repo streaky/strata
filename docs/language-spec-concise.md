@@ -116,7 +116,7 @@ global shared-limit int = 10
 ```terrane
 use (system) sqlite
 from /core output import .print
-from /collections import .map as .ordered-map
+from /core collections import .map as .ordered-map
 import with .custom-import
 ```
 
@@ -264,6 +264,8 @@ opaque: hidden representation type; not void
 fixed_signed: int8,int16,int32,int64,int128
 fixed_unsigned: uint8,uint16,uint32,uint64,uint128
 fixed_float: float32,float64
+abstract: number, integer, fixed-integer, signed-fixed-integer, unsigned-fixed-integer, floating
+abstract_roots: value, object (identity/ownership categories; carry no numeric members)
 union: 'T|U'; none is ordinary union member
 constructor: 'list of string'; arguments classified semantically as type or compile-time value
 function_type: 'function from A, B to R'; associates right
@@ -272,6 +274,7 @@ function_type: 'function from A, B to R'; associates right
 - Values always have types; unconstrained binding may be dynamic without weakening values.
 - No implicit cross-type arithmetic/coercion.
 - Explicit coercion is object-driven.
+- Abstract descriptors are interface/category contracts exported from `/core types`, never prelude names. `int` implements `integer` and `number`; fixed widths add `fixed-integer` plus their signedness contract; `float`/`float32`/`float64` implement `floating` and `number`. Conformance drives member attachment and finite-union reasoning; it creates no implicit assignment conversion and no storage supertype.
 - Type violations compile-time when provable.
 - Conditions invoke truth protocol.
 - `==` value equality; `is` source-visible identity; `is a` type membership/assignability. `===` invalid.
@@ -298,21 +301,41 @@ negative_shift: throws .negative-shift-count
 
 - Small multiplication computes exact `i128` intermediate; wider operations preserve exactness.
 - Division by zero throws `.division-by-zero`.
-- Fixed widths require explicit checked/wrapping/saturating/overflowing contracts, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
+- Fixed widths require explicit `checked`/`wrap`/`saturate`/`overflowing` family children, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
 - Literal initializers are range-checked against the destination over the whole constant expression; a syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude.
 - Conversions are explicit through the `coerce` method family.
+- Named arithmetic families attach to `integer`: `add`, `subtract`, `multiply`, `divide`, `remainder`, `div-rem`, `negate`, `shift-left`, `shift-right`. Operators invoke each family's default child.
+
+```yaml
+policy_children: checked | wrap | saturate | overflowing
+policy_receiver: wrap/saturate/overflowing attach to fixed-integer ONLY; int has no bounds to wrap or clamp
+int_children: throwing default always; checked only where genuinely fallible (divide, remainder, div-rem by zero)
+overflowing: returns 'overflow-result of T' with value T and overflowed bool
+div_rem: returns 'div-rem-result of T' with quotient T and remainder T; default and checked only, never wrap/saturate
+div_rem_reason: a wrapped quotient breaks the quotient/remainder identity the result object exists to guarantee
+shift_fixed: default and checked reject counts outside the width; wrap reduces count modulo width; saturate absent
+shift_int: shift-left unbounded and total; shift-right arithmetic; no count-policy children
+postfix: '++' and '--' select the default add/subtract only; other policies need explicit assignment
+```
 
 ## COERCION
 
 ```yaml
 form: receiver family/policy; 'value.coerce; destination-type' | 'value.coerce.checked; destination-type'
-family: coerce.default (throwing) | coerce.checked | coerce.wrap | coerce.saturate
+family: invocation is the throwing default | coerce.checked | coerce.wrap | coerce.saturate
+default_child: '.default' exists in compiler metadata for reflection only; source lookup of '.default' is rejected
 integer_to_integer: per full spec §17.7; fixed-width-to-int always exact but still explicit
 fixed_to_int: exact, explicit, cannot overflow
 to_float: IEEE-754 round-to-nearest, ties-to-even
 inexact_float: ordinary result, NOT an error; precision loss shown by destination type
-float_out_of_range: infinity only when source protocol declares it, else .coercion-error
+float_out_of_range: throws .coercion-error; never yields an infinity
 string_parse: accepts exactly the destination's canonical text-display spelling
+parse_family: destination-owned 'int8.parse; text' with explicit radix/format and a checked child; OPEN whether plain text conversion is spelled through coerce, parse, or both
+declared: conversions are declared per source/destination pair; an undeclared pair is absent from the type, not a runtime failure
+bool_to_int: declared, total, lossless (false 0, true 1)
+int_to_bool: NOT a conversion; use an explicit comparison
+failure_value: no conversion ever substitutes a default; unparseable text throws under the default child and returns none under checked, never 0
+callback: caller-supplied conversion callback admitted for undeclared pairs; requires function values, so later than version-one scalars
 locale_parse: imported formatting facilities only, never coerce
 universality: no guarantee any type coerces to any other
 destination: version-one destinations resolve to finite compiler-known descriptors
@@ -392,10 +415,24 @@ finally
 .coercion-error               coercion has no compatible result outside the overflow case above
 ```
 
-- Each is catchable, carries `message` plus structured operation/type detail, and `int` representation promotion raises none of them. Any other dotted error name (`.file-error`, `.not-found`, `.python-error`) is package- or adapter-defined, never an implicit core error.
+- All catchable failures implement a structural `error` interface: stable `kind`, human-readable `message`, optional `cause`, and a source-context chain.
+- `catch` clauses are tried in source order; a clause made unreachable by an earlier one is a compile-time diagnostic, never a silent reorder.
+- `finally` always runs and may replace a pending outcome only by explicitly returning or throwing.
+- Uncaught rendering prints the deterministic cause/source chain and exits through the profile's failure policy.
+- Each core error is catchable, carries `message` plus structured operation/type detail, and `int` representation promotion raises none of them. Any other dotted error name (`.file-error`, `.not-found`, `.python-error`) is package- or adapter-defined, never an implicit core error.
 - Panic is separate fatal mechanism.
 - Exported may-throw functions expose `throws`; non-throwing callable contracts reject may-throw implementations.
-- Effect metadata is inferred or declared and reflected.
+- Effect vocabulary is a closed compiler-known set plus typed thrown-error alternatives:
+
+```yaml
+effects: throws E | io | blocks | awaits | mutates | unsafe | foreign
+allocates: NOT a public effect; compiler-internal fact only, because nearly every exported function allocates
+allocates_profile: a no-allocation profile may require it declared where the guarantee matters
+blocks_reason: retained because a blocking callee inside async code is a defect worth diagnosing
+purity: a caller may call only effect-subset callees
+capability: capabilities authorize effects; they are not themselves effects
+inference: permitted for private functions; exported functions declare their public effect contract
+```
 - Uncaught errors retain source-oriented stack traces; foreign errors preserve native traceback/details.
 
 ## COLLECTION / TEXT
@@ -408,6 +445,37 @@ Core environment should provide object protocols/facilities for list, map, set, 
 - `string` is Unicode text/UTF-8; default length is grapheme count and requires capability.
 - Explicit scalar and byte views avoid ambiguity.
 - `bytes` distinct from `string`; encode/decode explicit.
+
+```yaml
+lookup: default child THROWS (missing-key for map, index-error for sequence); checked returns V|none
+lookup_rule: absence is always the checked spelling; no operation returns absence by default
+mutators: return the resulting collection for value/COW collections; none for in-place resource mutators unless a removed/replaced value is meaningful
+order: map and set preserve insertion order as an observable contract
+unordered_variant: a separate unordered map/set type exists for layout cost; it is DETERMINISTIC (fixed hash seed), not merely unordered
+unordered_rule: the performance option must never be the nondeterministic option; it is a distinct type, not a flag
+range: half-open by default; explicit 'through' constructor for inclusive ends
+range_step: defaults to 1, must be non-zero; direction inconsistent with endpoints yields an empty range
+inference: homogeneous literals infer the narrowest common declared type; heterogeneous require explicit union or annotation
+cow: separation at first mutation visible through a non-unique value handle
+hash_keys: mutable values and identity-bearing resources cannot be hash keys
+iteration_step: advancing returns 'iteration-step of Item' with 'item of Item' and 'end' alternatives
+iteration_end: exhaustion is NOT none, because none may be a valid item; end is sticky; advancing after end returns end
+```
+
+String members follow the same callable-family shape:
+
+```yaml
+trim: 'text.trim;' both ends | trim.start | trim.end
+trim_argument: 'trim.start; "foo"' removes that literal when present, returns unchanged when absent; no separate strip-prefix member
+position_children: start means logical index 0 and end the logical last scalar, for every string regardless of script
+position_reason: writing direction is a display property; a string stores none, so left/right belong to a directional text type
+contains: 'text.contains;' anywhere (default) | contains.start | contains.end; all boolean
+contains_v1: exactly start and end; any/all await variadics or collections; 'at' awaits an index-unit decision
+find: separate family returning text-range|none, with find.all and find.count
+family_rule: a family is modes of ONE operation, not a bucket of related operations; group by subject uses a namespace instead
+case_search: no case-insensitive child; apply explicit case-fold to both operands
+regex: never a child of contains; regex stays match/matches; no member dispatches on whether its argument is a pattern object
+```
 
 ## OBJECT_MODEL
 
@@ -436,8 +504,10 @@ Core environment should provide object protocols/facilities for list, map, set, 
 - `await` only inside async context.
 - Sync/async callable types incompatible without explicit adapter.
 - No borrow crosses suspension unless contract proves lifetime.
-- Runtime independent; structured task scopes preferred.
-- Channels/mutexes/atomics/task groups are library objects.
+- Runtime independent; the structured-concurrency scope is a version-one language-level object, not a library convenience.
+- Scope: explicit creation, child spawn, join; a child inherits its parent scope's deadline and may shorten but never extend it.
+- Cancellation and deadlines are explicit values plus scope-boundary propagation; never ambient task-local globals.
+- Channels/mutexes/atomics remain library objects.
 - Target capability may reject async statically.
 
 ## TARGET
@@ -579,6 +649,9 @@ Validation/prototype points, not permission to invent semantics:
 - zero-argument dot-object shorthand beyond required explicit `;` remains a possible future ergonomic study; current grammar requires `;`;
 - map literal syntax;
 - exact COW split policy;
+- whether plain text-to-number conversion is spelled through `coerce`, through the destination-owned `parse` family, or through both; decides whether `string` declares numeric conversions at all, and blocks the conversion-protocol specification;
+- conversion-declaration coherence: conflicting declarations for one source/destination pair, and whether a declaration may be added for a type the author does not own;
+- the version-one async surface: task identity/linearity, un-awaited task disposal, scope failure semantics for surviving siblings, defined cancellation points, and the executor boundary the language fixes versus the profile selects;
 - dynamic finite-union representation;
 - reference implementation thresholds (`borrow`/Rc/Arc/custom);
 - public-by-default API lint/strict policy;
