@@ -1514,16 +1514,43 @@ fn infer_value_type(
             && callee.kind == SyntaxKind::Name
         {
             let name = node_text(&unit.source, callee);
-            return Ok(unit
+            if let Some(return_type) = unit
                 .functions
                 .iter()
                 .find(|contract| contract.name == name)
                 .and_then(|contract| contract.return_type)
-                .map(ValueType::Scalar));
+            {
+                return Ok(Some(ValueType::Scalar(return_type)));
+            }
+            return declared_function_return_type(unit, name, aliases)
+                .map(|return_type| return_type.map(ValueType::Scalar));
         }
         return Ok(None);
     }
     Ok(None)
+}
+
+fn declared_function_return_type(
+    unit: &SemanticUnit,
+    name: &str,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Result<Option<ScalarType>, SemanticFailure> {
+    let declaration = unit.tree.root.children.iter().find(|node| {
+        node.kind == SyntaxKind::FunctionDeclaration
+            && node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+                .is_some_and(|name_node| node_text(&unit.source, name_node) == name)
+    });
+    declaration
+        .and_then(|node| {
+            node.children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::TypeExpression)
+        })
+        .map(|type_node| resolve_scalar_type(&unit.source, type_node, aliases))
+        .transpose()
 }
 
 fn infer_unary_type(
