@@ -525,6 +525,44 @@ fn records_typed_parameters_defaults_and_return_contracts() {
 }
 
 #[test]
+fn descriptor_aliases_resolve_function_contracts_in_source_order() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .uint8\n",
+                "byte = .uint8\n",
+                "function identity byte; value byte\n",
+                "  return value\n",
+            ),
+        )],
+    ))
+    .unwrap();
+
+    let contract = &analyzed.units[0].functions[0];
+    assert_eq!(contract.return_type, Some(ScalarType::Uint8));
+    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::Uint8));
+
+    let failure = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .uint8\n",
+                "function identity byte; value byte\n",
+                "  return value\n",
+                "byte = .uint8\n",
+            ),
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0001");
+}
+
+#[test]
 fn rejects_required_parameters_after_optional_parameters() {
     let failure = analyze(&package(
         true,
@@ -680,7 +718,7 @@ fn integer_literals_may_assign_only_when_representable() {
 }
 
 #[test]
-fn types_explicit_integer_coercion_families() {
+fn types_canonical_integer_coercion_family() {
     let analyzed = analyze(&package(
         true,
         &[(
@@ -694,9 +732,9 @@ fn types_explicit_integer_coercion_families() {
                 "function main\n",
                 "  value int = 300\n",
                 "  exact = value.coerce; int16\n",
-                "  checked = value.checked-coerce; int8\n",
-                "  wrapped = value.wrapping-coerce; uint8\n",
-                "  saturated = value.saturating-coerce; uint8\n",
+                "  checked = value.coerce.checked; int8\n",
+                "  wrapped = value.coerce.wrap; uint8\n",
+                "  saturated = value.coerce.saturate; uint8\n",
             ),
         )],
     ))
@@ -731,15 +769,159 @@ fn rejects_unsupported_integer_coercion_destinations() {
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0008");
 
+    for expression in ["value.coerce.wrap; int", "value.coerce.checked; int"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0010");
+    }
+}
+
+#[test]
+fn rejects_obsolete_flat_integer_coercion_members() {
+    for member in ["checked-coerce", "wrapping-coerce", "saturating-coerce"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = value.{member}; int\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0017");
+    }
+}
+
+#[test]
+fn rejects_unbound_integer_coercion_family() {
     let failure = analyze(&package(
         true,
         &[(
             "main.trn",
-            "namespace app\nfunction main\n  value int = 1\n  converted = value.wrapping-coerce; int\n",
+            "namespace app\nfunction main\n  value int = 1\n  family = value.coerce\n",
         )],
     ))
     .unwrap_err();
-    assert_eq!(failure.diagnostics[0].code, "T0010");
+    assert_eq!(failure.diagnostics[0].code, "T0018");
+}
+
+#[test]
+fn rejects_nested_and_escaped_coercion_family_shapes() {
+    for expression in [
+        "value.coerce.clamp; int8",
+        "value.coerce.wrap.checked; int8",
+        "value.coerce.checked.wrap; int8",
+        "value.coerce.clamp.wrap; int8",
+    ] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0010");
+        assert_eq!(
+            failure.diagnostics[0].message,
+            format!(
+                "`{}` is not an available coercion policy",
+                expression
+                    .split_once("; ")
+                    .map_or(expression, |(callee, _)| callee)
+                    .trim_start_matches("value")
+            )
+        );
+    }
+
+    for expression in ["value.coerce.checked", "value.coerce.wrap + 1"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0018");
+    }
+}
+
+#[test]
+fn validates_calls_inside_coercion_receivers() {
+    for arguments in ["'text'", "1, 2"] {
+        let failure = analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!(
+                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
+                ),
+            )],
+        ))
+        .unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0012");
+    }
+}
+
+#[test]
+fn infers_cross_unit_call_results_before_binding_types() {
+    let analyzed = analyze(&package(
+        true,
+        &[
+            (
+                "helper.trn",
+                "namespace app\nfunction helper int\n  return 300\n",
+            ),
+            (
+                "main.trn",
+                "namespace app\nfrom /core types import .uint8\nuint8 = .uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
+            ),
+        ],
+    ))
+    .unwrap();
+    assert_eq!(
+        analyzed.units[1]
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.name == "value")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Uint8)
+    );
+}
+
+#[test]
+fn function_parameters_are_in_scope_during_binding_analysis() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .int8\n",
+                "tiny = .int8\n",
+                "function convert int8; item int\n",
+                "  result int8\n",
+                "  result = item.coerce; tiny\n",
+                "  return result\n",
+            ),
+        )],
+    ))
+    .unwrap();
 }
 
 #[test]

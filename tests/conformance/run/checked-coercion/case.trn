@@ -1,0 +1,32 @@
+namespace checked-coercion
+from /core output import .print
+from /core types import .int8, .none
+print = .print
+int8 = .int8
+tiny = .int8
+none = .none
+
+shared int = 100
+
+function convert int8; item int
+  result int8 = 0
+  if item > 0
+    result = item.coerce; tiny
+  return result
+
+function main
+  value int = 300
+  within int = 100
+  coerced = within.coerce; tiny
+  renamed-checked = within.coerce.checked; tiny
+  shared-coerced = shared.coerce; tiny
+  parameter-coerced = convert; within
+  checked = value.coerce.checked; int8
+  absent = checked is a none
+  present = checked is a int8
+  print; coerced
+  print; renamed-checked is a tiny
+  print; shared-coerced
+  print; parameter-coerced
+  print; absent
+  print; present

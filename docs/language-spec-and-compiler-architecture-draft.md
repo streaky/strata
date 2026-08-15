@@ -833,7 +833,7 @@ After this declaration, ordinary lookup of `print` through the program-global ti
 
 A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
 
-Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/core collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -1403,7 +1403,15 @@ The bare invocation is its throwing default. `coerce.checked` returns an absence
 
 There is no universal guarantee that every type can coerce to every other type.
 
-Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range coerces to the corresponding infinity only when the source type's protocol declares that behaviour; otherwise it throws `.coercion-error`. Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` when parsing fails. Locale-dependent parsing belongs to an imported formatting facility, never to `coerce`.
+Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range throws `.coercion-error`; it never yields an infinity, because a silent infinity is a lost error rather than a result. `checked` returns absence for exactly that overflow case.
+
+Conversions are declared rather than universal. A descriptor declares the source/destination pairs it supports, and `coerce` attaches exactly where a declaration exists, so an undeclared pair is absent from the type rather than a runtime failure. Declaration coherence — what happens when two protocols declare the same pair, and whether a declaration may be added for a type the author does not own — is part of the conversion-protocol contract. A caller-supplied conversion callback is admitted for pairs no descriptor declares, and therefore cannot precede first-class function values.
+
+`bool` converts to integer destinations as a declared, total, lossless conversion: `false` is `0` and `true` is `1`. The reverse is not a conversion at all. Integer-to-`bool` is a predicate choice rather than a change of representation, and must be written as an explicit comparison.
+
+No conversion ever substitutes a default value for a failure. An unrepresentable, unparseable, or undeclared conversion throws under the default child and returns `none` under `checked`. A `string` that does not denote a number must never convert to `0`; that behaviour is the defining defect of weakly typed conversion and is excluded by contract rather than by convention.
+
+Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` when parsing fails. Parameterised text conversion — explicit radix or format — is a destination-owned `parse` family (`int8.parse; text`) with the same `checked` child. Whether plain unparameterised text conversion is spelled through `coerce`, through `parse`, or through both remains open and must be settled before the conversion protocol is specified. Locale-dependent parsing belongs to an imported formatting facility, never to `coerce`.
 
 ### 11.6 Type objects
 
@@ -1424,6 +1432,10 @@ person user-type = .user; data
 ```
 
 The compiler resolves type compatibility through the object’s type protocol.
+
+Alongside the concrete descriptors, `/core types` exports abstract category descriptors: `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the two identity roots `value` and `object`. `int` implements `integer` and `number` but no fixed-width contract; `int8` through `int128` implement `signed-fixed-integer`, `fixed-integer`, `integer`, and `number`; `uint8` through `uint128` implement `unsigned-fixed-integer` in place of the signed contract; `float`, `float32`, and `float64` implement `floating` and `number`. The roots `value` and `object` classify identity, copy, and ownership behaviour rather than numeric capability, so no arithmetic or conversion member attaches to them.
+
+These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype, none creates an implicit assignment conversion, and none is a default-prelude name; they are imported explicitly like the concrete fixed-width descriptors. In particular, fixed-width integers are not assignment-compatible subclasses of `int`: that would contradict explicit coercion and the differing arithmetic result contracts.
 
 Type objects are canonical compiler-owned descriptor values with stable type identity. A statically known descriptor argument may be erased during lowering, but source-observable behavior must remain the same as passing the descriptor value: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
 
@@ -2119,6 +2131,8 @@ throw .file-error; path
 
 Any object may technically be thrown in dynamic mode. Standard tooling expects thrown objects to implement the error protocol.
 
+All catchable failures implement a structural `error` interface carrying a stable `kind`, a human-readable `message`, an optional `cause`, and a source-context chain. `kind` is the matchable identity and is stable across releases; `message` is for humans and is not a matching key. Throwing uses a compiler-owned result propagation representation rather than native unwinding, so lowering stays deterministic and readable.
+
 Strict mode may require an error-compatible object.
 
 ### 15.2 Catching
@@ -2138,9 +2152,11 @@ finally
   log; 'finished'
 ```
 
-Catch clauses are evaluated in source order.
+Catch clauses are evaluated in source order. The written order is the executed order: the compiler never reorders clauses by specificity, and a clause made unreachable by an earlier one is a compile-time diagnostic rather than silently dead code.
 
-A catch object denotes a compatible error type or matcher.
+A catch object denotes a compatible error type or matcher — a concrete error descriptor or a declared error interface.
+
+Uncaught errors render the deterministic cause and source chain, then exit through the profile's failure policy.
 
 ### 15.3 `finally`
 
@@ -2310,11 +2326,9 @@ part = items[.range; 10, 20]
 
 `for ... in ...` invokes the iteration protocol.
 
-An iterator produces:
+An iterator's advancing operation returns a dedicated finite result, `iteration-step of Item`, with `item of Item` and `end` alternatives. The item may itself be a tuple or destructurable object.
 
-- a value;
-- or a tuple/destructurable object;
-- and an end-of-stream state distinct from `none`.
+Exhaustion is `end`, never `none`, because `none` may be a legitimate item. Iterators are stateful linear objects; `end` is sticky, and advancing after `end` returns `end` without consulting the source again. `for` desugars through this protocol and neither exposes nor synthesises a sentinel value.
 
 The compiler may statically lower standard iterators to native Rust iterator chains.
 
@@ -2430,7 +2444,7 @@ Consequently:
 -7 / -3 ==  3   -7 % -3 == 2
 ```
 
-The standard integer protocol exposes `div-rem; divisor`, returning one result object with `quotient` and `remainder` members so an implementation need not divide twice. `/` selects the quotient and `%` selects the remainder. Division by zero throws `.division-by-zero` for every integer type and arithmetic mode.
+The standard integer protocol exposes `div-rem; divisor`, returning a named immutable `div-rem-result of T` with `quotient: T` and `remainder: T`, so an implementation need not divide twice. Both operands evaluate once and one backend operation is performed. A tuple is deliberately not used: named fields give a stable reflected result contract. `div-rem` exposes only its throwing default and `checked` — `wrap` and `saturate` are absent even on fixed-width receivers, because a wrapped or clamped quotient no longer satisfies the quotient/remainder identity the result object exists to guarantee. `/` selects the quotient and `%` selects the remainder. Division by zero throws `.division-by-zero` for every integer type and arithmetic mode.
 
 For `int`, a representation minimum divided by `-1` promotes and then normalises; it is not overflow. For a signed fixed-width type, `MIN / -1` is arithmetic overflow because the mathematical quotient is outside that type.
 
@@ -2438,18 +2452,28 @@ For `int`, a representation minimum divided by `-1` promotes and then normalises
 
 Ordinary arithmetic on `int8` through `int128` and `uint8` through `uint128` is checked. Its result has the same fixed-width type, and an exact mathematical result outside that type's range throws the standard catchable `.arithmetic-overflow` error through `Result`-like control flow rather than platform unwinding. This includes addition, subtraction, multiplication, signed negation, `MIN / -1`, and any increment or decrement expressed through those operations. Unsigned negation is rejected.
 
-Every fixed-width integer implements consistent explicit operation families:
+Arithmetic uses the same callable-family shape as `coerce`, not a set of flat prefixed names. The families attach to `integer`:
 
 ```text
-checked-add       wrapping-add       saturating-add       overflowing-add
-checked-subtract  wrapping-subtract  saturating-subtract  overflowing-subtract
-checked-multiply  wrapping-multiply  saturating-multiply  overflowing-multiply
-checked-negate    wrapping-negate    saturating-negate    overflowing-negate
-checked-divide    wrapping-divide    saturating-divide    overflowing-divide
-checked-remainder wrapping-remainder saturating-remainder overflowing-remainder
+add   subtract   multiply   divide   remainder   div-rem   negate   shift-left   shift-right
 ```
 
-`checked-*` returns `T|none`; `wrapping-*` computes modulo `2^N`; `saturating-*` clamps to the nearest bound; and `overflowing-*` returns an object with `value T` and `overflowed bool`. Signed wrapping operations interpret the resulting `N` bits as two's complement. For signed `MIN / -1`, wrapping division returns `MIN`, saturating division returns `MAX`, and checked division returns `none`; the overflowing form returns `MIN` with `overflowed = true`. Division by zero still throws `.division-by-zero` in all four families because it is not overflow. Shift-count behaviour requires its own explicit operation contract and never inherits host-language debug/release behaviour.
+Each family's bare invocation is its throwing default, and the operators select exactly that default child. The overflow-policy children are:
+
+```text
+value.add.checked; rhs        -> T|none
+value.add.wrap; rhs           -> T          modulo 2^N, resulting bits read with destination signedness
+value.add.saturate; rhs       -> T          clamped to the nearest bound
+value.add.overflowing; rhs    -> overflow-result of T   with value T and overflowed bool
+```
+
+`wrap`, `saturate`, and `overflowing` attach to `fixed-integer` only. Adaptive `int` has no bounds to wrap or clamp against, so those children are absent from its type rather than being runtime no-ops; `int` exposes its throwing default always, and `checked` only where an operation is genuinely fallible — `divide`, `remainder`, and `div-rem` by zero.
+
+For signed `MIN / -1`, `divide.wrap` returns `MIN`, `divide.saturate` returns `MAX`, and `divide.checked` returns `none`; `divide.overflowing` returns `MIN` with `overflowed = true`. Division by zero still throws `.division-by-zero` under every policy because it is not overflow, and it is never converted into a wrapped or saturated value.
+
+Shifts accept a non-negative count. On a fixed-width receiver, the default and `checked` reject counts outside the width, and `wrap` reduces the count modulo the width; `saturate` is absent, because saturating a shift *count* has no coherent value contract. On `int`, `shift-left` is unbounded and total and `shift-right` is an arithmetic shift, with no count-policy children. Shift behaviour never inherits host-language debug/release behaviour.
+
+Postfix `++` and `--` remain statements selecting the default `add`/`subtract` child only. A non-default policy is written as an ordinary assignment, `value = value.add.wrap; 1`.
 
 The profiler and debugger identify the selected overflow mode in lowered Rust. An explicitly selected panic-on-overflow operation, if supplied by a package, is a panic and follows the target panic policy; it is not an ordinary core arithmetic mode.
 
@@ -2595,8 +2619,7 @@ Build-time importer execution and runtime initialisation are separate, visible p
 
 Functions and methods should expose inferred or declared effects through reflection:
 
-- may throw;
-- allocates;
+- may throw, carrying its typed error alternatives;
 - performs I/O;
 - blocks;
 - awaits;
@@ -2605,9 +2628,11 @@ Functions and methods should expose inferred or declared effects through reflect
 - uses unsafe Rust;
 - crosses FFI.
 
-Strict packages may require selected effects to be declared.
+Allocation is deliberately absent from this public vocabulary. Nearly every exported function allocates, so an `allocates` annotation carries no information at an API boundary while taxing every signature that crosses one. The compiler still tracks allocation internally, and a no-allocation profile may require it to be declared where the guarantee actually matters. `blocks` is retained for the opposite reason: once async exists, a blocking callee inside async code is a defect the checker should catch.
 
-`throws`, `async`, and other effects are part of callable type compatibility. An implementation may have fewer effects than its interface contract, never more. A dynamic callable with unknown effect metadata is treated as may-throw, may-allocate, and otherwise unknown for capability checking rather than optimistically inferred safe.
+Effect inference is permitted for private functions. Exported functions declare their public effect contract, and strict packages may require further effects to be declared.
+
+`throws`, `async`, and other effects are part of callable type compatibility. An implementation may have fewer effects than its interface contract, never more. A dynamic callable with unknown effect metadata is treated as may-throw and otherwise unknown for capability checking rather than optimistically inferred safe.
 
 This metadata supports optimisation, auditing, AI tooling, and target capability checks.
 
@@ -2717,14 +2742,19 @@ The compiler lowers async code into Rust futures and target runtime integration.
 
 ### 21.4 Structured concurrency
 
-The standard concurrency API should prefer structured task scopes:
+The structured-concurrency scope is a version-one language-level object, not a library preference. It arrives with the async callable type, the task object, and the cancellation core, because the timeout, stream-cancellation, and network-deadline contracts elsewhere in this document are all defined against it.
 
 - child tasks belong to a parent scope;
-- cancellation propagates predictably;
+- a scope joins its children before completing, and waits for cancellation cleanup rather than abandoning it;
+- a child that throws while siblings run must have a defined effect on those siblings, and that effect is part of the scope contract;
+- cancellation propagates predictably and is cooperative: cancellation points are defined, and a cancelled operation reports what it completed rather than silently discarding partial progress;
+- deadlines are explicit values that additionally propagate down scope boundaries; a child inherits its parent's deadline and may shorten but never extend it. This is not ambient task-local state, because the boundary is written in the source;
 - unobserved task failure is reported;
 - task lifetime is visible to tracing.
 
 Detached tasks must be explicit.
+
+The task object's identity category, whether it is linear, and whether dropping an un-awaited task cancels it are contracts this document must fix before the async surface is implemented.
 
 ### 21.5 Sharing
 
@@ -2736,7 +2766,7 @@ The compiler checks the source-language equivalents of Rust’s thread-transfer 
 
 ### 21.6 Channels and locks
 
-Channels, mutexes, read/write locks, atomics, and task groups are ordinary library objects.
+Channels, mutexes, read/write locks, and atomics are ordinary library objects. The structured-concurrency scope is not among them: it is language-level, per §21.4.
 
 They are not all injected into the prelude.
 
@@ -5107,9 +5137,9 @@ A plausible hierarchy is:
 /core output
 /core errors
 /core reflection
+/core collections
 /text formatters
 /text encoding
-/collections
 /system files
 /system process
 /system memory

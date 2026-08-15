@@ -2,7 +2,10 @@ use std::fmt::Write as _;
 
 use crate::{
     ScalarType, SourceFile,
-    semantics::{FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType},
+    semantics::{
+        CoercionPolicy, FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType,
+        integer_coercion_call,
+    },
     syntax::{SyntaxKind, SyntaxNode},
 };
 
@@ -551,8 +554,18 @@ impl Emitter<'_> {
         let [value, descriptor] = node.children.as_slice() else {
             return String::new();
         };
+        let value_type = self.value_type(value);
+        let descriptor_type = self.descriptor_type(descriptor);
+        if let Some(ValueType::ScalarOrNone(inner)) = value_type {
+            let value = self.expression(value);
+            return match descriptor_type {
+                Some(ScalarType::None) => format!("({value}).is_none()"),
+                Some(descriptor) if descriptor == inner => format!("({value}).is_some()"),
+                _ => format!("{{ let _ = {value}; false }}"),
+            };
+        }
         let result = matches!(
-            (self.value_type(value), self.descriptor_type(descriptor)),
+            (value_type, descriptor_type),
             (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
         );
         let effect = Self::discarded_expression(self.expression(value));
@@ -730,32 +743,32 @@ impl Emitter<'_> {
     }
 
     fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
-        let [receiver, operation] = callee.children.as_slice() else {
-            return None;
-        };
-        if callee.kind != SyntaxKind::MemberExpression {
-            return None;
-        }
-        let operation = self.text(operation).to_owned();
-        if !matches!(
-            operation.as_str(),
-            "coerce" | "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
-        ) {
-            return None;
-        }
+        let (receiver, policy) = integer_coercion_call(self.source, callee)?;
         let destination = arguments
             .children
             .first()
             .and_then(|argument| argument.children.last())
             .unwrap_or_else(|| &arguments.children[0]);
         let destination = self.descriptor_type(destination)?;
-        let helper = operation.replace('-', "_");
+        let helper = match policy {
+            CoercionPolicy::Default => "coerce",
+            CoercionPolicy::Checked => "checked_coerce",
+            CoercionPolicy::Wrap => "wrapping_coerce",
+            CoercionPolicy::Saturate => "saturating_coerce",
+        };
+        let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
+            && self.lazy_namespace_binding_type(receiver).is_some();
         let receiver = self.expression(receiver);
+        let source = if receiver_is_borrowed {
+            receiver
+        } else {
+            format!("&({receiver})")
+        };
         let call = format!(
-            "terrane_int_support::{helper}::<{}>(&({receiver}))",
+            "terrane_int_support::{helper}::<{}>({source})",
             rust_type(destination)
         );
-        Some(if operation == "coerce" {
+        Some(if policy == CoercionPolicy::Default {
             format!("terrane_int_support::unwrap_or_fail({call})")
         } else {
             call

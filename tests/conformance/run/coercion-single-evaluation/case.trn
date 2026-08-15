@@ -1,0 +1,13 @@
+namespace coercion-single-evaluation
+from /core output import .print
+from /core types import .uint8
+print = .print
+uint8 = .uint8
+
+function observed int
+  print; 'once'
+  return 300
+
+function main
+  value = (observed;).coerce.wrap; uint8
+  print; value

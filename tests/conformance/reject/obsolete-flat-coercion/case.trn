@@ -1,0 +1,4 @@
+namespace obsolete-flat-coercion
+function main
+  value int = 300
+  converted = value.wrapping-coerce; int

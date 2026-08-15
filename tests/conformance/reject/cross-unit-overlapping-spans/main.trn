@@ -1,0 +1,6 @@
+namespace app
+function takes string; value string
+  return value
+function main
+  item int = 1
+  takes; item

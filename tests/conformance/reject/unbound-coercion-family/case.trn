@@ -1,0 +1,4 @@
+namespace unbound-coercion-family
+function main
+  value int = 1
+  family = value.coerce
