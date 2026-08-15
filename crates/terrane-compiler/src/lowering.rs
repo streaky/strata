@@ -730,36 +730,64 @@ impl Emitter<'_> {
     }
 
     fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
-        let [receiver, operation] = callee.children.as_slice() else {
-            return None;
-        };
-        if callee.kind != SyntaxKind::MemberExpression {
-            return None;
-        }
-        let operation = self.text(operation).to_owned();
-        if !matches!(
-            operation.as_str(),
-            "coerce" | "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
-        ) {
-            return None;
-        }
+        let (receiver, policy) = self.integer_coercion_call(callee)?;
         let destination = arguments
             .children
             .first()
             .and_then(|argument| argument.children.last())
             .unwrap_or_else(|| &arguments.children[0]);
         let destination = self.descriptor_type(destination)?;
-        let helper = operation.replace('-', "_");
+        let helper = match policy {
+            "default" => "coerce",
+            "checked" => "checked_coerce",
+            "wrap" => "wrapping_coerce",
+            "saturate" => "saturating_coerce",
+            _ => return None,
+        };
         let receiver = self.expression(receiver);
         let call = format!(
             "terrane_int_support::{helper}::<{}>(&({receiver}))",
             rust_type(destination)
         );
-        Some(if operation == "coerce" {
+        Some(if policy == "default" {
             format!("terrane_int_support::unwrap_or_fail({call})")
         } else {
             call
         })
+    }
+
+    fn integer_coercion_call<'a>(
+        &self,
+        callee: &'a SyntaxNode,
+    ) -> Option<(&'a SyntaxNode, &'static str)> {
+        let [receiver, member] = callee.children.as_slice() else {
+            return None;
+        };
+        if callee.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let member = self.text(member);
+        if member == "coerce" {
+            return Some((receiver, "default"));
+        }
+        let [source, family] = receiver.children.as_slice() else {
+            return None;
+        };
+        if receiver.kind == SyntaxKind::MemberExpression
+            && self.text(family) == "coerce"
+            && matches!(member, "checked" | "wrap" | "saturate")
+        {
+            return Some((
+                source,
+                match member {
+                    "checked" => "checked",
+                    "wrap" => "wrap",
+                    "saturate" => "saturate",
+                    _ => unreachable!("policy is matched above"),
+                },
+            ));
+        }
+        None
     }
 
     fn descriptor_identity(&self, node: &SyntaxNode) -> Option<String> {

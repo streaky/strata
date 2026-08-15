@@ -823,6 +823,11 @@ fn validate_call_nodes<'a>(
         active_function
     };
     validate_resolved_assignment(package, unit, node, contracts)?;
+    if node.kind == SyntaxKind::CallExpression {
+        let mut bindings = unit.typed_bindings.clone();
+        bindings.extend_from_slice(contextual_bindings);
+        infer_integer_coercion_type(unit, node, aliases, &bindings)?;
+    }
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
@@ -1514,30 +1519,35 @@ fn infer_integer_coercion_type(
     aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
-    let Some(member) = node.children.first() else {
+    let Some(callee) = node.children.first() else {
         return Ok(None);
     };
-    if member.kind != SyntaxKind::MemberExpression {
-        return Ok(None);
-    }
-    let Some(operation_node) = member.children.get(1) else {
+    let Some((source_node, policy)) = integer_coercion_call(unit, callee) else {
+        if let Some(member) = obsolete_integer_coercion_member(unit, callee) {
+            return Err(failure(
+                &unit.source,
+                "T0017",
+                format!(
+                    "`{member}` is obsolete; use `.coerce.{}`",
+                    match member {
+                        "checked-coerce" => "checked",
+                        "wrapping-coerce" => "wrap",
+                        "saturating-coerce" => "saturate",
+                        _ => unreachable!("obsolete coercion members are matched above"),
+                    }
+                ),
+                callee.span,
+            ));
+        }
         return Ok(None);
     };
-    let operation = node_text(&unit.source, operation_node);
-    if !matches!(
-        operation,
-        "coerce" | "checked-coerce" | "wrapping-coerce" | "saturating-coerce"
-    ) {
-        return Ok(None);
-    }
-    let source_node = &member.children[0];
     let Some(ValueType::Scalar(source_type)) =
         infer_value_type(unit, source_node, aliases, bindings)?
     else {
         return Err(failure(
             &unit.source,
             "T0009",
-            format!("`{operation}` requires an integer source"),
+            "`.coerce` requires an integer source",
             source_node.span,
         ));
     };
@@ -1545,7 +1555,7 @@ fn infer_integer_coercion_type(
         return Err(failure(
             &unit.source,
             "T0009",
-            format!("`{operation}` requires an integer source"),
+            format!("`.coerce` requires an integer source, found `{source_type}`"),
             source_node.span,
         ));
     }
@@ -1558,7 +1568,7 @@ fn infer_integer_coercion_type(
             failure(
                 &unit.source,
                 "T0008",
-                format!("`{operation}` requires one integer destination"),
+                "`.coerce` requires one integer destination",
                 node.span,
             )
         })?;
@@ -1579,22 +1589,63 @@ fn infer_integer_coercion_type(
             destination_node.span,
         ));
     }
-    if destination == ScalarType::Int
-        && matches!(operation, "wrapping-coerce" | "saturating-coerce")
-    {
+    if destination == ScalarType::Int && matches!(policy, "wrap" | "saturate") {
         return Err(failure(
             &unit.source,
             "T0010",
-            format!("`{operation}` requires a fixed-width integer destination"),
+            format!("`.coerce.{policy}` requires a fixed-width integer destination"),
             destination_node.span,
         ));
     }
-    let result = if operation == "checked-coerce" {
+    let result = if policy == "checked" {
         ValueType::ScalarOrNone(destination)
     } else {
         ValueType::Scalar(destination)
     };
     Ok(Some(result))
+}
+
+fn integer_coercion_call<'a>(
+    unit: &SemanticUnit,
+    callee: &'a SyntaxNode,
+) -> Option<(&'a SyntaxNode, &'static str)> {
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
+    if callee.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
+    let member = node_text(&unit.source, member);
+    if member == "coerce" {
+        return Some((receiver, "default"));
+    }
+    let [source, family] = receiver.children.as_slice() else {
+        return None;
+    };
+    if receiver.kind == SyntaxKind::MemberExpression
+        && node_text(&unit.source, family) == "coerce"
+        && matches!(member, "checked" | "wrap" | "saturate")
+    {
+        return Some((source, match member {
+            "checked" => "checked",
+            "wrap" => "wrap",
+            "saturate" => "saturate",
+            _ => unreachable!("policy is matched above"),
+        }));
+    }
+    None
+}
+
+fn obsolete_integer_coercion_member<'a>(
+    unit: &'a SemanticUnit,
+    callee: &'a SyntaxNode,
+) -> Option<&'a str> {
+    let [_, member] = callee.children.as_slice() else {
+        return None;
+    };
+    (callee.kind == SyntaxKind::MemberExpression)
+        .then(|| node_text(&unit.source, member))
+        .filter(|member| matches!(*member, "checked-coerce" | "wrapping-coerce" | "saturating-coerce"))
 }
 fn infer_binary_type(
     unit: &SemanticUnit,

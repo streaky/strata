@@ -680,7 +680,7 @@ fn integer_literals_may_assign_only_when_representable() {
 }
 
 #[test]
-fn types_explicit_integer_coercion_families() {
+fn types_canonical_integer_coercion_family() {
     let analyzed = analyze(&package(
         true,
         &[(
@@ -694,9 +694,9 @@ fn types_explicit_integer_coercion_families() {
                 "function main\n",
                 "  value int = 300\n",
                 "  exact = value.coerce; int16\n",
-                "  checked = value.checked-coerce; int8\n",
-                "  wrapped = value.wrapping-coerce; uint8\n",
-                "  saturated = value.saturating-coerce; uint8\n",
+                "  checked = value.coerce.checked; int8\n",
+                "  wrapped = value.coerce.wrap; uint8\n",
+                "  saturated = value.coerce.saturate; uint8\n",
             ),
         )],
     ))
@@ -735,11 +735,24 @@ fn rejects_unsupported_integer_coercion_destinations() {
         true,
         &[(
             "main.trn",
-            "namespace app\nfunction main\n  value int = 1\n  converted = value.wrapping-coerce; int\n",
+            "namespace app\nfunction main\n  value int = 1\n  converted = value.coerce.wrap; int\n",
         )],
     ))
     .unwrap_err();
     assert_eq!(failure.diagnostics[0].code, "T0010");
+}
+
+#[test]
+fn rejects_obsolete_flat_integer_coercion_members() {
+    let failure = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction main\n  value int = 1\n  converted = value.wrapping-coerce; int\n",
+        )],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "T0017");
 }
 
 #[test]
