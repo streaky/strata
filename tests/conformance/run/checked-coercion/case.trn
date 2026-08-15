@@ -3,12 +3,18 @@ from /core output import .print
 from /core types import .int8, .none
 print = .print
 int8 = .int8
+tiny = .int8
 none = .none
 
 function main
   value int = 300
+  within int = 100
+  coerced = within.coerce; tiny
+  renamed-checked = within.coerce.checked; tiny
   checked = value.coerce.checked; int8
   absent = checked is a none
   present = checked is a int8
+  print; coerced
+  print; renamed-checked is a tiny
   print; absent
   print; present
