@@ -1,0 +1,3 @@
+package = "cross-unit-overlapping-spans"
+prelude = true
+sources = ["shadow.trn", "main.trn"]

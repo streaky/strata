@@ -905,6 +905,26 @@ fn infers_cross_unit_call_results_before_binding_types() {
 }
 
 #[test]
+fn function_parameters_are_in_scope_during_binding_analysis() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            concat!(
+                "namespace app\n",
+                "from /core types import .int8\n",
+                "tiny = .int8\n",
+                "function convert int8; item int\n",
+                "  result int8\n",
+                "  result = item.coerce; tiny\n",
+                "  return result\n",
+            ),
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
 fn types_valid_unary_binary_and_comparison_operators() {
     let analyzed = analyze(&package(
         true,

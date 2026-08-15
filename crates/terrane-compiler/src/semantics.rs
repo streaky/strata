@@ -124,6 +124,7 @@ pub struct TypedBinding {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DescriptorAlias {
     visible_from: usize,
+    scope: Option<Span>,
     value_type: ScalarType,
 }
 
@@ -180,23 +181,9 @@ pub struct SemanticUnit {
 impl SemanticUnit {
     /// Returns the compiler-resolved value type for an expression when it is statically known.
     pub(crate) fn inferred_value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
-        let aliases = self.visible_descriptor_aliases(node.span.start);
-        infer_value_type(self, node, &aliases, &self.typed_bindings)
+        infer_value_type(self, node, &BTreeMap::new(), &self.typed_bindings)
             .ok()
             .flatten()
-    }
-
-    fn visible_descriptor_aliases(&self, position: usize) -> BTreeMap<String, ScalarType> {
-        self.descriptor_aliases
-            .iter()
-            .filter_map(|(name, history)| {
-                history
-                    .iter()
-                    .rev()
-                    .find(|alias| alias.visible_from <= position)
-                    .map(|alias| (name.clone(), alias.value_type))
-            })
-            .collect()
     }
 
     fn descriptor_alias_at(&self, name: &str, position: usize) -> Option<ScalarType> {
@@ -204,10 +191,36 @@ impl SemanticUnit {
             history
                 .iter()
                 .rev()
-                .find(|alias| alias.visible_from <= position)
+                .find(|alias| alias.is_visible_at(self.source.id(), position))
                 .map(|alias| alias.value_type)
         })
     }
+}
+
+impl DescriptorAlias {
+    fn is_visible_at(&self, file: u32, position: usize) -> bool {
+        self.visible_from <= position
+            && self.scope.is_none_or(|scope| {
+                scope.file == file && scope.start <= position && position <= scope.end
+            })
+    }
+}
+
+fn visible_descriptor_aliases(
+    aliases: &BTreeMap<String, Vec<DescriptorAlias>>,
+    file: u32,
+    position: usize,
+) -> BTreeMap<String, ScalarType> {
+    aliases
+        .iter()
+        .filter_map(|(name, history)| {
+            history
+                .iter()
+                .rev()
+                .find(|alias| alias.is_visible_at(file, position))
+                .map(|alias| (name.clone(), alias.value_type))
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -943,8 +956,7 @@ fn validate_call_nodes<'a>(
             .get(1)
             .is_some_and(|member| node_text(&unit.source, member) == "length")
     {
-        let aliases = unit.visible_descriptor_aliases(node.span.start);
-        infer_value_type(unit, node, &aliases, scoped_bindings)?;
+        infer_value_type(unit, node, &BTreeMap::new(), scoped_bindings)?;
     }
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
@@ -980,8 +992,7 @@ fn validate_integer_coercion_call(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::CallExpression {
-        let aliases = unit.visible_descriptor_aliases(node.span.start);
-        infer_integer_coercion_type(unit, node, &aliases, bindings)?;
+        infer_integer_coercion_type(unit, node, &BTreeMap::new(), bindings)?;
     }
     Ok(())
 }
@@ -1134,8 +1145,7 @@ fn validate_call_arguments(
         }
         if let Some(expected) = parameter.value_type {
             let value = argument.children.last().unwrap_or(argument);
-            let aliases = unit.visible_descriptor_aliases(value.span.start);
-            if let Some(actual) = infer_value_type(unit, value, &aliases, bindings)?
+            if let Some(actual) = infer_value_type(unit, value, &BTreeMap::new(), bindings)?
                 && actual != ValueType::Scalar(expected)
             {
                 return Err(failure(
@@ -1177,7 +1187,8 @@ fn call_site_bindings(
                 .functions
                 .iter()
                 .filter(|function| {
-                    function.span.start <= binding.span.start
+                    function.span.file == binding.span.file
+                        && function.span.start <= binding.span.start
                         && binding.span.end <= function.span.end
                 })
                 .min_by_key(|function| function.span.end - function.span.start);
@@ -1219,6 +1230,7 @@ fn prelude_descriptor_alias_history(
                 name,
                 vec![DescriptorAlias {
                     visible_from: 0,
+                    scope: None,
                     value_type,
                 }],
             )
@@ -1229,16 +1241,15 @@ fn prelude_descriptor_alias_history(
 fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
     for index in 0..package.units.len() {
         let unit = &package.units[index];
-        let mut aliases = prelude_descriptor_aliases(package);
         let mut alias_history = prelude_descriptor_alias_history(package);
         let mut functions = Vec::new();
         collect_type_declarations(
             package,
             unit,
             &unit.tree.root,
-            &mut aliases,
             &mut alias_history,
             &mut functions,
+            None,
         )?;
         package.units[index].descriptor_aliases = alias_history;
         package.units[index].functions = functions;
@@ -1247,9 +1258,15 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
 
     for index in 0..package.units.len() {
         let unit = &package.units[index];
-        let mut aliases = prelude_descriptor_aliases(package);
+        let mut visible_bindings = Vec::new();
         let mut bindings = Vec::new();
-        collect_typed_bindings(package, unit, &unit.tree.root, &mut aliases, &mut bindings)?;
+        collect_typed_bindings(
+            package,
+            unit,
+            &unit.tree.root,
+            &mut visible_bindings,
+            &mut bindings,
+        )?;
         package.units[index].typed_bindings = bindings;
     }
     Ok(())
@@ -1259,19 +1276,22 @@ fn collect_type_declarations(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &mut BTreeMap<String, ScalarType>,
-    alias_history: &mut BTreeMap<String, Vec<DescriptorAlias>>,
+    aliases: &mut BTreeMap<String, Vec<DescriptorAlias>>,
     functions: &mut Vec<FunctionContract>,
+    scope: Option<Span>,
 ) -> Result<(), SemanticFailure> {
-    if let Some((name, alias)) = descriptor_alias(package, unit, node) {
-        aliases.insert(name.clone(), alias.value_type);
-        alias_history.entry(name).or_default().push(alias);
+    if let Some((name, alias)) = descriptor_alias(package, unit, node, scope) {
+        aliases.entry(name).or_default().push(alias);
     }
     if node.kind == SyntaxKind::FunctionDeclaration {
-        functions.push(analyze_function_contract(unit, node, aliases)?);
+        let visible = visible_descriptor_aliases(aliases, unit.source.id(), node.span.start);
+        functions.push(analyze_function_contract(unit, node, &visible)?);
     }
+    let child_scope = (node.kind == SyntaxKind::FunctionDeclaration)
+        .then_some(node.span)
+        .or(scope);
     for child in &node.children {
-        collect_type_declarations(package, unit, child, aliases, alias_history, functions)?;
+        collect_type_declarations(package, unit, child, aliases, functions, child_scope)?;
     }
     Ok(())
 }
@@ -1280,6 +1300,7 @@ fn descriptor_alias(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
+    scope: Option<Span>,
 ) -> Option<(String, DescriptorAlias)> {
     if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         return None;
@@ -1300,6 +1321,7 @@ fn descriptor_alias(
         node_text(&unit.source, name).to_owned(),
         DescriptorAlias {
             visible_from: node.span.end,
+            scope,
             value_type,
         },
     ))
@@ -1309,14 +1331,38 @@ fn collect_typed_bindings(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &mut BTreeMap<String, ScalarType>,
+    visible_bindings: &mut Vec<TypedBinding>,
     bindings: &mut Vec<TypedBinding>,
 ) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::FunctionDeclaration {
+        let Some(contract) = unit
+            .functions
+            .iter()
+            .find(|contract| contract.span == node.span)
+        else {
+            return Ok(());
+        };
+        let mut function_bindings = visible_bindings.clone();
+        function_bindings.extend(contract.parameters.iter().filter_map(|parameter| {
+            parameter.value_type.map(|value_type| TypedBinding {
+                name: parameter.name.clone(),
+                span: parameter.span,
+                value_type: ValueType::Scalar(value_type),
+                mutable: false,
+            })
+        }));
+        for child in &node.children {
+            collect_typed_bindings(package, unit, child, &mut function_bindings, bindings)?;
+        }
+        return Ok(());
+    }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
-        analyze_binding_node(package, unit, node, aliases, bindings)?;
+        let prior_len = visible_bindings.len();
+        analyze_binding_node(package, unit, node, visible_bindings)?;
+        bindings.extend_from_slice(&visible_bindings[prior_len..]);
     }
     for child in &node.children {
-        collect_typed_bindings(package, unit, child, aliases, bindings)?;
+        collect_typed_bindings(package, unit, child, visible_bindings, bindings)?;
     }
     Ok(())
 }
@@ -1430,7 +1476,6 @@ fn analyze_binding_node(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &mut BTreeMap<String, ScalarType>,
     bindings: &mut Vec<TypedBinding>,
 ) -> Result<(), SemanticFailure> {
     let Some(name_node) = node
@@ -1467,7 +1512,6 @@ fn analyze_binding_node(
         if let Some(symbol) = package.resolve_object_at(unit, initializer.span.start, object_name)
             && let Some(ty) = symbol.descriptor_type()
         {
-            aliases.insert(name.clone(), ty);
             bindings.push(TypedBinding {
                 name,
                 span: node.span,
@@ -1483,18 +1527,18 @@ fn analyze_binding_node(
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
-        && let Some(actual) = infer_value_type(unit, initializer, aliases, bindings)?
+        && let Some(actual) = infer_value_type(unit, initializer, &BTreeMap::new(), bindings)?
     {
         validate_value_assignment(&unit.source, &name, expected, actual, initializer)?;
         return Ok(());
     }
     let inferred = initializer
-        .map(|value| infer_value_type(unit, value, aliases, bindings))
+        .map(|value| infer_value_type(unit, value, &BTreeMap::new(), bindings))
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
         let type_name = node_text(&unit.source, type_node).trim();
-        let Some(ty) = aliases.get(type_name).copied() else {
+        let Some(ty) = unit.descriptor_alias_at(type_name, type_node.span.start) else {
             return Err(failure(
                 &unit.source,
                 "T0001",

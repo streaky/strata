@@ -756,9 +756,16 @@ impl Emitter<'_> {
             CoercionPolicy::Wrap => "wrapping_coerce",
             CoercionPolicy::Saturate => "saturating_coerce",
         };
+        let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
+            && self.lazy_namespace_binding_type(receiver).is_some();
         let receiver = self.expression(receiver);
+        let source = if receiver_is_borrowed {
+            receiver
+        } else {
+            format!("&({receiver})")
+        };
         let call = format!(
-            "terrane_int_support::{helper}::<{}>(&({receiver}))",
+            "terrane_int_support::{helper}::<{}>({source})",
             rust_type(destination)
         );
         Some(if policy == CoercionPolicy::Default {

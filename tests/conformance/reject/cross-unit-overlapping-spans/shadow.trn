@@ -1,0 +1,5 @@
+namespace app
+function other string; value string
+  return value
+function shadow
+  other int = 1
