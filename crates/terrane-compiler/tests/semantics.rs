@@ -1427,6 +1427,59 @@ fn records_mutability_against_resolved_binding_identity() {
     assert_eq!(values, [false, true]);
 }
 
+#[test]
+fn validates_namespace_segments_and_declared_name_casing() {
+    for (source, code, message, help) in [
+        (
+            "namespace My-App\n",
+            "S2018",
+            "invalid namespace segment `My-App`",
+            "use `my-app`",
+        ),
+        (
+            "namespace con\n",
+            "S2019",
+            "namespace segment `con` is reserved",
+            "choose a different name, such as `con-app`",
+        ),
+        (
+            "namespace app\nfunction Main\n",
+            "S2018",
+            "declared name `Main` must be lowercase",
+            "use `main`",
+        ),
+    ] {
+        let failure = analyze(&package(false, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert!(diagnostic.message.contains(message), "{source}");
+        assert_eq!(diagnostic.help.as_deref(), Some(help), "{source}");
+    }
+}
+
+#[test]
+fn resolves_slash_separated_root_and_nested_parent_paths() {
+    let analyzed = analyze(&package(
+        false,
+        &[
+            ("exports.trn", "namespace parent/shared\npublic .item = 1\n"),
+            (
+                "consumer.trn",
+                "namespace parent/child/grandchild\nfrom ../../shared import .item\n",
+            ),
+        ],
+    ))
+    .unwrap();
+
+    assert_eq!(
+        analyzed
+            .object("/parent/child/grandchild", "item")
+            .unwrap()
+            .identity,
+        "/parent/shared::item"
+    );
+}
+
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
 }

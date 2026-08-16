@@ -267,6 +267,10 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 diagnostics: parsed.diagnostics,
             });
         }
+        validate_declared_names(source, &parsed.tree).map_err(|diagnostic| SemanticFailure {
+            source: source.clone(),
+            diagnostics: vec![diagnostic],
+        })?;
         let namespace =
             declared_namespace(source, &parsed.tree).map_err(|diagnostic| SemanticFailure {
                 source: source.clone(),
@@ -455,8 +459,12 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
         .children
         .iter()
         .filter(|child| child.kind == SyntaxKind::Name)
-        .map(|child| node_text(source, child))
-        .collect::<Vec<_>>();
+        .map(|child| {
+            let component = node_text(source, child);
+            validate_namespace_segment(component, child.span)?;
+            Ok(component)
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
     normalize_declared_path(&components).ok_or_else(|| {
         Diagnostic::error(
             "S2003",
@@ -464,6 +472,92 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
             declarations[0].span,
         )
     })
+}
+
+fn validate_namespace_segment(component: &str, span: Span) -> Result<(), Diagnostic> {
+    let valid = component.bytes().enumerate().all(|(index, byte)| {
+        if index == 0 {
+            byte.is_ascii_lowercase()
+        } else {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+        }
+    });
+    if !valid {
+        let lowercase = component.to_ascii_lowercase();
+        let mut diagnostic = Diagnostic::error(
+            "S2018",
+            format!(
+                "invalid namespace segment `{component}`; segments must match `[a-z][a-z0-9-]*`"
+            ),
+            span,
+        );
+        if lowercase != component
+            && lowercase.bytes().enumerate().all(|(index, byte)| {
+                if index == 0 {
+                    byte.is_ascii_lowercase()
+                } else {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                }
+            })
+        {
+            diagnostic = diagnostic.with_help(format!("use `{lowercase}`"));
+        }
+        return Err(diagnostic);
+    }
+    if is_reserved_namespace_segment(component) {
+        return Err(Diagnostic::error(
+            "S2019",
+            format!("namespace segment `{component}` is reserved"),
+            span,
+        )
+        .with_help(format!(
+            "choose a different name, such as `{component}-app`"
+        )));
+    }
+    Ok(())
+}
+
+fn is_reserved_namespace_segment(component: &str) -> bool {
+    matches!(component, "con" | "prn" | "aux" | "nul")
+        || component
+            .strip_prefix("com")
+            .or_else(|| component.strip_prefix("lpt"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+}
+
+fn validate_declared_names(source: &SourceFile, tree: &SyntaxTree) -> Result<(), Diagnostic> {
+    fn visit(source: &SourceFile, node: &SyntaxNode) -> Result<(), Diagnostic> {
+        let declared_children = match node.kind {
+            SyntaxKind::Binding
+            | SyntaxKind::FunctionDeclaration
+            | SyntaxKind::Parameter
+            | SyntaxKind::ForTarget
+            | SyntaxKind::ImportAlias => true,
+            _ => false,
+        };
+        if declared_children {
+            for child in &node.children {
+                if matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName) {
+                    let authored = node_text(source, child);
+                    let name = authored.trim_start_matches('.');
+                    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                        let replacement = authored.to_ascii_lowercase();
+                        return Err(Diagnostic::error(
+                            "S2018",
+                            format!("declared name `{authored}` must be lowercase"),
+                            child.span,
+                        )
+                        .with_help(format!("use `{replacement}`")));
+                    }
+                }
+            }
+        }
+        for child in &node.children {
+            visit(source, child)?;
+        }
+        Ok(())
+    }
+    visit(source, &tree.root)
 }
 
 fn collect_unit(
@@ -2839,16 +2933,7 @@ fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item
 }
 
 fn source_namespace(namespace: &str) -> String {
-    namespace.strip_prefix('/').map_or_else(
-        || namespace.replace('/', " "),
-        |components| {
-            if components.is_empty() {
-                "/".to_owned()
-            } else {
-                format!("/{}", components.replace('/', " "))
-            }
-        },
-    )
+    namespace.to_owned()
 }
 
 fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {

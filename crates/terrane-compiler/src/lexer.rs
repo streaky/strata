@@ -546,7 +546,7 @@ fn lex_line(
                 break;
             }
             byte if is_joiner(byte)
-                || matches!(byte, b'!' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') =>
+                || matches!(byte, b'!' | b'/' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') =>
             {
                 index += 1;
                 if index < bytes.len()
@@ -565,6 +565,7 @@ fn lex_line(
                 if matches!(attached, Attachment::Left | Attachment::Both)
                     && !matches!(kind, TokenKind::Increment | TokenKind::Decrement)
                     && !matches!(text, ">" | ">=")
+                    && !(text == "/" && namespace_path_line(tokens))
                 {
                     diagnostics.push(Diagnostic::error(
                         "L0006",
@@ -723,7 +724,7 @@ fn is_digit_run(text: &str, admitted: fn(&u8) -> bool) -> bool {
 }
 
 fn is_joiner(byte: u8) -> bool {
-    matches!(byte, b'+' | b'-' | b'*' | b'/' | b'%' | b'<' | b'>')
+    matches!(byte, b'+' | b'-' | b'*' | b'%' | b'<' | b'>')
 }
 
 fn indentation_len(line: &str) -> usize {
@@ -748,6 +749,15 @@ fn expression_start(tokens: &[Token]) -> bool {
                 | TokenKind::Operator
         )
     })
+}
+
+fn namespace_path_line(tokens: &[Token]) -> bool {
+    tokens
+        .iter()
+        .rev()
+        .take_while(|token| token.kind != TokenKind::Newline)
+        .last()
+        .is_some_and(|token| matches!(token.text.as_str(), "namespace" | "from"))
 }
 
 fn push_token(

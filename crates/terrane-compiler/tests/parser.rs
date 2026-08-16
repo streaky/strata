@@ -378,6 +378,24 @@ fn two_token_import_binding_does_not_consume_structural_imports() {
 }
 
 #[test]
+fn parses_slash_namespace_paths_and_rejects_whitespace_separators() {
+    let tree = parse_source(
+        "namespace example/app\nfrom /core/output import .print\nfrom ../shared/config import .settings\n",
+    );
+    assert_eq!(tree.root.children.len(), 3);
+    assert!(tree.root.children.iter().all(|node| {
+        matches!(
+            node.kind,
+            SyntaxKind::NamespaceDeclaration | SyntaxKind::ImportDeclaration
+        )
+    }));
+
+    rejected("namespace example app\n", "S1002");
+    rejected("from /core output import .print\n", "S1026");
+    rejected("from .. shared import .item\n", "S1026");
+}
+
+#[test]
 fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("namespace\n", "S1002");
     rejected("value =\n", "S1019");

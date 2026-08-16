@@ -18,14 +18,22 @@ fn significant(text: &str) -> Vec<(TokenKind, String, Attachment)> {
 }
 
 #[test]
-fn identifiers_and_spaced_operators_have_stable_boundaries() {
+fn slash_is_a_namespace_separator_or_a_spaced_operator() {
+    let source = SourceFile::new(0, "case.trn".into(), "ipv4/ipv6".to_owned());
+    let diagnostic = lex(&source).unwrap_err();
+    assert_eq!(diagnostic[0].code, "L0006");
     assert_eq!(
-        significant("ipv4/ipv6"),
-        vec![(
-            TokenKind::Identifier,
-            "ipv4/ipv6".into(),
-            Attachment::Detached
-        )]
+        significant("namespace ipv4/ipv6"),
+        vec![
+            (
+                TokenKind::Identifier,
+                "namespace".into(),
+                Attachment::Detached
+            ),
+            (TokenKind::Identifier, "ipv4".into(), Attachment::Right),
+            (TokenKind::Operator, "/".into(), Attachment::Both),
+            (TokenKind::Identifier, "ipv6".into(), Attachment::Left),
+        ]
     );
     assert_eq!(
         significant("ipv4 / ipv6"),
