@@ -44,7 +44,7 @@ comments: ['# line', '// line', '/* first terminator closes */']
 identifier_case:
   rule: all user-declared names are lowercase - namespaces, functions, classes, interfaces, traits, fields, bindings
   form: kebab-case; 'parse-json' not 'parseJSON', which removes the acronym-casing bikeshed permanently
-  rationale: case carries no semantic load in Terrane - object-form '.x' versus ordinary 'x' already makes the distinction other languages spend case on
+  rationale: case carries no semantic load in Terrane - 'is a' expresses type membership and 'receiver.member' expresses access, so case is free to constrain
   enforcement: uppercase parses, then is rejected with a precise diagnostic and formatter fixit; never silently folded
   carve_out: type parameters are uppercase ('list of T', 'map of K, V', 'iteration-step of Item') - a different KIND of name, standing in for a thing rather than naming one; never user-declared in v1 and never part of a path
 charset:
@@ -74,9 +74,8 @@ numeric_literal:
   absent_in_v1: [exponent, radix prefixes other than 0x, type suffix]
   lexical_error: digit run followed by identifier characters, e.g. 1e9, 0b101, 123abc, 0x
   dot_rule: "'.' joins a literal only before a digit; 1.type stays member access"
-member_dot: no whitespace: value.member
-object_name: leading dot: .member
-invalid_adjacency: 'value .member'
+member_dot: no whitespace: value.member; '.' has NO other role in the language
+invalid_adjacency: 'value member'
 newline: normally ends statement; grammar-defined continuation only
 ```
 
@@ -114,13 +113,12 @@ overlap: longest matching namespace prefix wins; two roots mapped to one directo
 unmapped_file: a .trn file under a declared root but outside every mapping is an error, never silently ignored
 third_party: a dependency's namespaces come from ITS manifest and are never discovered by scanning its tree
 determinism: the resolved source set is recorded in build metadata; sorted expansion, ambiguity is an error
-lookup_views:
-  ordinary: foo
-  object_form: .foo
-  relation: two views over objects, distinct lookup rules
+lookup: ONE view; a name resolves through lexical scope, then namespace, then prelude
+dot_rule: '.' appears only between a receiver and its member, never as a name prefix
+dot_exception: NONE - the dot has no other role anywhere in the language
 scope: lexical + namespace
 collision: different object symbols under same object name in same scope => error
-shadowing: nearer object-form symbol shadows farther symbol
+shadowing: nearer binding shadows farther binding
 reimport_same_export: idempotent
 reimport_different_same_name: collision; alias required
 ```
@@ -129,8 +127,8 @@ Top-level plain assignment is namespace-local, including root namespace. `global
 
 ```terrane
 namespace application/commands
-print = .print
-private cache = .map;
+from /core/collections import map
+private cache = map;
 global shared-limit int = 10
 ```
 
@@ -138,18 +136,18 @@ global shared-limit int = 10
 
 ```terrane
 use (system) sqlite
-from /core/output import .print
-from /core/collections import .map as .ordered-map
-from ../shared/config import .settings
-import with .custom-import
+from /image/codec import resize
+from /core/collections import map as ordered-map
+from ../shared/config import settings
+import with custom-import
 ```
 
 Rules:
 
 - `use` declares a build dependency; it does not automatically bind supplied names.
-- `from ... import .x` adds object-form `.x`, not ordinary `x`.
-- Prelude names and descriptor constructs need NO import: `print; value` and `value int8 = 42` are complete programs. Importing `.print` or `.int8` is redundant, not required, and should not appear in examples or fixtures unless the case is specifically about importing.
-- Bind ordinary name explicitly: `print = .print`.
+- `from ... import x` binds ordinary `x` in the scope containing the import; `as` renames it. No declare-then-bind step.
+- Prelude names and descriptor constructs need NO import: `print; value` and `value int8 = 42` are complete programs. Importing `print` or `int8` is redundant, not required, and should not appear in examples or fixtures unless the case is specifically about importing.
+
 - Imports are structural compile-time slots, never ordinary calls/bindings.
 - Importer selection is scoped; `global import with` selects program fallback.
 - Ordinary binding named `import` cannot affect importer selection.
@@ -168,15 +166,15 @@ print int float bool string bytes none
 - These need no import. `print; value` is a complete statement in a program with no import lines at all.
 - Prelude may be disabled.
 - Explicit `/core` object imports still work and may shadow/replace defaults deliberately.
-- Object-form facilities such as `.map`, `.list`, `.range`, `.file` are NOT implicitly prelude imports.
+- Library facilities such as `map`, `list`, `range`, `file` are NOT implicit prelude bindings; import them.
 - Fixed-width numeric descriptors are NOT prelude bindings and NOT reserved words. They are descriptor constructs available without import, a separate category from the seven ordinary bindings above.
 
 ```yaml
 prelude_bindings: the seven ordinary program-globals listed above; unchanged
-descriptor_constructs: int8..int128, uint8..uint128, float32, float64, and the abstract category descriptors
+descriptor_constructs: int8.int128, uint8.uint128, float32, float64, and the abstract category descriptors
 construct_availability: usable in construct position without import ('value int8 = 42')
 construct_value_use: still rejected in value position; a construct is not a runtime value
-explicit_import: remains available for rebinding, aliasing, and shadowing ('from /core/types import .int64 as .word')
+explicit_import: remains available for rebinding, aliasing, and shadowing ('from /core/types import int64 as word')
 ```
 
 ## CALL
@@ -186,8 +184,8 @@ thing;                         # explicit zero-arg default call
 print; message                 # positional arg
 connect; host, port, timeout = 10
 buffer.clear;                  # zero-arg member call
-print; .render                 # dot-object is ordinary argument
-print; (.render; report)       # nested call MUST be grouped
+print; render                 # a bare name passes the object
+print; (render; report)       # nested call MUST be grouped
 ```
 
 Rules:
@@ -196,7 +194,7 @@ Rules:
 call_marker: semicolon
 zero_arg: semicolon required
 member: receiver.member (no whitespace before dot)
-adjacency: 'receiver .object' invalid; NEVER invocation
+adjacency: 'receiver object' invalid; NEVER invocation
 call_extent: call owns remainder of containing logical expression
 arguments: one list, comma-separated
 named_arg: identifier '=' call-free-expression
@@ -262,8 +260,8 @@ name = value
 name int = 42
 name string
 constant max-size int = 1024
-private cache = .map;
-global service = .service;
+private cache = map;
+global service = service;
 
 function add; left int, right int; int
   return left + right
@@ -279,7 +277,29 @@ function connect; host string, port int, timeout int = 10; connection
 - Named arguments require stable exposed parameter names.
 - `constant`, not `const`.
 - Default visibility public; strict visibility mode can require explicit qualifiers.
-- Declaration modifiers are leading object-form names resolved in dedicated object scope; bare names never modifiers.
+- Package-supplied declaration modifiers use a `with` clause; core structural words never do.
+
+```yaml
+form: "with per-cpu, aligned global counts unsigned-long = 0"
+clause: 'with' + COMMA-separated modifiers, applied left to right, resolved in ordinary lexical scope
+delimiter: the comma means another modifier follows; the list ends at the first element NOT followed by one, and the declaration begins there
+no_wrapping_parens: the clause needs none; comma delimitation is sufficient
+args: a modifier taking arguments is parenthesised - 'with per-cpu, (aligned; 64) global x int = 0'
+args_rule: needs no special rule; a declaration always follows, so the call is never trailing and ordinary grouping applies
+trailing_comma: an error - 'with per-cpu, global x = 0' reads 'global' as the next element and fails on a reserved word
+scope: any declaration INCLUDING an untyped local binding; no typed-binding requirement
+with_applies_to: first- and third-party package modifiers (open set)
+with_never_applies_to: global, constant, public/private/protected, static/async/mutating/throws (closed set, compiler-owned)
+test: can the compiler's model be described without it? if it changes name resolution, visibility, mutability, or a callable's type contract it is STRUCTURAL (keyword); if it changes only how a known declaration is realised - storage, layout, linkage, ABI, section, alignment - it is DECORATIVE (with)
+ordering: with-modifiers precede structural keywords; package layer is outer
+rationale: the protocol already forbids modifiers from touching visibility/ownership/effects/capability, so the split reports a real boundary; 'with global' would falsely imply global is extensible
+why_exist: a declaration answers two separable questions - WHAT is declared (Terrane owns this) and HOW it is realised on a target or in a domain (modifiers own this)
+why_not_macros: objects abstract what things do; modifiers abstract how declarations exist - which is why an extensibility system survives in a language that deliberately avoids macros
+governing_rule: the modifier protocol is CLOSED IN ITS GUARANTEES, NOT closed in its intended vocabulary
+open_ended: do not define modifiers by a list of purposes; a new domain property must not require a grammar change or a textual macro
+inspectability: an unfamiliar modifier must remain answerable - what supplied it, what contract it accepts, what it adds, how it composed, what lowering resulted
+origin: per-cpu is the motivating example; in C it is attributes plus linker behaviour plus accessors plus convention, in Terrane an ordinary declaration whose realisation has one instance per CPU
+```
 - Source-declared type parameters/generics are unsupported and MUST be rejected. Use concrete types, unions, interfaces, or generated concrete declarations.
 
 ## TYPE
@@ -323,7 +343,7 @@ value_use: REJECTED at the source span - no display or value protocol in v1 (pri
 lowering: a statically resolved descriptor needs NO runtime storage and lowers to nothing
 materialisation: reflection or dynamic descriptor use may require the canonical descriptor object at runtime; 'not an ordinary value' does NOT mean 'never has a runtime representation'
 defect: emitting a plain Rust binding for a descriptor, as if it were an ordinary value, is a compiler defect
-backing_object: real - .type returns it, 'is a' compares it, identity survives rebinding, reflection exposes it later
+backing_object: real - type returns it, 'is a' compares it, identity survives rebinding, reflection exposes it later
 ```
 
 - Type descriptors are semantic objects with stable canonical identity, not ordinary values. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
@@ -342,11 +362,11 @@ capability: target without arbitrary promotion must prove bounds or reject; neve
 bitwise_int: infinite two's-complement
 right_shift: arithmetic/flooring
 left_shift: exact
-negative_shift: throws .negative-shift-count
+negative_shift: throws negative-shift-count
 ```
 
 - Small multiplication computes exact `i128` intermediate; wider operations preserve exactness.
-- Division by zero throws `.division-by-zero`.
+- Division by zero throws `division-by-zero`.
 - Fixed widths require explicit `checked`/`wrap`/`saturate`/`overflowing` family children, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
 - Literal initializers are range-checked against the destination over the whole constant expression; a syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude.
 - Conversions are explicit through the `coerce` method family.
@@ -371,12 +391,12 @@ postfix_policy: they select the default add/subtract child only; other policies 
 ```yaml
 form: receiver family/policy; 'value.coerce; destination-type' | 'value.coerce.checked; destination-type'
 family: invocation is the throwing default | coerce.checked | coerce.wrap | coerce.saturate
-default_child: '.default' exists in compiler metadata for reflection only; source lookup of '.default' is rejected
+default_child: 'default' exists in compiler metadata for reflection only; source lookup of 'default' is rejected
 integer_to_integer: per full spec §17.7; fixed-width-to-int always exact but still explicit
 fixed_to_int: exact, explicit, cannot overflow
 to_float: IEEE-754 round-to-nearest, ties-to-even
 inexact_float: ordinary result, NOT an error; precision loss shown by destination type
-float_out_of_range: throws .coercion-error; never yields an infinity
+float_out_of_range: throws coercion-error; never yields an infinity
 string_parse: accepts exactly the destination's canonical text-display spelling
 coerce_options: NONE - coerce takes only its destination; it must never grow radix or format arguments
 parse_family: 'value.parse; callback' - the callback is REQUIRED; there is no built-in destination-owned parse
@@ -454,7 +474,7 @@ for i = 0; i < limit; i++
 throw error
 try
   ...
-catch .some-error as error
+catch some-error as error
   ...
 finally
   ...
@@ -464,18 +484,18 @@ finally
 - `/core/errors` defines the standard error protocol and EXACTLY these language-mandated error objects:
 
 ```text
-.arithmetic-overflow          checked fixed-width result outside receiver range, incl. signed MIN / -1
-.division-by-zero             zero divisor for / % div-rem, every integer type and mode
-.integer-conversion-overflow  coerce to a fixed-width integer cannot represent the source value
-.negative-shift-count         negative shift count on unbounded int << >>
-.coercion-error               coercion has no compatible result outside the overflow case above
+arithmetic-overflow          checked fixed-width result outside receiver range, incl. signed MIN / -1
+division-by-zero             zero divisor for / % div-rem, every integer type and mode
+integer-conversion-overflow  coerce to a fixed-width integer cannot represent the source value
+negative-shift-count         negative shift count on unbounded int << >>
+coercion-error               coercion has no compatible result outside the overflow case above
 ```
 
 - All catchable failures implement a structural `error` interface: stable `kind`, human-readable `message`, optional `cause`, and a source-context chain.
 - `catch` clauses are tried in source order; a clause made unreachable by an earlier one is a compile-time diagnostic, never a silent reorder.
 - `finally` always runs and may replace a pending outcome only by explicitly returning or throwing.
 - Uncaught rendering prints the deterministic cause/source chain and exits through the profile's failure policy.
-- Each core error is catchable, carries `message` plus structured operation/type detail, and `int` representation promotion raises none of them. Any other dotted error name (`.file-error`, `.not-found`, `.python-error`) is package- or adapter-defined, never an implicit core error.
+- Each core error is catchable, carries `message` plus structured operation/type detail, and `int` representation promotion raises none of them. Any other dotted error name (`file-error`, `not-found`, `python-error`) is package- or adapter-defined, never an implicit core error.
 - Panic is separate fatal mechanism.
 - Exported may-throw functions expose `throws`; non-throwing callable contracts reject may-throw implementations.
 - Effect vocabulary is a closed compiler-known set plus typed thrown-error alternatives:
@@ -493,7 +513,7 @@ inference: permitted for private functions; exported functions declare their pub
 
 ## COLLECTION / TEXT
 
-Core environment should provide object protocols/facilities for list, map, set, tuple, range, entry; import object forms explicitly from standard namespaces unless prelude changes normatively.
+Core environment should provide object protocols/facilities for list, map, set, tuple, range, entry; import them explicitly from standard namespaces unless prelude changes normatively.
 
 - List construction uses ordinary invocation; maps use named construction arguments; sets/tuples likewise object facilities.
 - Indexing: `value[index]`; slices/ranges are objects.
@@ -542,7 +562,7 @@ regex: never a child of contains; regex stays match/matches; no member dispatche
 ## OBJECT_MODEL
 
 - Objects expose protocols rather than compiler-special-cased runtime species.
-- `.name` resolves object form; `value.name` member lookup; calls explicit with `;`.
+- `name` resolves through one lookup view; `value.name` is member lookup; calls explicit with `;`.
 - Function/class/namespace/type objects are reflectable semantic objects.
 - `construct` is conventional constructor method selected by class default invocation.
 - Protocol: structural capability.
@@ -587,7 +607,7 @@ regex: never a child of contains; regex stays match/matches; no member dispatche
 ```yaml
 origins: terrane packages | Rust crates | system/C libraries | foreign runtime packages
 use: declares dependency
-from_import: binds exported object forms via namespace/importer
+from_import: binds exported objects into the containing scope via namespace/importer
 lockfile: reproducible exact graph
 cargo: compiler owns generated Cargo manifest/source tree
 build_scripts: declarative metadata preferred; arbitrary scripts capability-gated and reported
@@ -610,6 +630,27 @@ prelude = true            # optional; defaults true
 - Dependency graph/order deterministic.
 - Separate compilation honors published representation/ABI; downstream cannot silently respecialize upstream public layout.
 
+## CORE LIBRARY PRINCIPLE
+
+```yaml
+rule: standard facilities are written in TERRANE over a deliberately minimal Rust core
+why_decisive: a Rust support crate is permanently opaque to the compiler - implementing a facility in Rust forecloses inlining, specialisation, and whole-program analysis for it forever
+why_also: exercises lowering against real code; builds a corpus before a public one exists; failures surface as readable Terrane frames, which a Rust crate can never give
+boundary: PER LAYER, not per facility - Rust owns the irreducible or audited layer, Terrane owns object model, policy, diagnostics, integration
+example_json: Rust byte scanner beneath Terrane document model, descriptor mapping, data-path diagnostics, canonical output
+example_tls: audited protocol implementation beneath Terrane stream integration, trust store, ALPN, connector policy, capability gating; NEVER reimplement TLS
+rust_justified_only_if:
+  - syscall/ABI boundary (fds, sockets, clocks, process control)
+  - a guarantee the optimiser would destroy (constant-time compare, memory ordering, zeroisation) - not a perf judgement
+  - large externally-audited security-critical implementation
+  - data rather than code (Unicode tables, tz database), generated
+rust_layer_rule: a layer claiming to be Rust states WHICH of the four applies
+dependency_path: core libraries use the ordinary §23 mechanism - declaration plus authored wrapper; no privileged path, so they double as worked examples
+profiles: core libraries declare Rust dependencies explicitly so a profile may exclude them
+consequence_build: package-level artifact caching becomes load-bearing, not an optimisation
+consequence_profile: capabilities become which Terrane packages are present, not which support crates were compiled in
+```
+
 ## DEPENDENCY PRINCIPLE
 
 ```yaml
@@ -622,7 +663,7 @@ no_execution: tooling must not execute arbitrary package code to inspect it
 cache_identity: manifest contents + lock checksum + features + target triple + toolchain + source checksums
 rust_specialisation: no generated adapter layer, no generic instantiation translation, no trait/lifetime/error mapping; those stay in Rust and are touched only inside native Rust bodies
 rust_wrapper: a Terrane-visible wrapper is authored deliberately, never generated automatically
-foreign_specialisation: 'from python/x import .y' names a crossing point, not an API import; adapters define boundary behaviour, not a translation of the ecosystem
+foreign_specialisation: 'from python/x import y' names a crossing point, not an API import; adapters define boundary behaviour, not a translation of the ecosystem
 ```
 
 ## RUST
@@ -682,13 +723,13 @@ Contracts:
 Must reject with source-oriented help:
 
 ```text
-print .render             -> adjacency is not invocation; suggest member attachment or `print; .render`
+print render             -> adjacency is not invocation; suggest member attachment or `print; render`
 count-1                   -> lexical attached digits-only suffix; suggest `count - 1`
 a+ b                      -> undeclared left-attached/postfix operator
 nested; other; value      -> nested call must be parenthesized
 for x=(call; a);...       -> calls in for clauses grouped
-.foo                      -> unresolved object-form lookup when not imported
-foo                       -> ordinary name never satisfied by object-form symbol
+foo                       -> unresolved name when not imported or declared
+value .member             -> invalid; whitespace before a member dot
 list<string>              -> angle generic spelling invalid; canonical `list of string`
 function f of T ...       -> source type parameters unsupported
 ===                       -> invalid; choose `==`, `is`, or `is a`
@@ -702,10 +743,10 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 1. Everything semantic is object; representation can specialize invisibly.
 2. Values always typed; dynamic != weak coercion; constraints optional/local/real; coercion explicit.
 3. Assignment value-semantic; COW allowed; `ref` shared identity; `move` ownership transfer.
-4. Ordinary/object-form lookup distinct; imports do not auto-bind ordinary names.
+4. One lookup view; imports bind ordinary names scoped to the containing block, function, or namespace.
 5. Namespace segments `/`-separated, lowercase `[a-z][a-z0-9-]*`; `/` is both root anchor and separator, and is never an identifier character.
 6. Compact operator-bearing names differ lexically from spaced operators.
-7. `foo.bar` member; `.bar` object; `foo; .bar` explicit argument; adjacency never call.
+7. `foo.bar` member; `.bar` object; `foo; bar` explicit argument; adjacency never call.
 8. Compile-time structural slots never depend on same-spelled ordinary bindings.
 9. Empty blocks legal; conventional control flow.
 10. Public/dynamic permissive defaults; explicit private/protected/strict available.
@@ -716,7 +757,7 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 15. Equality, identity, membership distinct.
 16. Build selection deterministic over declared inputs.
 17. Pointer/reference/borrow/address/ABI contracts distinct; never silently weaken.
-18. Modifier lookup object-form and structural.
+18. Package modifiers are `with`-introduced and resolved in ordinary scope; core structural words are bare keywords.
 19. `void` no value; `opaque` hidden representation.
 20. Derived borrow provenance never widens.
 21. Source/generated/native names independent.
@@ -727,7 +768,7 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 
 Validation/prototype points, not permission to invent semantics:
 
-- zero-argument dot-object shorthand beyond required explicit `;` remains a possible future ergonomic study; current grammar requires `;`;
+- zero-argument invocation shorthand beyond the required explicit `;` remains a possible future ergonomic study; current grammar requires `;`;
 - map literal syntax;
 - exact COW split policy;
 - conversion-declaration coherence: conflicting declarations for one source/destination pair, and whether a declaration may be added for a type the author does not own;
@@ -756,9 +797,10 @@ Before writing Terrane:
 
 1. Determine implemented subset from conformance cases, not this design.
 2. Declare namespace segments with `/` separators, lowercase only; never whitespace tiers.
-3. Import object forms explicitly; bind ordinary names explicitly.
+3. Import explicitly; `as` renames. Imports bind ordinary names directly.
 4. Preserve compact punctuated identifiers; put spaces around infix operators.
 5. Use `;` for every call, including zero args.
+6. Prefer one call per statement. A single parenthesised call in an argument list is ordinary; two or more should be bound to named intermediates. Nesting is legal but obscures evaluation order, accumulates meaningless parentheses, and leaves diagnostics and traces pointing at an anonymous subexpression.
 6. Parenthesize nested calls and calls in three-clause `for` clauses.
 7. Use indentation; empty block is legal.
 8. Write type after name; use `T|none`; canonical constructors use `of`.

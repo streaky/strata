@@ -133,7 +133,7 @@ text-display
 
 `print` accepts only `text-display`. In v1 that includes `string`, all integer and floating types, `bool`, and `none`; `bytes` deliberately does not implement it.
 
-Descriptor identity is canonical. Rebinding `.int8` under an ordinary name does not create another type, and `value.type` returns the same descriptor consulted by membership, compatibility, and coercion.
+Descriptor identity is canonical. Rebinding `int8` under an ordinary name does not create another type, and `value.type` returns the same descriptor consulted by membership, compatibility, and coercion.
 
 ## 3. Callable method objects
 
@@ -181,26 +181,26 @@ For a finite dynamic receiver, a direct member access is valid only when every p
 /
 +-- core
 |   +-- output
-|   |   +-- .print                               text-display values... -> none
-|   |   +-- .panic                               message -> never/error policy
+|   |   +-- print                               text-display values... -> none
+|   |   +-- panic                               message -> never/error policy
 |   +-- types
-|   |   +-- .object / .value                     abstract contracts
-|   |   +-- .number / .integer / .fixed-integer abstract contracts
-|   |   +-- .int .float .bool .string .bytes .none
-|   |   +-- .int8 .int16 .int32 .int64 .int128
-|   |   +-- .uint8 .uint16 .uint32 .uint64 .uint128
-|   |   +-- .float32 .float64
-|   |   +-- .function                            type constructor
-|   |   +-- .ref .weak-ref                       type constructors
+|   |   +-- object / value                     abstract contracts
+|   |   +-- number / integer / fixed-integer abstract contracts
+|   |   +-- int float bool string bytes none
+|   |   +-- int8 int16 int32 int64 int128
+|   |   +-- uint8 uint16 uint32 uint64 uint128
+|   |   +-- float32 float64
+|   |   +-- function                            type constructor
+|   |   +-- ref weak-ref                       type constructors
 |   +-- core collections
-|   |   +-- .list .map .set .tuple .range .entry type constructors/constructors
+|   |   +-- list map set tuple range entry type constructors/constructors
 |   +-- errors
-|   |   +-- .error
-|   |   +-- .arithmetic-overflow
-|   |   +-- .division-by-zero
-|   |   +-- .integer-conversion-overflow
-|   |   +-- .negative-shift-count
-|   |   +-- .coercion-error
+|   |   +-- error
+|   |   +-- arithmetic-overflow
+|   |   +-- division-by-zero
+|   |   +-- integer-conversion-overflow
+|   |   +-- negative-shift-count
+|   |   +-- coercion-error
 |   +-- reflection                               profile
 |   +-- build                                    immutable build-query objects
 |   +-- concurrency                              profile
@@ -269,7 +269,7 @@ value.radix; base   -> string     render a number in base N
 
 `radix` is a third operation attached by receiver, belonging to neither family. Narrowing after interpretation is ordinary coercion and follows the call-extent rule: `(text.radix; 16).coerce; int8`.
 
-This replaces the flat spellings `checked-coerce`, `wrapping-coerce`, and `saturating-coerce`.
+Flat spellings such as `checked-coerce` are not valid syntax; a policy is always a child of the family.
 
 ### 5.2 Arithmetic families
 
@@ -463,7 +463,7 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 ## 7. Collections and iteration
 
 ```text
-.list / list of T
+list / list of T
 +-- default invocation; values... -> list
 +-- length -> int
 +-- get
@@ -474,7 +474,7 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 +-- iteration -> T stream
 +-- slice; range -> list
 
-.map / map of K, V
+map / map of K, V
 +-- default invocation; entries/named entries -> map
 +-- length -> int
 +-- get
@@ -484,25 +484,25 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 +-- keys / values / entries -> iterable views
 +-- iteration -> entry/tuple contract
 
-.set / set of T
+set / set of T
 +-- default invocation; values... -> set
 +-- length -> int
 +-- contains; T -> bool
 +-- add/remove; T -> none/result
 +-- iteration -> T stream
 
-.tuple / tuple ...
+tuple / tuple ...
 +-- default invocation; values... -> tuple
 +-- fixed length
 +-- indexing/destructuring
 +-- iteration where element contract permits
 
-.range / range of T
+range / range of T
 +-- default invocation; start, end, optional step -> range
 +-- start / end / step
 +-- iteration
 
-.entry / entry of K, V
+entry / entry of K, V
 +-- default invocation; key, value -> entry
 +-- key
 +-- value
@@ -569,28 +569,28 @@ error                                              structural interface; all cat
 +-- cause -> error|none                            where wrapped
 +-- source-context chain
 
-/core/errors::.arithmetic-overflow
+/core/errors::arithmetic-overflow
 +-- operation
 +-- fixed-width type
 
-/core/errors::.division-by-zero
+/core/errors::division-by-zero
 +-- operation
 +-- numeric type
 
-/core/errors::.integer-conversion-overflow
+/core/errors::integer-conversion-overflow
 +-- source value/type
 +-- destination type
 
-/core/errors::.negative-shift-count
+/core/errors::negative-shift-count
 +-- attempted count
 +-- shift operation
 
-/core/errors::.coercion-error
+/core/errors::coercion-error
 +-- source value/type
 +-- destination type
 ```
 
-`throw`, `try`, `catch`, and `finally` are v1 control flow. Ordinary language errors lower through a compiler-owned result propagation representation, not Rust panic or native unwinding. `catch` clauses are tried in source order, and a clause made unreachable by an earlier one is a compile-time diagnostic rather than a silent reorder; `finally` always runs and may replace a pending outcome only by explicitly returning or throwing. Uncaught rendering prints the deterministic cause and source chain, then exits through the profile's failure policy. `panic` is separate and profile-selectable. Package/adapter errors such as `.file-error` and `.python-error` are not implicit `/core` children.
+`throw`, `try`, `catch`, and `finally` are v1 control flow. Ordinary language errors lower through a compiler-owned result propagation representation, not Rust panic or native unwinding. `catch` clauses are tried in source order, and a clause made unreachable by an earlier one is a compile-time diagnostic rather than a silent reorder; `finally` always runs and may replace a pending outcome only by explicitly returning or throwing. Uncaught rendering prints the deterministic cause and source chain, then exits through the profile's failure policy. `panic` is separate and profile-selectable. Package/adapter errors such as `file-error` and `python-error` are not implicit `/core` children.
 
 ## 10. Ownership, identity, and lifetime objects
 
@@ -646,9 +646,9 @@ Postfix `++` and `--` are statements, not expression values. Pattern matching an
 
 ```terrane
 namespace my-app/http/handlers
-from /core/output import .print
-from ../shared/config import .settings
-from ../../platform import .clock
+from /image/codec import resize
+from ../shared/config import settings
+from ../../platform import clock
 ```
 
 A segment is `[a-z][a-z0-9-]*` — lowercase ASCII letter, then letters, digits, and internal hyphens. The allowlist makes every filesystem-hazardous character unformable rather than rejected, and `/` is therefore not an identifier character: `ipv4-ipv6`, never `ipv4/ipv6`. Windows device names (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`) are reserved as whole segments, since they are made of legal characters and the allowlist cannot see them.
@@ -667,52 +667,42 @@ function main
   print; value
 ```
 
-Importing `.print` or `.int8` is redundant. Explicit import remains available for rebinding, aliasing, and shadowing, and the examples below use it because they are specifically about importing.
+Importing `print` or `int8` is redundant. Explicit import remains available for rebinding, aliasing, and shadowing, and the examples below use it because they are specifically about importing.
 
-### 11.1 Import aliases bind only the ordinary scope
+### 11.1 Imports bind ordinary names; `as` renames
 
-`as` on a `from ... import` selection removes the otherwise necessary object-form import followed by an ordinary binding:
-
-```terrane
-namespace integer-coercions
-from /core/output import .print as print
-from /core/types import .int8 as int8, .uint8 as uint8
-```
-
-Each selection has the form `.imported-object as ordinary-name`. It resolves the same exported object that an unaliased `.imported-object` selection would resolve, but binds that object directly under `ordinary-name` in the current ordinary scope. The alias has no leading dot, does not additionally introduce the imported spelling into the local object-form scope, and preserves the imported object's identity and visibility checks.
-
-This replaces the following two-step pattern when only the ordinary names are wanted:
+A `from ... import` binds each selected object under an ordinary name in the scope containing the import. There is no separate declare-then-bind step and no second spelling for the same object.
 
 ```terrane
-from /core/output import .print
-from /core/types import .int8, .uint8
-print = .print
-int8 = .int8
-uint8 = .uint8
+namespace report-builder
+from /image/codec import resize, encode
 ```
 
-It is not declaration-modifier syntax. In particular, an import alias can never create or replace a program-global:
+`as` renames a selection, which is how a colliding import is disambiguated and how a shorter or clearer local name is chosen:
+
+```terrane
+from /image/codec import resize as scale
+from /core/types import int64 as word
+```
+
+The alias binds the exported object under the new name in the current scope, preserving the object's identity and visibility checks. Since imports now bind ordinary names, an import cannot shadow a name while leaving the original reachable under a second spelling; where both are wanted, alias one of them.
+
+Import syntax is not declaration-modifier syntax. An alias can never create or replace a program-global:
 
 ```terrane
 # rejected
-from /core/output import .print as global print
+from /core/output import print as global print
 ```
 
 Global creation or replacement remains an explicit `global` declaration, visibly separate from import:
 
 ```terrane
 namespace foo
-from /core/output import .print
-global print = .print
+from /core/output import print as core-print
+global print = core-print
 ```
 
-```terrane
-namespace foo
-from /core/output import .print as printfoo
-global print = printfoo
-```
-
-The aliased ordinary binding follows the same collision, duplicate-name, visibility, and current-scope rules as any other ordinary binding. Import syntax cannot smuggle `global`, `constant`, visibility, or any other declaration qualifier onto that binding.
+The bound name follows the same collision, duplicate-name, visibility, and scope rules as any other ordinary binding. Import syntax cannot smuggle `global`, `constant`, visibility, or any other declaration qualifier onto it.
 
 ## 12. Async, concurrency, and system profiles
 
@@ -743,6 +733,10 @@ These are ordinary objects supplied by selected packages/profiles, not universal
 ## 13. Version-one data, operating-system, and I/O objects
 
 These are proposed v1 standard-library objects. They require explicit imports and the relevant target capability; none is a universal prelude binding. The names below map the object relationships, while exact namespace paths and detailed semantics remain specification work.
+
+**These facilities are written in Terrane, not as Rust support crates.** The Rust core stays deliberately minimal, and the boundary runs per layer rather than per facility: Rust owns the layer that is irreducible or externally audited, Terrane owns the object model, policy, diagnostics, and integration above it. So a JSON facility may have a Rust byte-level scanner beneath a Terrane document model and descriptor mapping, and a TLS facility uses an audited protocol implementation beneath Terrane stream integration, trust store, ALPN, and connector policy — TLS itself is never reimplemented.
+
+A layer is Rust only when it is a syscall or ABI boundary, requires a guarantee the optimiser would destroy (constant-time comparison, memory ordering, zeroisation), is a large audited security-critical implementation, or is generated data rather than code. Everything else is Terrane, because a Rust support crate is permanently opaque to the compiler and forecloses optimisation of that facility forever. Core libraries reach Rust through the ordinary dependency mechanism in §14 — declaration plus an authored wrapper — so they receive no privileged path and double as worked examples of dependency use.
 
 ### 13.1 Date and time
 
