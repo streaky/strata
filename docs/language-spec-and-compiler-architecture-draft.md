@@ -40,7 +40,7 @@ The language is designed around a deliberately small set of ideas:
 - The default global namespace is extremely small and clean.
 - Engineers may define or replace their own global and namespace-local bindings, including facilities such as `print`; compile-time constructs such as `import` use separate structural extension slots.
 - Imports populate an object-facing namespace without automatically polluting the ordinary variable/function namespace.
-- Namespaces are tiered using whitespace; `/` anchors resolution at the root but is not a separator.
+- Namespace segments are separated by `/`, which also anchors resolution at the root; `../` ascends one tier and nests.
 - Ordinary syntax favours unshifted characters and readable words over punctuation gymnastics.
 - Control flow is conventional where conventional syntax is already good.
 - The language lowers to readable, deterministic Rust, then uses the normal Rust toolchain.
@@ -52,12 +52,8 @@ The language is designed around a deliberately small set of ideas:
 
 A representative program is:
 
-```text
+```terrane
 namespace my-app
-
-from /core output import .print
-
-print = .print
 
 function main
 
@@ -65,25 +61,37 @@ function main
   build-target = >native executable
   build-status = >ready to build
 
-  message = ': '.concat; project-name, build-target, build-status
+  message = ': '.join; project-name, build-target, build-status
   print; message
 ```
 
 Conceptually:
 
-1. `/` anchors the import at the root namespace.
-2. `core output` is a tiered namespace path.
-3. The import makes `.print` available as an object symbol.
-4. `print = .print` creates an ordinary namespace binding to the imported print object.
-5. `': '.concat` looks up the `concat` member on the `': '` text object.
-6. Invoking that member joins the arguments using its receiver as the separator.
-7. `print; message` invokes `print`’s default behaviour with `message` as its argument.
+1. `namespace my-app` declares this unit's namespace. Nested namespaces separate segments with `/`, as in `my-app/http/handlers`.
+2. No import appears because none is needed: `print` is one of the seven default prelude bindings, and every type descriptor is a construct available without import.
+3. `': '.join` looks up the `join` member on the `': '` text object.
+4. Invoking that member joins its arguments using the receiver as the separator, accepting any number of arguments. This is the shape of Python's `str.join` and PHP's `implode`: the separator supplies the member rather than being passed to it. `join` is distinct from `concat`, which appends its arguments to the receiver without a separator — `'a'.concat; 'b', 'c'` is `abc`.
+5. `print; message` invokes `print`’s default behaviour with `message` as its argument.
 
 The output is:
 
 ```text
 Terrane: native executable: ready to build
 ```
+
+Imports exist for the cases the prelude does not cover — reaching a namespaced object, or binding one under a different name:
+
+```terrane
+namespace my-app
+
+from /core/types import .int64 as word
+
+function main
+  size word = 4096
+  print; size
+```
+
+Here `/` anchors the path at the root and separates its segments, `.int64` is the object-form export, and `as word` binds it under an ordinary name in this scope. Writing `from /core/output import .print` would be redundant, since `print` is already available.
 
 ---
 
@@ -121,19 +129,19 @@ The language borrows Rust’s implementation ecosystem rather than rebuilding:
 
 The default experience should get out of the engineer’s way:
 
-```text
+```terrane
 x = 42
 ```
 
 When a contract matters, it can be added locally:
 
-```text
+```terrane
 x int = 42
 ```
 
 When conversion is intended, it is explicit:
 
-```text
+```terrane
 x = x.coerce; float
 ```
 
@@ -145,7 +153,7 @@ The language should not begin by pouring hundreds of functions, variables, class
 
 At the same time, the engineer should be able to define an actual project-global binding without fighting the language:
 
-```text
+```terrane
 global print = .print
 global log = .logger
 global database = .database;
@@ -201,7 +209,7 @@ Scalars, strings, functions, methods, classes, namespaces, importers, errors, co
 
 This does **not** require a universal heap allocation or a runtime vtable for every value.
 
-```text
+```terrane
 x = 42
 ```
 
@@ -217,19 +225,19 @@ when no observable source behaviour requires boxing.
 
 `42` is an `int`. It is not an “untyped scalar”.
 
-```text
+```terrane
 x = 42
 ```
 
 means that `x` currently contains an `int` object. A later assignment may bind `x` to a different type:
 
-```text
+```terrane
 x = forty two
 ```
 
 A type annotation constrains the binding:
 
-```text
+```terrane
 x int = 42
 ```
 
@@ -237,13 +245,13 @@ x int = 42
 
 The language does not silently turn `'42'` into `42` merely because an operation would otherwise fail.
 
-```text
+```terrane
 x int = '42'
 ```
 
 is a type error.
 
-```text
+```terrane
 x int = '42'.coerce; int
 ```
 
@@ -263,19 +271,19 @@ The absence of a qualifier normally means **minimal restriction**, not an invisi
 
 Examples:
 
-```text
+```terrane
 function render
 ```
 
 is public and dynamically typed by default.
 
-```text
+```terrane
 private function render
 ```
 
 narrows visibility.
 
-```text
+```terrane
 function add int; a int, b int
 ```
 
@@ -291,7 +299,7 @@ may require contracts throughout a selected scope.
 
 Ordinary assignment should not unexpectedly create shared mutable identity.
 
-```text
+```terrane
 b = a
 ```
 
@@ -299,7 +307,7 @@ means value assignment.
 
 Shared identity is explicit:
 
-```text
+```terrane
 b = ref a
 ```
 
@@ -307,7 +315,7 @@ The implementation should satisfy ordinary value assignment through copy-on-writ
 
 A transfer of ownership for a linear value is explicit:
 
-```text
+```terrane
 b = move a
 ```
 
@@ -341,7 +349,7 @@ The version-one compiler restricts identifier characters to ASCII letters and di
 
 Blocks are indentation-delimited.
 
-```text
+```terrane
 class widget
 
   function render
@@ -364,7 +372,7 @@ The formatter emits two spaces per level by default, although it may preserve or
 
 Empty declarations are legal.
 
-```text
+```terrane
 function not-yet
 
 class placeholder
@@ -407,9 +415,19 @@ Python-style triple-string “comments” are deliberately not supported. A stri
 An identifier begins with a letter and ends with a letter or digit. Between those ends it may contain:
 
 - letters and digits;
-- runs of the identifier-joiner glyphs `+`, `-`, `*`, `/`, `%`, `<`, and `>`.
+- runs of the identifier-joiner glyphs `+`, `-`, `*`, `%`, `<`, and `>`.
 
-Identifiers may end in digits: `http2`, `sha256`, and `vector4` are valid. The restriction applies only when a terminal digits-only unit is introduced by an identifier joiner. Compact forms such as `count-1`, `page/2`, and `x+4` are lexical errors rather than identifiers or arithmetic. Names such as `http2-client`, `ipv4/ipv6`, and `sha3-256sum` remain valid because each unit after a joiner contains a letter.
+`/` is deliberately **not** an identifier joiner. It is the namespace separator, and a character cannot be both without making `namespace foo/bar` ambiguous between one segment and two. Context-sensitive lexing is rejected here because it would contradict the rule below that a compact joiner sequence is always an identifier, permanently. The cost is that a name such as `ipv4/ipv6` must be written `ipv4-ipv6`.
+
+All user-declared names are lowercase: namespaces, functions, classes, interfaces, traits, fields, and bindings. The convention is kebab-case, so `parse-json` rather than `parseJson` or `parseJSON` — which removes the acronym-casing question permanently rather than leaving it to per-project taste.
+
+Case carries no semantic load in Terrane, which is what makes this affordable. Go uses case for export, Haskell for constructors, Rust for types against values; Terrane already distinguishes object-form `.x` from ordinary `x`, and expresses type membership through `is a`, so case is free to constrain.
+
+Uppercase parses and is then rejected with a diagnostic naming the lowercase form, plus a formatter fixit. It is never silently folded.
+
+Type parameters are the one carve-out and remain uppercase: `list of T`, `map of K, V`, `iteration-step of Item`. A type parameter is a different kind of name — it stands in for a thing rather than naming one — is never user-declared in version one, and never forms part of a path.
+
+Identifiers may end in digits: `http2`, `sha256`, and `vector4` are valid. The restriction applies only when a terminal digits-only unit is introduced by an identifier joiner. Compact forms such as `count-1` and `x+4` are lexical errors rather than identifiers or arithmetic. Names such as `http2-client`, `ipv4-ipv6`, and `sha3-256sum` remain valid because each unit after a joiner contains a letter.
 
 A compact letter-to-letter joiner sequence is always an identifier, permanently: `total-count`, `page-size`, and `width-height` never mean subtraction without surrounding operator whitespace, even if a same-spelled binding exists. Arithmetic must be written `total - count`. This asymmetry is intentional: kebab-case names require a stable lexical interpretation, while a terminal joiner-plus-digits form is reserved as an error because it is not needed for that naming convention.
 
@@ -420,13 +438,13 @@ print
 my-class
 http2-client
 foo+bar
-ipv4/ipv6
+ipv4-ipv6
 input>output
 ```
 
 The rule is lexical and universal for those glyphs: a maximal joiner run directly surrounded on both sides by identifier characters belongs to the identifier only when the following identifier unit contains a letter. A symbolic run cannot begin an identifier. When it begins a token after whitespace, a delimiter, or the start of a line and is immediately followed by an identifier character, it has behavioural/operator meaning rather than becoming part of the following name.
 
-```text
+```terrane
 a+b      # one identifier token
 a + b    # detached operator expression
 a +b     # the same operator, right-attached to its operand
@@ -481,7 +499,7 @@ The language should use contextual rather than gratuitously reserved keywords wh
 
 Quoted strings use single quotes by default:
 
-```text
+```terrane
 name = 'alice'
 separator = ' '
 empty = ''
@@ -500,7 +518,7 @@ At minimum, the following escapes are supported:
 
 An attached `>` in an expression-start position begins a **tail string**. Every source character after the marker through the physical end of that line is literal content; the line terminator is excluded:
 
-```text
+```terrane
 project-kind = >native executable
 message = >Hello! From, "Terrane"! >>
 send; recipient, >Error: file not found!
@@ -510,7 +528,7 @@ The second value is exactly `Hello! From, "Terrane"! >>`. Quotes, commas, operat
 
 The marker must begin an expression and must be lexically attached to the expression position; its content begins with the very next character, which may be whitespace. This keeps it distinct from infix comparison:
 
-```text
+```terrane
 is-larger = left > right
 message = >left > right
 ```
@@ -519,7 +537,7 @@ A tail string consumes the remainder of its line, so it is necessarily the final
 
 An exact `>>` in an expression-start position opens a **block string** whose content is the following indented block:
 
-```text
+```terrane
 message = >>
   Hello! From, "Terrane"!
 
@@ -537,13 +555,13 @@ Both tail and block strings are literal and non-interpolating. Once either form 
 
 A bare identifier always performs binding lookup:
 
-```text
+```terrane
 x = hello
 ```
 
 To create text, use one of the three explicit forms:
 
-```text
+```terrane
 inline = 'hello'
 tail = >Hello, from Terrane!
 multiline = >>
@@ -555,7 +573,7 @@ multiline = >>
 
 A numeric literal is a run of decimal digits with an optional single `.` fraction, or a `0x` hexadecimal run:
 
-```text
+```terrane
 count = 42
 ratio = 3.14
 mask = 0xff
@@ -603,7 +621,7 @@ The core punctuation has rigid jobs:
 
 Whitespace before a dot separates expressions; it is not a call form:
 
-```text
+```terrane
 print.concat   # member lookup
 print .concat  # invalid adjacency
 print; .concat # pass the dot-object explicitly
@@ -617,10 +635,10 @@ The formatter must preserve member attachment and must never turn invalid adjace
 
 ### 7.1 Tiered namespaces
 
-Namespace components are separated by whitespace in source.
+Namespace components are separated by `/` in source.
 
-```text
-namespace my-output formatters
+```terrane
+namespace my-output/formatters
 ```
 
 declares the tier:
@@ -631,62 +649,115 @@ root
     formatters
 ```
 
-`my-output` is one component because its hyphen is internal. `formatters` is its child because it is separated by whitespace.
+`my-output` is one component because its hyphen is internal. `formatters` is its child because it follows a `/` separator.
 
-The namespace hierarchy is logical and is not required to mirror the filesystem.
+The namespace hierarchy corresponds to the directory tree under the manifest's declared mappings, as specified below. It is not derived from filenames: a namespace is declared in its source unit, and the correspondence is checked rather than inferred.
 
 A file may contribute declarations to an existing namespace. Multiple files may contribute to the same namespace unless a package policy forbids it.
 
-Package metadata enumerates every source unit belonging to the package. The compiler parses that complete set before resolving namespace declarations; there is no filename-to-namespace convention and no on-demand search by namespace name. Incremental builds may avoid reparsing unchanged units from validated summaries, but adding or removing a source unit changes the package input and invalidates namespace assembly.
+Package metadata declares namespace-root to directory-root mappings, and discovery is bounded to those roots. The compiler resolves the complete source set before resolving namespace declarations; there is no on-demand search by namespace name at any point, and nothing is resolved lazily. Incremental builds may avoid reparsing unchanged units from validated summaries, but adding or removing a source unit changes the package input and invalidates namespace assembly.
 
 ### 7.2 Root anchoring
 
 `/` anchors namespace resolution at the root:
 
-```text
-from /image codec import .jpeg
+```terrane
+from /image/codec import .jpeg
 ```
 
-The `/` is not a separator. It means “start at root”; `image codec` remains a whitespace-tiered path.
+A leading `/` means “start at root”. The same character separates every subsequent segment, so `/image/codec` is one anchored path rather than an anchor plus a differently-delimited remainder.
 
 ### 7.3 Relative anchoring
 
 An unanchored path begins at the current namespace:
 
-```text
-from helpers formatters import .pretty
+```terrane
+from helpers/formatters import .pretty
 ```
 
-`..` ascends one tier before resolving child components:
+`/` is the only boundary marker. It anchors the root and separates every subsequent segment, so one delimiter expresses one concept:
 
-```text
-from .. shared import .config
+```terrane
+from /core/output import .print
+namespace my-app/http/handlers
 ```
 
-Repeated parents are explicit:
+`..` ascends one tier and composes as an ordinary path component:
+
+```terrane
+from ../shared import .config
+from ../../platform import .clock
+```
+
+The earlier whitespace-separated form used `/` for the root and a space for every boundary after it, which was two delimiters for one kind of boundary and degraded badly for repeated parents. It is replaced rather than aliased.
+
+### Directory correspondence and manifest mappings
+
+The namespace tree corresponds to a directory tree. A source unit whose declared namespace disagrees with its location is an error, unless the manifest declares that mapping explicitly. Making the correspondence checkable is the point: a misplaced file becomes a build error rather than a namespace that silently never resolves.
+
+The manifest maps a namespace root to a directory root:
 
 ```text
-from .. .. platform import .clock
+foo/bar  ->  ./some/path
 ```
+
+`foo/bar/dave` then resolves under `./some/path/dave`. The same mechanism serves two purposes: relocating your own sources, and describing a dependency whose internal layout is not your concern.
+
+- overlapping mappings resolve by longest matching namespace prefix;
+- two namespace roots mapped to the same directory is an error at manifest load, not at resolution, because a file there would have two valid namespaces;
+- a `.trn` file under a declared root but outside every mapping is an error, never silently ignored — silent omission is the failure this design exists to prevent;
+- a dependency's namespaces come from its own manifest and are never discovered by scanning its tree. That is a correctness boundary rather than an optimisation: a package's public namespace structure should not depend on its private file layout, and your build should not depend on either.
+
+Discovery is bounded to declared roots rather than scanning the whole tree, expansion is sorted, and ambiguity is an error. The compiler records the resolved source set in build metadata, so a build remains auditable and reproducible from that record even though the manifest no longer enumerates every file individually.
+
+Correspondence is directory-level, not file-level. A namespace spans as many source units as it likes, so every `.trn` file in one directory belongs to that directory's namespace; there is no file-per-declaration rule.
+
+### Namespace segment grammar
+
+A namespace segment is:
+
+```text
+[a-z][a-z0-9-]*
+```
+
+A lowercase ASCII letter, followed by letters, digits, and internal hyphens.
+
+This is a **distinct production from `identifier`, and a strict subset of it**. An identifier admits the joiner glyphs `+`, `*`, `%`, `<`, and `>`; a namespace segment admits only the hyphen, because the others are illegal or hazardous in a path component. `foo+bar` is therefore a legal identifier and an illegal segment. A parser must not reuse the identifier production here, or the restriction silently never applies.
+
+The segment grammar is an allowlist rather than a list of forbidden characters, which is what makes it complete: `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`, NUL, control characters, leading or trailing spaces, trailing dots, `.`, and `..` are all unformable rather than rejected. A blocklist would eventually omit one of them.
+
+Segments are lowercase because they map to directory names, and a rule permitting both cases would allow two segments differing only by case — distinct on Linux, colliding through the Win32 layer on Windows. Restricting the set removes the problem rather than managing it, and matches the kebab-case identifiers used everywhere else.
+
+Uppercase in a segment parses and is then rejected with a diagnostic naming the lowercase form, along with a formatter fixit. It is never silently folded: quietly rewriting `Foo` to `foo` would be reinterpreting input as a nearby construct, which the no-silent-repair principle forbids, and it would leave the corpus with many spellings for one namespace.
+
+A small set of whole names is reserved because it is composed entirely of legal characters and therefore invisible to the allowlist:
+
+```text
+con  prn  aux  nul  com1..com9  lpt1..lpt9
+```
+
+These are Windows device names, reserved with any extension. They are excluded now even though version one targets Linux first, because adding the restriction later would break any project that had used one.
+
+Namespace segments are ASCII permanently, independently of any future widening of the identifier set. A non-ASCII segment reaches the filesystem, where macOS normalises to NFD and Linux to NFC, so one identifier produces different bytes on disk depending on where the tree is checked out.
 
 For a current namespace of:
 
-```text
-namespace my-app http handlers
+```terrane
+namespace my-app/http/handlers
 ```
 
 the paths resolve as follows:
 
 | Source path | Result |
 |---|---|
-| `helpers` | `my-app http handlers helpers` |
-| `.. shared` | `my-app http shared` |
-| `.. .. platform` | `my-app platform` |
-| `/core output` | `root core output` |
+| `helpers` | `my-app/http/handlers/helpers` |
+| `../shared` | `my-app/http/shared` |
+| `../../platform` | `my-app/platform` |
+| `/core/output` | `core/output` from the root |
 
 Resolution never silently falls back from a failed relative path to the root. Ambiguous convenience is not worth non-local behaviour.
 
-Whitespace—not `/`—separates namespace components. A leading standalone `/` anchors a path at the root; an internal `/` may belong to one component under the identifier rule. Therefore `from /network ip import .address` has components `network` and `ip`, while `from network ipv4/ipv6 import .address` contains the single component `ipv4/ipv6`. Likewise, `use ip/v6/ipv4` names one package rather than three nested packages. Filesystem layout is package metadata, not source path punctuation.
+`/` separates namespace components and anchors a path at the root when it leads. It is not an identifier character, so `from /network/ip import .address` has components `network` and `ip`, and no component can itself contain a slash. A package name is a single component: `use ipv6-ipv4` names one package. The namespace tree corresponds to a directory tree under the manifest's declared mappings, so filesystem layout is checked against the declaration rather than being unrelated to it.
 
 ### 7.4 Namespaces as objects
 
@@ -714,21 +785,21 @@ Both resolve to objects. They are not different runtime species.
 
 This distinction exists to prevent imports from polluting the ordinary function/variable namespace.
 
-```text
-from /core output import .print
+```terrane
+from /core/output import .print
 ```
 
 makes `.print` available in the current object-form scope. It does not automatically bind the plain name `print`.
 
 The engineer chooses the ordinary binding:
 
-```text
+```terrane
 print = .print
 ```
 
 or a program-global one:
 
-```text
+```terrane
 global print = .print
 ```
 
@@ -747,8 +818,8 @@ A declaration creates:
 
 For example:
 
-```text
-namespace text formatters
+```terrane
+namespace text/formatters
 
 class concat
 ```
@@ -777,10 +848,10 @@ Shadowing is legal. Linters may report it according to project policy.
 
 At namespace top level, ordinary assignment binds in that namespace:
 
-```text
-namespace my-output formatters
+```terrane
+namespace my-output/formatters
 
-from /core output import .print
+from /core/output import .print
 print = .print
 ```
 
@@ -790,7 +861,7 @@ The binding is inherited by descendant namespace resolution unless hidden by a n
 
 `global` binds at the program assembly root:
 
-```text
+```terrane
 global print = .print
 global log = .logger
 global database = .database;
@@ -808,8 +879,8 @@ A package may not silently mutate the consuming program’s global bindings mere
 
 The default prelude is a deliberately small set of ordinary program-global bindings selected from the `/core` implementation. `/core` is an ordinary, explicitly addressable root package namespace, so its objects remain directly importable:
 
-```text
-from /core output import .print
+```terrane
+from /core/output import .print
 print = .print
 ```
 
@@ -817,23 +888,23 @@ That creates a namespace-local `print` even though the default prelude already s
 
 The version-one default ordinary bindings are:
 
-- `print`, sourced from `/core output`’s `.print`;
-- scalar type objects `int`, `float`, `bool`, `string`, `bytes`, and `none`, sourced from `/core types`.
+- `print`, sourced from `/core/output`’s `.print`;
+- scalar type objects `int`, `float`, `bool`, `string`, `bytes`, and `none`, sourced from `/core/types`.
 
 This is the complete default list. In particular, collections, filesystem access, concurrency, formatting helpers, and reflection helpers require imports. `import` remains structural syntax whose behaviour is supplied by the active importer object; it is not an ordinary prelude binding.
 
 Prelude bindings are defaults, not reserved names. Explicit program composition may replace any of them:
 
-```text
-from mylib tools import .myprint
+```terrane
+from mylib/tools import .myprint
 global print = .myprint
 ```
 
-After this declaration, ordinary lookup of `print` through the program-global tier resolves to `mylib tools`’ `.myprint`. The original remains available by explicitly importing `/core output`’s `.print`. A prelude replacement does not mutate `/core`, the imported object-form scopes, or namespace-local bindings that shadow the global.
+After this declaration, ordinary lookup of `print` through the program-global tier resolves to `mylib/tools`’ `.myprint`. The original remains available by explicitly importing `/core/output`’s `.print`. A prelude replacement does not mutate `/core`, the imported object-form scopes, or namespace-local bindings that shadow the global.
 
 A project may replace, extend, or disable the selected prelude through its build manifest. Packages cannot do so merely by being installed or imported; program-global composition remains an entry-project decision.
 
-Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/core collections`; `.file` comes from `/system files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
+Documentation fragments may omit imports when the import itself is not under discussion. Such omissions are editorial only: the fragment's fixture supplies explicit object-form imports. In this document `.list`, `.map`, `.set`, `.tuple`, `.range`, and `.entry` come from `/core/collections`; `.file` comes from `/system/files`; `.shared-map` comes from `/concurrency`; fixed-width numeric descriptors `.int8`, `.int16`, `.int32`, `.int64`, `.int128`, `.uint8`, `.uint16`, `.uint32`, `.uint64`, `.uint128`, `.float32`, and `.float64` come from `/core/types`; and example-only objects such as `.device-handle` come from the named example fixture. A complete source unit must write those imports. None of these objects belongs to the default prelude.
 
 ---
 
@@ -841,28 +912,28 @@ Documentation fragments may omit imports when the import itself is not under dis
 
 ### 8.1 Basic import form
 
-```text
-from /image codec import .jpeg
+```terrane
+from /image/codec import .jpeg
 ```
 
 imports an object-form symbol from a namespace.
 
 Multiple objects may be imported:
 
-```text
-from /image codec import .jpeg, .png, .webp
+```terrane
+from /image/codec import .jpeg, .png, .webp
 ```
 
 Object-form aliasing is allowed when collisions must be retained:
 
-```text
-from /core output import .print as .core-print
-from /pretty output import .print as .pretty-print
+```terrane
+from /core/output import .print as .core-print
+from /pretty/output import .print as .pretty-print
 ```
 
 The aliases remain dot-object symbols. Ordinary names are still bound explicitly:
 
-```text
+```terrane
 print = .pretty-print
 fallback-print = .core-print
 ```
@@ -871,7 +942,7 @@ fallback-print = .core-print
 
 The parser recognises the structural form:
 
-```text
+```terrane
 from path import objects
 ```
 
@@ -879,17 +950,17 @@ Its behaviour is supplied by the importer selected for the current compile-time 
 
 A namespace may select another importer for subsequent imports in that namespace and its descendants:
 
-```text
+```terrane
 namespace plugins
 
-from /build importers import .sandboxed-import
+from /build/importers import .sandboxed-import
 import with .sandboxed-import
 ```
 
 A program entry source may select one at the program-global construct tier:
 
-```text
-from /build importers import .content-addressed-import
+```terrane
+from /build/importers import .content-addressed-import
 global import with .content-addressed-import
 ```
 
@@ -970,7 +1041,7 @@ The result is an object value: perhaps a function object, class object, singleto
 
 A dot lookup alone does not imply invocation:
 
-```text
+```terrane
 print = .print
 ```
 
@@ -980,7 +1051,7 @@ binds the object.
 
 A semicolon invokes an object’s default behaviour:
 
-```text
+```terrane
 print; message
 ```
 
@@ -994,7 +1065,7 @@ For an ordinary object, the class may define whatever default invocation means.
 
 A zero-argument invocation is explicit:
 
-```text
+```terrane
 thing = .thing;
 ```
 
@@ -1010,13 +1081,13 @@ The result is the `concat` member object.
 
 Invoking it is ordinary default invocation:
 
-```text
+```terrane
 print.concat; a, b, c
 ```
 
 A zero-argument method invocation remains explicit:
 
-```text
+```terrane
 buffer.clear;
 ```
 
@@ -1024,13 +1095,13 @@ buffer.clear;
 
 A dot-object is an ordinary argument value and never invokes the expression to its left through adjacency. Calls always retain the explicit semicolon:
 
-```text
+```terrane
 print; (.render; report)
 ```
 
 This invokes `.render` with `report`, then passes its result to `print`. It differs from:
 
-```text
+```terrane
 print.render; report
 ```
 
@@ -1038,7 +1109,7 @@ which invokes the `render` member of the print object. The invalid spelling `pri
 
 An uninvoked dot-object can be passed without grouping:
 
-```text
+```terrane
 configure; .render
 ```
 
@@ -1046,13 +1117,13 @@ configure; .render
 
 An invocation has one argument list:
 
-```text
+```terrane
 callable; arguments
 ```
 
 Arguments may be positional or named. Positional arguments must precede named arguments:
 
-```text
+```terrane
 request; url, timeout=5, retries=2
 ```
 
@@ -1060,13 +1131,13 @@ Named arguments bind by parameter name rather than position. A call must not bin
 
 Because `-` has no call-specific role, subtraction remains an ordinary expression in an argument list:
 
-```text
+```terrane
 print; a - b
 ```
 
 Parentheses group an expression; they never create an alternative call syntax. Because invocation is introduced by `;`, these are equivalent:
 
-```text
+```terrane
 if is-enabled; config-vmap-stack
   ...
 
@@ -1076,7 +1147,7 @@ if (is-enabled; config-vmap-stack)
 
 The first is canonical when the call is the whole condition. Parentheses are useful only when they delimit a call inside a larger expression:
 
-```text
+```terrane
 if (flags & mask) != 0
   ...
 
@@ -1121,7 +1192,7 @@ A particular object need not implement every protocol.
 
 A class declaration creates a class object:
 
-```text
+```terrane
 class widget
 
   width int = 0
@@ -1139,7 +1210,7 @@ The implicit binding `this` refers to the current instance. It is not written as
 
 The class object’s default invocation constructs:
 
-```text
+```terrane
 widget = .widget; 100, 50
 ```
 
@@ -1147,7 +1218,7 @@ widget = .widget; 100, 50
 
 A function declaration creates a callable object:
 
-```text
+```terrane
 function greet; name string
   message = ' '.concat; 'hello', name
   print; message
@@ -1155,14 +1226,14 @@ function greet; name string
 
 It may be passed, stored, value-assigned, reflected, or invoked through its default behaviour:
 
-```text
+```terrane
 handler = greet
 handler; 'alice'
 ```
 
 A selected method is also an object:
 
-```text
+```terrane
 handler = server.handle
 handler; request
 ```
@@ -1173,7 +1244,7 @@ Functions declared inside a class are instance methods by default.
 
 A `static` qualifier declares a function on the class object rather than on instances:
 
-```text
+```terrane
 class widget
 
   static function from-config widget; config
@@ -1187,7 +1258,7 @@ Static state is state on the class object and follows the same visibility and co
 
 `drop` is the conventional deterministic destruction hook:
 
-```text
+```terrane
 class file-wrapper
 
   function drop
@@ -1206,7 +1277,7 @@ User code should not normally call `drop` directly. An explicit core operation m
 
 Declarations and members are public by default.
 
-```text
+```terrane
 class widget
 
   function render
@@ -1216,7 +1287,7 @@ The language gets out of the way where visibility does not matter.
 
 Explicit visibility remains available and meaningful:
 
-```text
+```terrane
 public function render
 private cache = .map;
 protected function update-layout
@@ -1250,8 +1321,8 @@ This is a lint/contract mode, not the default language experience.
 
 The fixed declaration grammar cannot grow a keyword for every ecosystem's storage, linkage, ABI, section, calling-convention, or code-generation requirement. An imported object may implement the constrained declaration-modifier protocol and appear in object form before a declaration:
 
-```text
-from /linux kernel import .per-cpu, .cacheline-aligned, .weak, .syscall
+```terrane
+from /linux/kernel import .per-cpu, .cacheline-aligned, .weak, .syscall
 
 .per-cpu global process-counts unsigned-long = 0
 .cacheline-aligned global tasklist-lock rwlock = .rwlock;
@@ -1292,10 +1363,10 @@ uint8 uint16 uint32 uint64 uint128
 float32 float64
 ```
 
-These descriptor objects are exported from `/core types` under their corresponding dot-object names. The default prelude binds only `int`, `float`, `bool`, `string`, `bytes`, and `none`; a program using a fixed-width type must import and bind it explicitly:
+These descriptor objects are exported from `/core/types` under their corresponding dot-object names. The default prelude binds only `int`, `float`, `bool`, `string`, `bytes`, and `none`; a program using a fixed-width type must import and bind it explicitly:
 
-```text
-from /core types import .int64
+```terrane
+from /core/types import .int64
 int64 = .int64
 
 count int64 = 42
@@ -1313,7 +1384,7 @@ The fixed-width integer names are distinct source types whose bounds and bit wid
 
 ### 11.2 Literals are typed objects
 
-```text
+```terrane
 x = 42          # int
 y = 3.14        # float
 enabled = true  # bool
@@ -1325,7 +1396,7 @@ An unconstrained whole-number literal is an `int` regardless of magnitude. The f
 
 For a signed fixed-width initializer whose source is a syntactic unary `-` applied directly to a whole-number literal, range checking applies to the signed mathematical value after negation, not to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected. Parenthesised constant expressions use the same compile-time constant evaluation and destination-range check; this rule introduces no general implicit conversion.
 
-```text
+```terrane
 large = 9223372036854775808
 wide int128 = 9223372036854775808
 too-large int64 = 9223372036854775808 # compile-time range error
@@ -1337,7 +1408,7 @@ This contextual literal check is not an implicit runtime conversion. The compile
 
 A binding without a type annotation may be rebound to another type:
 
-```text
+```terrane
 x = 42
 x = forty two
 ```
@@ -1350,7 +1421,7 @@ The compiler may still infer a concrete representation over regions where the ty
 
 A type expression follows the binding name. An initializer is optional:
 
-```text
+```terrane
 count int = 42
 ratio float = 0.5
 name string = 'alice'
@@ -1361,7 +1432,7 @@ result task-struct|none
 
 An initialized typed binding is immediately available. A typed declaration without `=` creates a binding with no value; it does not construct a default value, contain `none`, zero storage, or invoke the type. Every control-flow path must definitely assign a compatible value before any read, reference creation, move, member access, argument passing, or capture of that binding. Failure is a compile-time error.
 
-```text
+```terrane
 cpu int
 
 if use-current-cpu
@@ -1376,13 +1447,13 @@ The compiler performs flow-sensitive definite-assignment analysis across branche
 
 Untyped declarations without assignment do not exist: `value` alone remains an expression, not a declaration. `var` is not a declaration keyword. Initialization never requires ceremony:
 
-```text
+```terrane
 total int = 0
 ```
 
 Typed assignment is strict:
 
-```text
+```terrane
 ratio float = 42
 ```
 
@@ -1391,7 +1462,7 @@ is a type error because the value is an `int`.
 
 Coercion is a callable method family on the source value:
 
-```text
+```terrane
 x = 42
 x = x.coerce; float
 x = x.coerce.checked; int8
@@ -1421,7 +1492,7 @@ Locale-dependent parsing belongs to an imported formatting facility, never to `c
 
 `coerce` covers the conversions the language defines. Interpretation the language does not define is supplied by the program through `parse`, which always takes a callback as a required argument:
 
-```text
+```terrane
 function to-code int|int8; input string
   if input == 'foobar'
     return 10
@@ -1437,7 +1508,7 @@ There is no built-in destination-owned `parse`. The member exists to apply a pro
 
 The `checked` child catches a callback that throws and yields absence, which plain application of the same function cannot express:
 
-```text
+```terrane
 d.parse; to-code            # propagates a throw from the callback
 d.parse.checked; to-code    # int|int8|none
 ```
@@ -1448,18 +1519,20 @@ In version one the callback must be a statically resolvable function name rather
 
 A type is a language construct backed by a canonical object, not an independently instantiated value. Binding one names the construct; it does not produce a runtime value:
 
-```text
+```terrane
 target-type = float
 x = x.coerce; target-type
 ```
 
 `target-type` is a compile-time descriptor alias. It may appear anywhere the construct may appear — annotation position, a coercion destination, the right side of `is a` — and it may not appear where a runtime value is required. Passing it to `print`, using it in arithmetic, or handing it to a parameter expecting a value is rejected at the source span, because a descriptor has no display or value protocol in version one.
 
-A descriptor binding therefore has no runtime representation and lowers to nothing. Erasure is definitional rather than an optimisation the compiler is permitted to make: there is no storage to elide. A binding that emits a Rust name for a descriptor is a defect, not a fallback.
+A descriptor binding therefore requires no runtime storage, and a statically resolved use lowers to nothing. Erasure here is not an optimisation the compiler happens to apply; where the descriptor is statically known there is simply nothing to store.
+
+That is a statement about *ordinary value storage*, not a claim that descriptors never exist at runtime. A descriptor is a semantic object with canonical identity, and reflection or a dynamic descriptor use may require that identity to be materialised — at which point the compiler emits the canonical descriptor object rather than a variable slot holding one. The rule is that a descriptor is never an ordinary runtime value, not that it can never have a runtime representation. What is always a defect is emitting a plain Rust binding for a descriptor as if it were an ordinary value, which is what makes `d = int` lowering to `d = int;` wrong.
 
 A class object may be bound and used as a type expression:
 
-```text
+```terrane
 from /models import .user
 user-type = .user
 
@@ -1468,17 +1541,17 @@ person user-type = .user; data
 
 The compiler resolves type compatibility through the object’s type protocol.
 
-Alongside the concrete descriptors, `/core types` exports abstract category descriptors: `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the two identity roots `value` and `object`. `int` implements `integer` and `number` but no fixed-width contract; `int8` through `int128` implement `signed-fixed-integer`, `fixed-integer`, `integer`, and `number`; `uint8` through `uint128` implement `unsigned-fixed-integer` in place of the signed contract; `float`, `float32`, and `float64` implement `floating` and `number`. The roots `value` and `object` classify identity, copy, and ownership behaviour rather than numeric capability, so no arithmetic or conversion member attaches to them.
+Alongside the concrete descriptors, `/core/types` exports abstract category descriptors: `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the two identity roots `value` and `object`. `int` implements `integer` and `number` but no fixed-width contract; `int8` through `int128` implement `signed-fixed-integer`, `fixed-integer`, `integer`, and `number`; `uint8` through `uint128` implement `unsigned-fixed-integer` in place of the signed contract; `float`, `float32`, and `float64` implement `floating` and `number`. The roots `value` and `object` classify identity, copy, and ownership behaviour rather than numeric capability, so no arithmetic or conversion member attaches to them.
 
 These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype, and none creates an implicit assignment conversion. Like the concrete fixed-width descriptors, they are descriptor constructs available without import rather than prelude bindings: the default prelude's ordinary bindings are unchanged, and a construct name is usable in construct position directly while explicit import remains available for rebinding, aliasing, and shadowing. In particular, fixed-width integers are not assignment-compatible subclasses of `int`: that would contradict explicit coercion and the differing arithmetic result contracts.
 
-Type objects are canonical compiler-owned descriptors with stable type identity. The backing object is real — `.type` returns it, `is a` compares it, canonical identity survives rebinding under another name, and reflection exposes it later — but it is never independently constructed by source. Source-observable behavior must remain the same as naming the descriptor directly: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
+Type objects are canonical compiler-owned descriptors with stable type identity. They are semantic objects rather than ordinary values: the backing object is real — `.type` returns it, `is a` compares it, canonical identity survives rebinding under another name, and reflection exposes it — but it is never independently constructed by source and never occupies an ordinary variable slot. Source-observable behavior must remain the same as naming the descriptor directly: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
 
 ### 11.7 Union and parameterised types
 
 Union types use `|`. `none` is an ordinary union member rather than a special generic wrapper:
 
-```text
+```terrane
 name string|none = none
 value int|float = 42
 function parse int|parse-error; source string
@@ -1488,7 +1561,7 @@ The spelling `optional<thing>` is not part of the language: write `thing|none`. 
 
 The word `of` applies a parameterised type constructor using the language's fixed constructor-application grammar:
 
-```text
+```terrane
 items list of string = .list;
 stacks array of vm-struct|none, nr-cached-stacks
 callback function from int, borrowed-ref of opaque to int
@@ -1500,7 +1573,7 @@ Comma-separated arguments after `of` belong to the same type application. `|` fo
 
 Functions have one core type shape because functions are core objects:
 
-```text
+```terrane
 function to result
 function from int, string to boolean
 ref function from int to int
@@ -1541,7 +1614,7 @@ Version one reaches that runtime path in no ordinary program. Because it admits 
 
 Conditions use an object’s truth protocol:
 
-```text
+```terrane
 if value
   ...
 ```
@@ -1562,7 +1635,7 @@ none
 
 It is distinct from:
 
-```text
+```terrane
 false
 0
 ''
@@ -1583,7 +1656,7 @@ The language keeps three different questions separate:
 
 `is` observes semantic identity only. Copy-on-write backing storage, compiler boxing, interning, and other representation sharing are not observable through it. If either evaluated operand has no source-visible identity, the result is false, even for `x is x` or two evaluations of `items[0]`. Obtaining an explicit `ref` creates or preserves source-visible identity; comparing aliases of that identity is true.
 
-```text
+```terrane
 a = .list; 1, 2
 b = a
 c = ref a
@@ -1600,7 +1673,7 @@ c is d  # true: value assignment of a ref value preserves the referenced identit
 
 The parser treats `is a` as type membership only when the contextual `a` is followed by a complete type expression. At the end of an expression, or whenever no type expression follows, `a` remains an ordinary identifier and `left is a` is identity comparison against that binding. Thus `value is a serializable` is membership while `c is a` is identity. Formatters preserve the two-word membership spelling and do not rewrite identity comparisons.
 
-```text
+```terrane
 if value is a serializable
   print; value
 ```
@@ -1617,7 +1690,7 @@ Other ordinary values—including scalars, strings, collections, non-linear clas
 
 Exact runtime type is expressed through the value’s `type` descriptor. Requiring both exact type and value equality remains an explicit conjunction:
 
-```text
+```terrane
 left == right and left.type is right.type
 ```
 
@@ -1635,7 +1708,7 @@ Mutable values used as hash keys must either be rejected or use a stable immutab
 
 ### 12.2 Value assignment
 
-```text
+```terrane
 b = a
 ```
 
@@ -1647,14 +1720,14 @@ This guarantee applies uniformly to ordinary scalars, strings, collections, clas
 
 The normal implementation should share a value’s backing representation until mutation requires separation:
 
-```text
+```terrane
 a = .list; 1, 2, 3
 b = a
 ```
 
 At this point `a` and `b` may share the same storage. Neither binding has shared mutable identity.
 
-```text
+```terrane
 b.append; 4
 ```
 
@@ -1684,7 +1757,7 @@ Tracing and profiling must distinguish:
 
 ### 12.4 Explicit reference
 
-```text
+```terrane
 b = ref a
 ```
 
@@ -1692,7 +1765,7 @@ creates shared mutable identity for the logical value currently held by `a`.
 
 Mutations through either identity are visible through the other:
 
-```text
+```terrane
 a = .thing;
 b = ref a
 
@@ -1702,7 +1775,7 @@ print; a.value  # 10
 
 If `a` previously received its value through ordinary assignment, creating or mutating an explicit reference must not pull other independently mutable values into the reference group:
 
-```text
+```terrane
 original = .thing;
 copy = original
 alias = ref copy
@@ -1716,7 +1789,7 @@ The implementation separates `copy` from `original` when required, while `copy` 
 
 In this draft, `ref` aliases the logical value identity, not the lexical binding slot. Rebinding `a` later does not retarget `b`:
 
-```text
+```terrane
 a = .other;
 ```
 
@@ -1728,7 +1801,7 @@ Binding-slot aliases are deliberately not part of the core draft because they co
 
 `ref` is also a prefix type constructor for a binding whose contract requires source-visible shared identity:
 
-```text
+```terrane
 p ref task-struct
 p = ref task
 
@@ -1765,7 +1838,7 @@ Such a type may reject ordinary value assignment.
 
 Ownership transfer is explicit:
 
-```text
+```terrane
 b = move a
 ```
 
@@ -1792,7 +1865,7 @@ Linear objects:
 
 A constant binding cannot be rebound:
 
-```text
+```terrane
 constant answer = 42
 ```
 
@@ -1821,7 +1894,7 @@ Explicit references can.
 
 The core model therefore includes a weak reference form:
 
-```text
+```terrane
 parent = weak ref child
 ```
 
@@ -1854,21 +1927,21 @@ These guarantees permit ordinary lexical code to manage resources without requir
 
 A function with no declared arguments is:
 
-```text
+```terrane
 function main
   ...
 ```
 
 Parameters follow a semicolon:
 
-```text
+```terrane
 function add; a, b
   return a + b
 ```
 
 Return types follow function names, and parameter types follow parameter names:
 
-```text
+```terrane
 function add int; a int, b int
   return a + b
 ```
@@ -1877,20 +1950,20 @@ function add int; a int, b int
 
 A parameter with a default value is optional:
 
-```text
+```terrane
 function connect; host string, port int, timeout float = 5, retries int = 2
   ...
 ```
 
 Calls may provide optional parameters positionally:
 
-```text
+```terrane
 connect; host, port, 10, 3
 ```
 
 Named arguments are clearer when selected optional values are overridden:
 
-```text
+```terrane
 connect; host, port, timeout=10, retries=3
 ```
 
@@ -1898,7 +1971,7 @@ connect; host, port, timeout=10, retries=3
 
 A parameter followed by `...` collects remaining values:
 
-```text
+```terrane
 function collect; values ...
 ```
 
@@ -1910,7 +1983,7 @@ Only one variadic parameter is permitted.
 
 Defaults use ordinary assignment syntax:
 
-```text
+```terrane
 function request; url string, timeout float = 5, retries int = 0
 ```
 
@@ -1926,7 +1999,7 @@ This avoids Python-style shared mutable default behaviour.
 
 Arguments may be named when the function exposes stable parameter names:
 
-```text
+```terrane
 resize; width=100, height=50
 ```
 
@@ -1936,14 +2009,14 @@ A call must not bind the same parameter both positionally and by name.
 
 A return type follows the function name:
 
-```text
+```terrane
 function area int
   return this.width * this.height
 ```
 
 A function without a return type is dynamically returning. A function with several possible return types uses a union:
 
-```text
+```terrane
 function parse int|parse-error; source string
 ```
 
@@ -1951,7 +2024,7 @@ A function may return `none` explicitly or implicitly at the end of its body.
 
 Multiple logical results should normally be returned as an object or tuple:
 
-```text
+```terrane
 return .tuple; value, error
 ```
 
@@ -1959,7 +2032,7 @@ rather than inventing a second assignment protocol.
 
 ### 13.7 Early return
 
-```text
+```terrane
 if invalid
   return none
 ```
@@ -1970,7 +2043,7 @@ if invalid
 
 An anonymous function omits the name:
 
-```text
+```terrane
 handler = function; request
   return process; request
 ```
@@ -1979,7 +2052,7 @@ Closures capture outer values by value by default, following ordinary assignment
 
 To share mutable identity with a closure, capture or assign an explicit reference before creating it:
 
-```text
+```terrane
 counter-ref = ref counter
 
 handler = function
@@ -1998,7 +2071,7 @@ Mutually recursive functions are resolved at namespace analysis time. Their decl
 
 A `yield` form should be part of the core language:
 
-```text
+```terrane
 function numbers; maximum int
   for i = 0; i < maximum; i++
     yield i
@@ -2023,7 +2096,7 @@ Functions cannot declare type parameters in the first core language. See §11.8.
 
 ### 14.1 Conditions
 
-```text
+```terrane
 if condition
   ...
 
@@ -2033,7 +2106,7 @@ else
 
 Else-if is written plainly:
 
-```text
+```terrane
 if first
   ...
 
@@ -2048,21 +2121,21 @@ No trailing colon or parentheses are required.
 
 ### 14.2 `while`
 
-```text
+```terrane
 while condition
   ...
 ```
 
 ### 14.3 Collection iteration
 
-```text
+```terrane
 for item in things
   print; item
 ```
 
 Destructuring is permitted when the iterator yields a matching tuple/object shape:
 
-```text
+```terrane
 for key, value in mapping
   message = ': '.concat; key, value
   print; message
@@ -2072,14 +2145,14 @@ for key, value in mapping
 
 The same `for` construct supports explicit initialisation, condition, and update clauses:
 
-```text
+```terrane
 for i = 0; i < 10; i++
   print; i
 ```
 
 The update may be written without `++`:
 
-```text
+```terrane
 for i = 0; i < 10; i = i + 1
   print; i
 ```
@@ -2090,7 +2163,9 @@ The parser distinguishes the two forms by `in` versus semicolon-separated clause
 
 Postfix `++` and `--` are statement/update operations on compatible mutable numeric bindings.
 
-They return the previous value only if used in an expression; linters should discourage clever expression use.
+They are statements, not expressions, and produce no value. `value++` updates the binding; it cannot appear where a value is required, and there is no expression form yielding the previous or the updated value.
+
+This is deliberate. Expression-valued increment is the origin of C's read-modify-write sequencing problems, and it buys almost nothing: a program that wants the old value alongside the update writes the two operations, which is clearer than any evaluation-order rule the language could specify for the fused form. Postfix update selects the default `add` or `subtract` child of the arithmetic families (§17.6); a non-default overflow policy is written as an ordinary assignment.
 
 The forms lower through numeric increment/decrement protocols. For fixed-width receivers they retain checked overflow behaviour unless an explicitly wrapping operation is selected; for `int` they compute the exact mathematical successor or predecessor and promote representation as necessary.
 
@@ -2107,7 +2182,7 @@ A value-returning `break` may be considered for expression loops later, but is n
 
 Low-level control flow may name a statement position and jump to it:
 
-```text
+```terrane
 if error
   goto bad-fork-cleanup-mm
 
@@ -2133,7 +2208,7 @@ Pattern matching is useful enough to reserve `match`, but it is not required for
 
 A likely form is:
 
-```text
+```terrane
 match value
 
   case .success as result
@@ -2154,13 +2229,13 @@ The final grammar should be validated against ordinary object/type matching befo
 
 ### 15.1 Throwing
 
-```text
+```terrane
 throw error
 ```
 
 A constructed error may be thrown directly:
 
-```text
+```terrane
 throw .file-error; path
 ```
 
@@ -2172,7 +2247,7 @@ Strict mode may require an error-compatible object.
 
 ### 15.2 Catching
 
-```text
+```terrane
 try
   file = .file; path
   data = file.read;
@@ -2217,7 +2292,7 @@ Rust panic is reserved for unrecoverable invariant failure, explicit panic, or a
 
 ### 15.5 Standard error objects
 
-The `/core errors` namespace defines the standard error protocol and the following language-mandated error objects:
+The `/core/errors` namespace defines the standard error protocol and the following language-mandated error objects:
 
 | Object | Meaning | Operations that raise it | Required information |
 |---|---|---|---|
@@ -2235,7 +2310,7 @@ Each is a subtype or conforming instance of `.error`, is catchable through the o
 
 A standard panic object or operation should exist separately from `throw`.
 
-```text
+```terrane
 panic; impossible state
 ```
 
@@ -2279,13 +2354,13 @@ These remain objects and are not compiler-only species.
 
 A list may be constructed with ordinary invocation:
 
-```text
+```terrane
 items = .list; a, b, c
 ```
 
 Square-bracket syntax is recommended as compact sugar:
 
-```text
+```terrane
 items = [a, b, c]
 ```
 
@@ -2295,13 +2370,13 @@ On a standard UK keyboard, brackets do not violate the ordinary no-Shift ergonom
 
 A map with simple textual keys may use named construction arguments:
 
-```text
+```terrane
 users = .map; alice=user-a, bob=user-b
 ```
 
 Computed keys use entries:
 
-```text
+```terrane
 users = .map;
 users.set; key-a, user-a
 users.set; key-b, user-b
@@ -2309,7 +2384,7 @@ users.set; key-b, user-b
 
 or:
 
-```text
+```terrane
 users = .map; .entry; key-a, user-a
 ```
 
@@ -2317,7 +2392,7 @@ The exact multiline entry sugar may be refined by prototype use; the object and 
 
 ### 16.4 Sets and tuples
 
-```text
+```terrane
 unique = .set; a, b, c
 pair = .tuple; first, second
 ```
@@ -2330,7 +2405,7 @@ Lists, maps, and sets are value-semantic copy-on-write objects by default.
 
 Indexing uses brackets:
 
-```text
+```terrane
 first = items[0]
 value = mapping[key]
 ```
@@ -2345,7 +2420,7 @@ items[0] = replacement
 
 Ranges are objects:
 
-```text
+```terrane
 range = .range; 0, 10
 ```
 
@@ -2353,7 +2428,7 @@ A concise range form such as `0..10` may be supported.
 
 Slicing should use range objects rather than accumulating multiple special colon grammars:
 
-```text
+```terrane
 part = items[.range; 10, 20]
 ```
 
@@ -2392,13 +2467,39 @@ Grapheme and scalar counts generally require traversal, while the UTF-8 byte len
 
 String indexing should either return graphemes or be rejected in favour of explicit views; it must never ambiguously mean bytes on one target and characters on another.
 
+### String composition
+
+Two distinct members compose text. They share a subject but are not modes of one operation, so they are separate members rather than a family with children.
+
+```terrane
+'a'.concat; 'b', 'c'                    # 'abc'
+': '.join; 'a', 'b', 'c'                # 'a: b: c'
+```
+
+`concat` appends its arguments to the receiver in order, with nothing between them. `join` treats the receiver as the separator and its arguments as the parts, placing one separator between each adjacent pair. This is the shape of Python's `str.join` and PHP's `implode`: the separator supplies the member rather than being passed as an argument, which reads naturally because the separator is usually a literal and the parts usually are not.
+
+Both accept any number of arguments, and every argument is converted through canonical text display before composition. An argument whose type has no display protocol is a typed error under the ordinary display rules, not a silent rendering.
+
+Boundary cases are specified rather than left to implementation:
+
+| Call | Result |
+|---|---|
+| `x.concat;` | the receiver unchanged |
+| `x.join;` | the empty string |
+| `x.join; a` | `a`, with no separator |
+| `x.join; a, b` | `a`, separator, `b` |
+
+The separator never appears before the first part or after the last. `join` with a single argument therefore returns that argument's display text exactly, which makes it safe to build a list incrementally without special-casing the first element.
+
+Neither member mutates its receiver; both return a new `string`.
+
 ### 16.9 Bytes
 
 `bytes` is separate from `string`.
 
 No operation silently treats arbitrary bytes as valid text. Decoding and encoding are explicit object operations:
 
-```text
+```terrane
 text = data.decode; utf8
 data = text.encode; utf8
 ```
@@ -2443,7 +2544,7 @@ is an error unless a type explicitly defines that operation.
 
 Coercion remains explicit:
 
-```text
+```terrane
 1 + '2'.coerce; int
 ```
 
@@ -2465,7 +2566,7 @@ The implementation may perform these operations in `i64`, `i128`, or limb storag
 
 Integer `/` and `%` use Euclidean division. For divisor `b != 0`, quotient `q` and remainder `r` satisfy:
 
-```text
+```terrane
 a = b * q + r
 0 <= r < abs; b
 ```
@@ -2516,7 +2617,7 @@ The profiler and debugger identify the selected overflow mode in lowered Rust. A
 
 Cross-type integer conversion is explicit. The canonical throwing form remains:
 
-```text
+```terrane
 converted = value.coerce; int64
 ```
 
@@ -2524,7 +2625,7 @@ It returns the exact destination value when representable and otherwise throws `
 
 Every integer source exposes one canonical family:
 
-```text
+```terrane
 value.coerce.checked; T
 value.coerce.wrap; T
 value.coerce.saturate; T
@@ -2544,7 +2645,7 @@ Wrapping and saturation have no arithmetic meaning for an unbounded `int` destin
 
 Fields are ordinary object bindings declared in class scope:
 
-```text
+```terrane
 class request
 
   method string = 'GET'
@@ -2554,7 +2655,7 @@ class request
 
 Fields are public by default and may be narrowed:
 
-```text
+```terrane
 private cache = .map;
 protected state = none
 ```
@@ -2563,7 +2664,7 @@ protected state = none
 
 Single class inheritance is supported:
 
-```text
+```terrane
 class secure-request extends request
 ```
 
@@ -2577,7 +2678,7 @@ Assigning a subclass instance to a superclass-typed binding preserves the comple
 
 Interfaces describe required object protocols:
 
-```text
+```terrane
 interface serializable
 
   function serialize bytes
@@ -2585,7 +2686,7 @@ interface serializable
 
 A class declares implementation:
 
-```text
+```terrane
 class message implements serializable
 ```
 
@@ -2595,7 +2696,7 @@ Interfaces are type objects and can be used in annotations.
 
 Traits provide reusable behaviour:
 
-```text
+```terrane
 trait timestamped
 
   created-at = none
@@ -2606,7 +2707,7 @@ trait timestamped
 
 A class may use traits:
 
-```text
+```terrane
 class record uses timestamped
 ```
 
@@ -2638,7 +2739,7 @@ The compiler infers whether a method requires mutable access to `this`.
 
 A stricter mode may require explicit `mutating` declarations on public methods:
 
-```text
+```terrane
 mutating function append; value
 ```
 
@@ -2699,7 +2800,7 @@ The compiler must not insert a mutex silently.
 
 The engineer must select or construct an appropriate synchronised object:
 
-```text
+```terrane
 global cache = .shared-map;
 ```
 
@@ -2715,7 +2816,7 @@ Target profiles without threads reject it.
 
 `when build` selects declarations or statements from immutable build configuration:
 
-```text
+```terrane
 when build; config-vmap-stack
   function allocate-stack
     ...
@@ -2748,7 +2849,7 @@ Stage order is: load and validate the manifest and lockfile; load declared host 
 
 ### 21.1 Async functions
 
-```text
+```terrane
 async function fetch response; url string
   return await client.get; url
 ```
@@ -2757,7 +2858,7 @@ async function fetch response; url string
 
 ### 21.2 Await
 
-```text
+```terrane
 response = await request.send;
 ```
 
@@ -2850,7 +2951,7 @@ Capabilities include:
 
 If source semantics require an unavailable capability, the compiler reports the source construct and the requirement:
 
-```text
+```terrane
 error: this value requires heap allocation
 
   buffer = .dynamic-list;
@@ -2873,7 +2974,7 @@ Dynamically typed source may compile for a kernel when the compiler can lower th
 
 For example:
 
-```text
+```terrane
 x = 42
 x = x + 1
 ```
@@ -2934,7 +3035,7 @@ Raw pointers are specialised objects or explicit Rust values, not ambient behavi
 
 A safe wrapper may look like:
 
-```text
+```terrane
 pointer = .pointer; address, type=int32
 value = pointer.read;
 ```
@@ -2972,7 +3073,23 @@ Resource classes may be linear where copying is nonsensical.
 
 ## 23. Packages and dependencies
 
-### 23.1 Four dependency origins
+### 23.1 The dependency principle
+
+One rule governs every ecosystem below, and each subsequent subsection is a specialisation of it rather than a separate model:
+
+> **Dependency declarations name ecosystems and packages, not APIs. The build resolves the exact package and generates only the boundary machinery that Terrane source actually crosses. Tooling projects an advisory Terrane-visible surface, which is never compiler-authoritative.**
+
+Three consequences follow, and they apply uniformly to Rust crates, system libraries, and foreign runtimes.
+
+**Resolution is the source of truth.** A declaration names `serde` or `numpy`; it does not describe what those packages contain. The manifest, lockfile, selected features, target, and toolchain determine the interface that exists for a given build. Nothing in the language predefines it, because a predefined surface would be a second, weaker copy of the ecosystem's own type system, guaranteed to drift.
+
+**The build bridges only what is crossed.** Boundary machinery is generated for the specific calls, types, and values that Terrane source actually touches. A dependency is not projected wholesale into Terrane objects. This keeps generated output proportional to use, keeps compile times bounded by the program rather than by the dependency, and avoids committing the language to representing constructs it has no equivalent for.
+
+**Tooling advises; it does not define.** The language server may read package metadata, rustdoc output, or runtime introspection to offer completion, signature help, hover text, and documentation. That projection is advisory: it never alters compiler output, never invents members, and is never the authority on whether a program compiles. The authority is the ecosystem's own toolchain — Cargo and rustc for Rust, the C compiler and linker for system libraries, the runtime for a hosted language.
+
+Tooling must also not execute arbitrary package code merely to inspect it, and its cache identity must include everything that can change the resolved interface: manifest contents, lock checksum, enabled features, target triple, toolchain version, and source checksums.
+
+### 23.2 Four dependency origins
 
 The package system supports:
 
@@ -2983,7 +3100,7 @@ The package system supports:
 
 Example manifest/source declarations:
 
-```text
+```terrane
 use image-tools
 use rust serde
 use system libjpeg
@@ -2992,16 +3109,16 @@ use runtime python
 
 A native package is the default dependency kind.
 
-### 23.2 `use` versus `from ... import`
+### 23.3 `use` versus `from ... import`
 
 `use` declares a build dependency.
 
 `from ... import` brings object symbols from an available namespace into source scope.
 
-```text
+```terrane
 use image-tools
 
-from /image tools import .resize
+from /image/tools import .resize
 ```
 
 The distinction is intentional:
@@ -3009,7 +3126,7 @@ The distinction is intentional:
 - dependency graph composition is not the same operation as name binding;
 - installing a package must not automatically pollute source names.
 
-### 23.3 Package contents
+### 23.4 Package contents
 
 A package may contain:
 
@@ -3043,7 +3160,7 @@ A package may expose one coherent object namespace regardless of which implement
 
 Consumers should not need to know whether `.resize` is implemented in source, generated Rust, handwritten Rust, or a C library wrapper.
 
-### 23.4 Locking and reproducibility
+### 23.5 Locking and reproducibility
 
 The package manager must produce a lockfile covering:
 
@@ -3059,7 +3176,7 @@ The package manager must produce a lockfile covering:
 
 System packages are not inherently reproducible merely because their name is locked. Production builds should record the actual library version, ABI, headers/binding hash, and linker identity.
 
-### 23.5 Generated Cargo project
+### 23.6 Generated Cargo project
 
 The language compiler owns the generated Cargo manifests for ordinary projects.
 
@@ -3077,7 +3194,7 @@ Users may inspect the generated `Cargo.toml`.
 
 They should not normally need to maintain it separately unless a project deliberately takes ownership of the Rust layer.
 
-### 23.6 Build scripts
+### 23.7 Build scripts
 
 Declarative build metadata is preferred.
 
@@ -3085,23 +3202,27 @@ Arbitrary build scripts are powerful and therefore capability-gated.
 
 The build report must identify packages that executed code during compilation.
 
-### 23.7 Rust crates
+### 23.8 Rust crates
 
 A Rust crate dependency is declared with:
 
-```text
+```terrane
 use rust crate-name
 ```
 
-A native wrapper may expose its API as language objects.
+This adds a locked dependency to the generated Cargo graph. It does not describe the crate, and the compiler does not predefine an API surface for it.
 
-Direct crate access is also permitted through generated adapters when the Rust API can be represented safely.
+The resolved package, version, selected features, target, and lockfile determine the native interface available to a given build. Inline Rust and maintained Rust modules use that interface directly, in Rust, with Rust's own types. Cargo and rustc type-check it, and build diagnostics are source-mapped back to the dependency declaration or the native Rust span that produced them.
 
-Rust generics may be translated only into concrete generated instantiations or erased interface/object boundaries under §11.8; Rust traits, lifetimes, and errors map into the language model where their contracts remain representable. APIs that cannot be represented cleanly require a handwritten or generated Rust wrapper.
+The compiler does **not** project a crate into high-level Terrane objects. There is no generated adapter layer, no translation of Rust generics into instantiations, and no mapping of Rust traits, lifetimes, or error types into the Terrane model. Those constructs remain in Rust, where they are already well defined, and Terrane source touches them only inside a native Rust body. A projection layer would be a second, weaker copy of Rust's type system that drifts with every crate release, and it would make the compiler responsible for representing constructs the language has no equivalent for.
 
-### 23.8 System and C libraries
+A Terrane-visible wrapper is therefore something an author writes deliberately when they want one, not something the build produces automatically. Writing it is ordinary work: a Rust module that exposes a boundary the Terrane side crosses, with the ownership and error contracts stated at that boundary.
 
-```text
+Editor intelligence follows §23.1: the language server reads Cargo metadata and lock data for resolved package, version, feature, and target facts, and delegates Rust semantic questions to rust-analyzer over the exact generated and native module graph. Rustdoc output is a documentation fallback, never a second type checker. Everything it offers is advisory — lowering, Cargo, and rustc remain the authority on what compiles.
+
+### 23.9 System and C libraries
+
+```terrane
 use system libjpeg
 ```
 
@@ -3119,7 +3240,7 @@ C integration requires:
 
 Raw C calls are unsafe unless proven safe by a wrapper contract.
 
-### 23.9 C++
+### 23.10 C++
 
 Arbitrary C++ ABI integration is not a version-one goal.
 
@@ -3129,7 +3250,7 @@ C++ libraries should initially be consumed through:
 - a small C-compatible shim;
 - a handwritten Rust bridge.
 
-### 23.10 Exporting back to Rust and C
+### 23.11 Exporting back to Rust and C
 
 Language packages should be able to expose stable Rust and C APIs.
 
@@ -3144,13 +3265,13 @@ The compiler generates:
 
 This makes the language embeddable rather than a one-way consumer.
 
-### 23.11 Native interop versus foreign runtimes
+### 23.12 Native interop versus foreign runtimes
 
 Rust is Terrane’s canonical lowering language. Inline Rust and maintained Rust modules inhabit the generated program and may use its documented native representations directly. System/C libraries cross an ABI boundary but do not introduce another language runtime.
 
 A foreign runtime is different:
 
-```text
+```terrane
 use runtime python
 ```
 
@@ -3164,19 +3285,21 @@ The distinction is constitutional:
 
 Python is the first foreign runtime and the first adapter implementation. The initial adapter targets the CPython `libpython3` embedding API. Other adapters, such as Lua or JavaScript, may be added later through the same contracts; they are not version-one requirements.
 
-### 23.12 Runtime imports and Python objects
+### 23.13 Runtime imports and Python objects
 
 After declaring the runtime dependency, Python modules may expose object-form bindings:
 
-```text
+```terrane
 use runtime python
-from python numpy import .array
+from python/numpy import .array
 
 values = .array; 1, 2, 3, 4
 mean = values.mean;
 ```
 
-`from python ...` performs Python module resolution through the selected adapter and binds foreign object proxies in the object-form namespace. Attribute lookup and invocation use ordinary Terrane member syntax, but the semantic descriptor records a foreign transition.
+`from python/...` names a crossing point rather than importing an API. It does not project the module into Terrane, and the compiler holds no model of what `numpy` contains. The build generates boundary machinery for exactly the members the program crosses, and the language server projects an advisory surface from runtime introspection so an author can discover what is available — advisory in the §23.1 sense, never the authority on whether the program builds.
+
+Attribute lookup and invocation use ordinary Terrane member syntax, but the semantic descriptor records a foreign transition, and resolution of those members happens against the runtime that is actually present at build time rather than against a static declaration in the language.
 
 A Python object proxy is a Terrane object whose implementation, mutable identity, and lifetime belong to CPython. Reflection must identify that fact rather than presenting it as a native value:
 
@@ -3190,11 +3313,11 @@ Foreign proxies are identity-bearing resources, not ordinary COW values. They ca
 
 An adapter may expose a native Terrane wrapper with normal COW semantics when it can genuinely preserve those semantics—for example, through a verified immutable value or buffer-backed representation.
 
-### 23.13 Embedded foreign source
+### 23.14 Embedded foreign source
 
 An indented runtime block executes foreign source:
 
-```text
+```terrane
 python
   import numpy as np
 
@@ -3206,7 +3329,7 @@ The compiler preserves and source-maps the block, while the Python adapter compi
 
 Unlike inline Rust, an embedded Python block is never inserted into generated Rust as native code. Tooling must label it as foreign runtime execution and account for every transition.
 
-### 23.14 Conversion and zero-copy data
+### 23.15 Conversion and zero-copy data
 
 The Python adapter may convert scalars with direct, documented mappings:
 
@@ -3221,7 +3344,7 @@ none
 
 Conversion is not coercion merely because it appears obvious. Runtime calls perform only conversions declared by the adapter and visible through reflection. Collections default to explicit conversion because ownership, mutability, shape, and copying costs matter:
 
-```text
+```terrane
 py-values = values.coerce; python.list
 ```
 
@@ -3229,7 +3352,7 @@ Large data must have standard zero-copy paths where representation and lifetime 
 
 Build explanations and profiling must report whether a boundary conversion borrowed, wrapped, pinned, or copied data.
 
-### 23.15 Errors, lifetime, and threads
+### 23.16 Errors, lifetime, and threads
 
 A Python exception becomes a Terrane `.python-error` preserving:
 
@@ -3239,7 +3362,7 @@ A Python exception becomes a Terrane `.python-error` preserving:
 - the Terrane source location and boundary operation;
 - a causal chain when wrapped or rethrown.
 
-```text
+```terrane
 try
   result = python-object.do-thing;
 
@@ -3252,7 +3375,7 @@ Crossing the boundary may acquire the CPython GIL, allocate in Python’s manage
 
 The compiler and runtime must reject unsupported cross-thread use rather than silently adding locks or moving a proxy between interpreters.
 
-### 23.16 Runtime adapter contract
+### 23.17 Runtime adapter contract
 
 Every foreign runtime adapter defines:
 
@@ -3269,7 +3392,9 @@ Every foreign runtime adapter defines:
 
 Adapters expose these behaviours through Terrane’s object and binding model. They do not create a universal multi-language VM, and they do not make foreign semantics the defaults for native Terrane code.
 
-### 23.17 Deployment contract
+An adapter is boundary machinery, not a translation of the foreign ecosystem into Terrane. It defines how a crossing behaves — representation, lifetime, conversion, error and thread rules — and the build instantiates only the crossings a program actually contains. It does not enumerate, mirror, or typecheck the foreign package's API, which remains the responsibility of the foreign runtime and its own tooling. This is the same division §23.1 states for Rust: the ecosystem owns its interface, the build owns the boundary, and tooling advises across it.
+
+### 23.18 Deployment contract
 
 `use runtime python` adds an explicit runtime dependency. It does not preserve the pure Terrane/Rust guarantee that no language runtime is needed in production.
 
@@ -3308,7 +3433,7 @@ Callers need not change as an implementation moves down that path.
 
 ### 24.2 Inline Rust statement block
 
-```text
+```terrane
 function checksum uint64; data bytes
   rust
     checksum_impl(data)
@@ -3322,7 +3447,7 @@ The compiler inserts it into the generated Rust function and maps its spans back
 
 A Rust block used as an expression returns its final Rust expression:
 
-```text
+```terrane
 result int = rust
   native_calculation()
 ```
@@ -3331,7 +3456,7 @@ The compiler checks that the Rust result can cross back into the declared/source
 
 ### 24.4 Inline Rust in classes
 
-```text
+```terrane
 class fast-buffer
 
   function checksum uint64
@@ -3365,7 +3490,7 @@ Generated Rust uses a deterministic, injective encoding. A suitable canonical sc
 ```text
 my-value    -> __terrane_my_x2d_value
 foo+bar     -> __terrane_foo_x2b_bar
-ipv4/ipv6   -> __terrane_ipv4_x2f_ipv6
+ipv4-ipv6   -> __terrane_ipv4_x2d_ipv6
 ```
 
 No two distinct source spellings may produce the same encoded spelling. Scope/module identity is represented separately and deterministically where Rust requires further disambiguation; it must never repair a lossy spelling conversion with an arbitrary suffix.
@@ -3405,7 +3530,7 @@ There is no C-style FFI boundary merely because one function was handwritten.
 Tooling should support:
 
 ```text
-terrane eject-rust /image codec resize
+terrane eject-rust /image/codec resize
 ```
 
 This copies a generated implementation into a maintained native Rust module, adds the appropriate bridge metadata, and replaces source generation for that object.
@@ -3422,7 +3547,7 @@ A language in which everything is an object requires a coherent way to inspect t
 
 Reflection should be accessed through a normal object:
 
-```text
+```terrane
 info = reflect; value
 ```
 
@@ -3487,7 +3612,7 @@ This is one of the language’s defining features.
 
 In a development build:
 
-```text
+```terrane
 info = reflect; my-function
 print; info.compile.rust
 ```
@@ -3496,7 +3621,7 @@ returns the generated Rust corresponding to that build.
 
 A live frame may be inspected:
 
-```text
+```terrane
 frame = debug.current-frame;
 print; frame.compile.rust
 ```
@@ -3667,7 +3792,7 @@ foreign data copied       8.2 mb
 
 The toolchain should connect cost to source semantics:
 
-```text
+```terrane
 unexpected cost:
   buffer was physically copied 14,284 times
 
@@ -3690,7 +3815,7 @@ This is more valuable than merely producing a flame graph.
 A build may request:
 
 ```text
-terrane explain /image codec resize
+terrane explain /image/codec resize
 ```
 
 and receive:
@@ -3818,7 +3943,7 @@ Examples:
 
 **Known and potentially widening integers**
 
-```text
+```terrane
 x = 42
 x = x + 1
 ```
@@ -3829,7 +3954,7 @@ The erased `int` representation keeps the small case compact and boxes or otherw
 
 **Known finite alternatives**
 
-```text
+```terrane
 if condition
   x = 42
 else
@@ -3844,7 +3969,7 @@ A value crossing an open plugin/reflection boundary may lower to a boxed/tagged 
 
 **Typed contract**
 
-```text
+```terrane
 x float = 0.5
 ```
 
@@ -3872,14 +3997,14 @@ Dynamic default invocation uses generated callable traits/tables only where need
 
 The source expressions:
 
-```text
+```terrane
 message = ' '.concat; a, b, c
 print; message
 ```
 
 have a stable semantic lowering:
 
-```text
+```terrane
 concat-member = member-lookup ' ', concat
 message = default-invoke concat-member with:
   receiver: ' '
@@ -4084,7 +4209,7 @@ A Rust error should normally be shown in source terms.
 
 A generated borrow/move error might become:
 
-```text
+```terrane
 error: buffer is no longer available here
 
   42 | request.send; move buffer
@@ -4102,7 +4227,7 @@ rust diagnostic:
 
 A trait error might become:
 
-```text
+```terrane
 error: this object cannot cross a task boundary
 
 value:
@@ -4296,7 +4421,7 @@ The formatter is essential because whitespace around dots and infix operators is
 
 It must preserve and visually regularise:
 
-```text
+```terrane
 print.concat
 print; .concat
 foo+bar
@@ -4458,7 +4583,7 @@ Diagnostics should state semantic consequences, not merely parser tokens.
 
 For invalid dot adjacency:
 
-```text
+```terrane
 error: whitespace does not invoke print
 
 did you mean:
@@ -4532,9 +4657,9 @@ Foreign packages execute with the authority of their host runtime; a Terrane obj
 
 ## 34. Provisional grammar sketch
 
-This is normative EBNF for the covered core forms. Names in capitals are layout tokens emitted by the lexer. Lexical terminals such as `letter`, `digit`, `literal`, `namespace-component`, and the opaque foreign/Rust/text bodies are defined by their dedicated sections. Semantic restrictions and layout notes remain outside the machine-readable fence.
+This is normative EBNF for the covered core forms. Names in capitals are layout tokens emitted by the lexer. Lexical terminals such as `letter`, `lowercase-letter`, `digit`, `literal`, and the opaque foreign/Rust/text bodies are defined by their dedicated sections. `namespace-segment` is given inline below because it is a strict subset of `identifier` rather than a reuse of it. Semantic restrictions and layout notes remain outside the machine-readable fence.
 
-```text
+```terrane
 identifier-unit
   = letter { letter | digit }
 
@@ -4549,7 +4674,7 @@ identifier-joiner-run
   = identifier-joiner { identifier-joiner }
 
 identifier-joiner
-  = "+" | "-" | "*" | "/" | "%" | "<" | ">"
+  = "+" | "-" | "*" | "%" | "<" | ">"
 
 comment
   = line-comment
@@ -4565,14 +4690,17 @@ object-name
   = "." identifier
 
 namespace-declaration
-  = "namespace" namespace-component { namespace-component }
+  = "namespace" namespace-segment { "/" namespace-segment }
 
 namespace-path
-  = [ namespace-anchor ] namespace-component { namespace-component }
+  = [ "/" | relative-prefix ]
+    namespace-segment { "/" namespace-segment }
 
-namespace-anchor
-  = "/"
-  | ".." { ".." }
+relative-prefix
+  = "../" { "../" }
+
+namespace-segment
+  = lowercase-letter { [ "-" ] ( lowercase-letter | digit ) }
 
 dependency-declaration
   = "use" package-name
@@ -4580,7 +4708,7 @@ dependency-declaration
   | "use" "runtime" runtime-name
 
 package-name
-  = identifier { namespace-component }
+  = namespace-segment
 
 runtime-name
   = identifier
@@ -4684,6 +4812,7 @@ statement
   | class-declaration
   | function-declaration
   | assignment-statement
+  | update-statement
   | expression
   | if-statement
   | while-statement
@@ -4704,6 +4833,9 @@ statement
 
 assignment-statement
   = assignment-target "=" expression
+
+update-statement
+  = assignment-target ( "++" | "--" )
 
 assignment-target
   = primary-expression
@@ -4726,6 +4858,7 @@ for-target
 
 for-clause
   = assignment-statement
+  | update-statement
   | expression
 
 try-statement
@@ -4819,7 +4952,7 @@ prefix-expression
 
 postfix-expression
   = primary-expression
-    { "." identifier | "[" expression "]" | "++" | "--" }
+    { "." identifier | "[" expression "]" }
     [ call-clause ]
 
 primary-expression
@@ -4859,7 +4992,7 @@ Each function qualifier may appear at most once, and incompatible combinations a
 
 The `is a` alternative is selected only when `a` is followed by a complete `type-expression`; otherwise the comparison alternative treats `a` as an ordinary identifier. `call-free-expression` is the expression grammar instantiated with the optional `call-clause` on `postfix-expression` disabled. This parameterisation avoids duplicating every precedence production; parser-generator sources must expand it mechanically. A parenthesised `expression` re-enables calls, which is why nested invocation requires grouping.
 
-The semantic resolver checks the first component of a `from` path against declared runtime names before native namespace resolution. Thus `from python numpy import .array` is syntactically an ordinary `from-import`, but resolves through the adapter introduced by `use runtime python`. A runtime name at statement position begins an opaque, indentation-delimited `foreign-source-block`; its adapter owns the nested grammar and source map.
+The semantic resolver checks the first component of a `from` path against declared runtime names before native namespace resolution. Thus `from python/numpy import .array` is syntactically an ordinary `from-import`, but resolves through the adapter introduced by `use runtime python`. A runtime name at statement position begins an opaque, indentation-delimited `foreign-source-block`; its adapter owns the nested grammar and source map.
 
 The parser emits every `constructor-argument` as one unified syntax-node kind because identifiers and other forms may resolve as types or compile-time values. Constructor signatures classify those nodes during semantic analysis. Function types associate to the right; grouping overrides that association.
 
@@ -4891,7 +5024,7 @@ Compound clauses (`else`, `catch`, `finally`, `case`) align with the construct t
 
 A call clause owns the remainder of its containing logical expression. Its arguments cannot contain an ungrouped call clause; nested calls are grouped:
 
-```text
+```terrane
 call; a - b, (convert; value)
 ```
 
@@ -4903,7 +5036,7 @@ The semicolons separating a three-clause `for` are owned by that statement, so c
 
 ### 35.1 Namespace-local output override
 
-```text
+```terrane
 namespace my-app
 
 from /my-output import .print
@@ -4917,29 +5050,29 @@ Only `my-app` and descendants see this `print` unless it is promoted globally.
 
 ### 35.2 Program-global output override
 
-```text
-from mylib tools import .myprint
+```terrane
+from mylib/tools import .myprint
 global print = .myprint
 ```
 
-Ordinary global lookup of `print` now resolves to `mylib tools`’ function. The core implementation has no sacred claim on the binding and remains available through `from /core output import .print`.
+Ordinary global lookup of `print` now resolves to `mylib/tools`’ function. The core implementation has no sacred claim on the binding and remains available through `from /core/output import .print`.
 
 ### 35.3 Custom importer
 
-```text
+```terrane
 namespace plugins
 
-from /build importers import .sandboxed-import
+from /build/importers import .sandboxed-import
 import with .sandboxed-import
 
-from third-party plugin import .plugin
+from third-party/plugin import .plugin
 ```
 
 The final import is resolved by `.sandboxed-import`.
 
 ### 35.4 Strict conversion
 
-```text
+```terrane
 function read-ratio float; input
   ratio float = input.coerce; float
   return ratio
@@ -4949,7 +5082,7 @@ An invalid conversion throws `.coercion-error`.
 
 ### 35.5 Value, ref, and move
 
-```text
+```terrane
 a = .list; 1, 2, 3
 
 b = a
@@ -4965,7 +5098,7 @@ worker-handle = move handle
 
 ### 35.6 Both forms of `for`
 
-```text
+```terrane
 for item in things
   print; item
 
@@ -4975,7 +5108,7 @@ for i = 0; i < 10; i++
 
 ### 35.7 Error handling
 
-```text
+```terrane
 function load bytes; path string
   try
     file = .file; path
@@ -4990,7 +5123,7 @@ function load bytes; path string
 
 ### 35.8 Inline Rust hot path
 
-```text
+```terrane
 function checksum uint64; data bytes
   rust
     fast_checksum(data.as_slice())
@@ -5000,7 +5133,7 @@ Callers do not care that the implementation is handwritten Rust.
 
 ### 35.9 Reflection and Rust inspection
 
-```text
+```terrane
 info = reflect; checksum
 
 print; info.source
@@ -5010,10 +5143,10 @@ print; info.compile.rust-type
 
 ### 35.10 Embedded Python
 
-```text
+```terrane
 use runtime python
 
-from python numpy import .array
+from python/numpy import .array
 
 values = .array; 1, 2, 3, 4
 print; values.mean;
@@ -5028,8 +5161,8 @@ The imported NumPy array is a foreign proxy with explicit runtime reflection. Th
 
 ### 35.11 Kernel-oriented code
 
-```text
-namespace kernel memory
+```terrane
+namespace kernel/memory
 
 linear class mapped-page
 
@@ -5050,7 +5183,7 @@ These examples illustrate intent, not a fixed runtime ABI.
 
 Source:
 
-```text
+```terrane
 count int = 42
 ```
 
@@ -5064,7 +5197,7 @@ let mut count: i64 = 42;
 
 Source:
 
-```text
+```terrane
 value = 9223372036854775807
 value++
 ```
@@ -5089,7 +5222,7 @@ The `i64` overflow branch is ordinary representation promotion, not a source thr
 
 Source:
 
-```text
+```terrane
 if condition
   value = 42
 else
@@ -5109,7 +5242,7 @@ enum ValueAtNode123 {
 
 Source:
 
-```text
+```terrane
 message = ' '.concat; a, b, c
 print; message
 ```
@@ -5131,7 +5264,7 @@ The real compiler may inline the concatenation or stream directly when source-ob
 
 Source:
 
-```text
+```terrane
 b = a
 ```
 
@@ -5147,7 +5280,7 @@ The profiler still reports one semantic assignment and zero physical copies unti
 
 Source:
 
-```text
+```terrane
 b = ref a
 ```
 
@@ -5168,18 +5301,18 @@ The standard library should remain namespaced and capability-oriented.
 A plausible hierarchy is:
 
 ```text
-/core types
-/core output
-/core errors
-/core reflection
-/core collections
-/text formatters
-/text encoding
-/system files
-/system process
-/system memory
-/system time
-/system observability
+/core/types
+/core/output
+/core/errors
+/core/reflection
+/core/collections
+/text/formatters
+/text/encoding
+/system/files
+/system/process
+/system/memory
+/system/time
+/system/observability
 /network
 /concurrency
 /testing
@@ -5204,12 +5337,12 @@ The first serious prototype should prove all of these:
 Unless a snippet explicitly tests unresolved lookup, the conformance harness supplies the imports named by that snippet's fixture. Prose examples outside the harness must either show their imports or state the standard namespace from which omitted object symbols come; object-form names are never implicitly added to the prelude.
 
 1. `print.concat` and `.concat` parse as member and object-form expressions, while `print .concat` is rejected.
-2. `namespace my-output formatters` and `from /my-output formatters` resolve symmetrically.
-3. `/` anchors root and is never treated as a namespace separator.
-4. `ipv4/ipv6` is one identifier and one namespace/package component, while `ipv4 / ipv6` is division.
+2. `namespace my-output/formatters` and `from /my-output/formatters` resolve symmetrically.
+3. `/` anchors the root and separates every segment; `../` and `../../` ascend one and two tiers; an uppercase or reserved segment is rejected with a diagnostic naming the correction.
+4. `/` is the namespace separator and never an identifier character; `ipv4 / ipv6` is division and `ipv4-ipv6` is the identifier form.
 5. `a+b`, `a + b`, `a+ b`, and `a +b` respectively tokenise as an identifier, an addition, an undeclared-postfix error, and an addition; `count-1` is a lexical error suggesting `count - 1`, while `sha256` remains an identifier.
 6. `foo+bar`, `foobar`, and `fooplusbar` resolve independently and map injectively to distinct valid Rust identifiers.
-7. `.. foo` resolves one tier upward.
+7. `../foo` resolves one tier upward.
 8. importing `.print` does not bind `print`.
 9. `print = .print` binds namespace-locally.
 10. `global print = .print` replaces the program-global binding.
@@ -5274,8 +5407,8 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 69. `coerce`, `coerce.checked`, `coerce.wrap`, and `coerce.saturate` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, fixed-width-to-`int` conversion cannot overflow, and the obsolete flat spellings are rejected.
 70. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `.negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
 71. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
-72. fixed-width numeric descriptor objects resolve only through explicit `/core types` object-form imports and ordinary bindings; they are not added to the exact default prelude or treated as reserved type words.
-73. canonical type descriptors are real values with stable identity, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative even when the lowering erases the runtime descriptor.
+72. fixed-width numeric descriptor objects resolve only through explicit `/core/types` object-form imports and ordinary bindings; they are not added to the exact default prelude or treated as reserved type words.
+73. canonical type descriptors are semantic objects with stable identity rather than ordinary values, requiring no runtime storage when statically resolved and materialising only where reflection or dynamic descriptor use demands it, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative.
 74. numeric-to-float coercion rounds to nearest with ties to even and reports precision loss through the destination type rather than an error, unrepresentable float destinations and unparseable text throw `.coercion-error`, and parsing coercion accepts exactly the destination's canonical text-display spelling.
 
 ---
@@ -5294,7 +5427,7 @@ The current draft treats:
 
 as object lookup and:
 
-```text
+```terrane
 .thing;
 ```
 
@@ -5366,8 +5499,8 @@ The following are the design’s constitutional layer. They govern the entire do
 10. `move` is the visible ownership-transfer operation.
 11. Imports do not automatically pollute ordinary bindings.
 12. Plain names and dot-object names are distinct lookup views over objects.
-13. Namespace tiers are whitespace-separated.
-14. `/` only anchors root; it is not a separator.
+13. Namespace segments are `/`-separated, lowercase `[a-z][a-z0-9-]*`, and a strict subset of `identifier`.
+14. `/` is both the root anchor and the segment separator, and is never an identifier character.
 15. Operator-bearing identifiers and spaced infix expressions are lexically distinct and formatter-protected.
 16. `foo.bar`, `.bar`, and `foo; .bar` are member lookup, object lookup, and explicit argument passing; whitespace adjacency never invokes.
 17. The global namespace is small by default and engineer-controlled.

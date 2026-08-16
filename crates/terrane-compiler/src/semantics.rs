@@ -17,6 +17,8 @@ pub enum SymbolKind {
     Binding,
     Function,
     TypeDescriptor,
+    Interface,
+    ErrorObject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +57,7 @@ pub struct SemanticPackage {
     pub namespaces: BTreeMap<String, Namespace>,
     pub globals: BTreeMap<String, Symbol>,
     pub prelude_bindings: BTreeMap<String, Symbol>,
+    pub descriptor_constructs: BTreeMap<String, Symbol>,
     pub units: Vec<SemanticUnit>,
     pub bootstrap_version: &'static str,
 }
@@ -181,7 +184,7 @@ pub struct SemanticUnit {
 impl SemanticUnit {
     /// Returns the compiler-resolved value type for an expression when it is statically known.
     pub(crate) fn inferred_value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
-        infer_value_type(self, node, &BTreeMap::new(), &self.typed_bindings)
+        infer_value_type(self, node, &self.typed_bindings)
             .ok()
             .flatten()
     }
@@ -286,7 +289,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     for unit in &units {
         if matches!(
             unit.namespace.as_str(),
-            "/core/output" | "/core/types" | "/core/errors" | "/collections"
+            "/core/output" | "/core/types" | "/core/errors" | "/core/collections"
         ) {
             let span = unit
                 .tree
@@ -322,6 +325,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     } else {
         BTreeMap::new()
     };
+    let descriptor_constructs = bootstrap_descriptor_constructs();
 
     let mut semantic = SemanticPackage {
         identity: package.identity.clone(),
@@ -329,6 +333,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         namespaces,
         globals,
         prelude_bindings,
+        descriptor_constructs,
         units,
         bootstrap_version: BOOTSTRAP_VERSION,
     };
@@ -745,6 +750,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
                 if package
                     .resolve_ordinary_at(unit, node.span.start, name)
                     .is_none()
+                    && !package.descriptor_constructs.contains_key(name)
                 {
                     return Err(failure(
                         &unit.source,
@@ -956,7 +962,7 @@ fn validate_call_nodes<'a>(
             .get(1)
             .is_some_and(|member| node_text(&unit.source, member) == "length")
     {
-        infer_value_type(unit, node, &BTreeMap::new(), scoped_bindings)?;
+        infer_value_type(unit, node, scoped_bindings)?;
     }
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
@@ -992,7 +998,7 @@ fn validate_integer_coercion_call(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::CallExpression {
-        infer_integer_coercion_type(unit, node, &BTreeMap::new(), bindings)?;
+        infer_integer_coercion_type(unit, node, bindings)?;
     }
     Ok(())
 }
@@ -1145,7 +1151,7 @@ fn validate_call_arguments(
         }
         if let Some(expected) = parameter.value_type {
             let value = argument.children.last().unwrap_or(argument);
-            if let Some(actual) = infer_value_type(unit, value, &BTreeMap::new(), bindings)?
+            if let Some(actual) = infer_value_type(unit, value, bindings)?
                 && actual != ValueType::Scalar(expected)
             {
                 return Err(failure(
@@ -1210,21 +1216,13 @@ fn call_site_bindings(
     bindings
 }
 
-fn prelude_descriptor_aliases(package: &SemanticPackage) -> BTreeMap<String, ScalarType> {
-    if !package.prelude {
-        return BTreeMap::new();
-    }
-    ScalarType::ALL
-        .into_iter()
-        .map(|ty| (ty.source_name().to_owned(), ty))
-        .collect()
-}
-
-fn prelude_descriptor_alias_history(
+fn descriptor_construct_alias_history(
     package: &SemanticPackage,
 ) -> BTreeMap<String, Vec<DescriptorAlias>> {
-    prelude_descriptor_aliases(package)
-        .into_iter()
+    package
+        .descriptor_constructs
+        .iter()
+        .filter_map(|(name, symbol)| Some((name.clone(), symbol.descriptor_type()?)))
         .map(|(name, value_type)| {
             (
                 name,
@@ -1241,7 +1239,7 @@ fn prelude_descriptor_alias_history(
 fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
     for index in 0..package.units.len() {
         let unit = &package.units[index];
-        let mut alias_history = prelude_descriptor_alias_history(package);
+        let mut alias_history = descriptor_construct_alias_history(package);
         let mut functions = Vec::new();
         collect_type_declarations(
             package,
@@ -1255,6 +1253,7 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         package.units[index].functions = functions;
     }
     populate_namespace_function_contracts(package);
+    validate_descriptor_value_uses(package)?;
 
     for index in 0..package.units.len() {
         let unit = &package.units[index];
@@ -1271,6 +1270,76 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
     }
     Ok(())
 }
+fn validate_descriptor_value_uses(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    for unit in &package.units {
+        validate_descriptor_value_node(package, unit, &unit.tree.root, false)?;
+    }
+    Ok(())
+}
+
+fn validate_descriptor_value_node(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    descriptor_context: bool,
+) -> Result<(), SemanticFailure> {
+    if !descriptor_context
+        && matches!(node.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
+        && descriptor_expression_type(package, unit, node).is_some()
+    {
+        return Err(failure(
+            &unit.source,
+            "T0019",
+            format!(
+                "type descriptor `{}` is a compile-time construct and cannot be used as a runtime value",
+                node_text(&unit.source, node).trim_start_matches('.')
+            ),
+            node.span,
+        ));
+    }
+
+    for (index, child) in node.children.iter().enumerate() {
+        let child_is_descriptor_context = descriptor_context
+            || node.kind == SyntaxKind::TypeExpression
+            || node.kind == SyntaxKind::ImportDeclaration
+            || (node.kind == SyntaxKind::TypeMembershipExpression && index == 1)
+            || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) && index == 0)
+            || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                && index + 1 == node.children.len()
+                && descriptor_expression_type(package, unit, child).is_some())
+            || (node.kind == SyntaxKind::BinaryExpression
+                && node.children.len() == 2
+                && node_text(&unit.source, node)[node.children[0].span.end - node.span.start
+                    ..node.children[1].span.start - node.span.start]
+                    .trim()
+                    == "is")
+            || (node.kind == SyntaxKind::CallExpression
+                && index == 1
+                && node.children.first().is_some_and(|callee| {
+                    coercion_family_receiver(unit, callee)
+                        || obsolete_integer_coercion_member(unit, callee).is_some()
+                }));
+        validate_descriptor_value_node(package, unit, child, child_is_descriptor_context)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn descriptor_expression_type(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<ScalarType> {
+    let name = node_text(&unit.source, node).trim().trim_start_matches('.');
+    match node.kind {
+        SyntaxKind::Name => unit
+            .descriptor_alias_at(name, node.span.start)
+            .or_else(|| package.descriptor_constructs.get(name)?.descriptor_type()),
+        SyntaxKind::ObjectName => package
+            .resolve_object_at(unit, node.span.start, name)
+            .and_then(Symbol::descriptor_type),
+        _ => None,
+    }
+}
 
 fn collect_type_declarations(
     package: &SemanticPackage,
@@ -1280,7 +1349,7 @@ fn collect_type_declarations(
     functions: &mut Vec<FunctionContract>,
     scope: Option<Span>,
 ) -> Result<(), SemanticFailure> {
-    if let Some((name, alias)) = descriptor_alias(package, unit, node, scope) {
+    if let Some((name, alias)) = descriptor_alias(package, unit, node, aliases, scope) {
         aliases.entry(name).or_default().push(alias);
     }
     if node.kind == SyntaxKind::FunctionDeclaration {
@@ -1300,6 +1369,7 @@ fn descriptor_alias(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
+    aliases: &BTreeMap<String, Vec<DescriptorAlias>>,
     scope: Option<Span>,
 ) -> Option<(String, DescriptorAlias)> {
     if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
@@ -1310,13 +1380,20 @@ fn descriptor_alias(
         .iter()
         .find(|child| child.kind == SyntaxKind::Name)?;
     let initializer = node.children.last()?;
-    if initializer.kind != SyntaxKind::ObjectName {
-        return None;
-    }
-    let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
-    let value_type = package
-        .resolve_object_at(unit, initializer.span.start, object_name)
-        .and_then(Symbol::descriptor_type)?;
+    let descriptor_name = node_text(&unit.source, initializer)
+        .trim()
+        .trim_start_matches('.');
+    let value_type = match initializer.kind {
+        SyntaxKind::ObjectName => package
+            .resolve_object_at(unit, initializer.span.start, descriptor_name)
+            .and_then(Symbol::descriptor_type),
+        SyntaxKind::Name => {
+            visible_descriptor_aliases(aliases, unit.source.id(), initializer.span.start)
+                .get(descriptor_name)
+                .copied()
+        }
+        _ => None,
+    }?;
     Some((
         node_text(&unit.source, name).to_owned(),
         DescriptorAlias {
@@ -1335,13 +1412,11 @@ fn collect_typed_bindings(
     bindings: &mut Vec<TypedBinding>,
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::FunctionDeclaration {
-        let Some(contract) = unit
+        let contract = unit
             .functions
             .iter()
             .find(|contract| contract.span == node.span)
-        else {
-            return Ok(());
-        };
+            .expect("analyzed function declaration must have a semantic contract");
         let mut function_bindings = visible_bindings.clone();
         function_bindings.extend(contract.parameters.iter().filter_map(|parameter| {
             parameter.value_type.map(|value_type| TypedBinding {
@@ -1506,20 +1581,27 @@ fn analyze_binding_node(
 
     if declared.is_none()
         && let Some(initializer) = initializer
-        && initializer.kind == SyntaxKind::ObjectName
+        && matches!(initializer.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
     {
-        let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
-        if let Some(symbol) = package.resolve_object_at(unit, initializer.span.start, object_name)
-            && let Some(ty) = symbol.descriptor_type()
-        {
+        let descriptor_name = node_text(&unit.source, initializer)
+            .trim()
+            .trim_start_matches('.');
+        let descriptor_type = unit
+            .descriptor_alias_at(descriptor_name, initializer.span.start)
+            .or_else(|| {
+                package
+                    .resolve_object_at(unit, initializer.span.start, descriptor_name)
+                    .and_then(Symbol::descriptor_type)
+            });
+        if let Some(ty) = descriptor_type {
             bindings.push(TypedBinding {
                 name,
                 span: node.span,
                 value_type: ValueType::TypeDescriptor(ty),
                 mutable: false,
             });
+            return Ok(());
         }
-        return Ok(());
     }
 
     if node.kind == SyntaxKind::Assignment
@@ -1527,13 +1609,13 @@ fn analyze_binding_node(
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
-        && let Some(actual) = infer_value_type(unit, initializer, &BTreeMap::new(), bindings)?
+        && let Some(actual) = infer_value_type(unit, initializer, bindings)?
     {
         validate_value_assignment(&unit.source, &name, expected, actual, initializer)?;
         return Ok(());
     }
     let inferred = initializer
-        .map(|value| infer_value_type(unit, value, &BTreeMap::new(), bindings))
+        .map(|value| infer_value_type(unit, value, bindings))
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
@@ -1611,7 +1693,6 @@ fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Optio
 fn infer_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
     if node.kind == SyntaxKind::Literal {
@@ -1619,15 +1700,15 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::GroupExpression {
         return match node.children.first() {
-            Some(child) => infer_value_type(unit, child, aliases, bindings),
+            Some(child) => infer_value_type(unit, child, bindings),
             None => Ok(None),
         };
     }
     if node.kind == SyntaxKind::UnaryExpression {
-        return infer_unary_type(unit, node, aliases, bindings).map(Some);
+        return infer_unary_type(unit, node, bindings).map(Some);
     }
     if node.kind == SyntaxKind::BinaryExpression {
-        return infer_binary_type(unit, node, aliases, bindings).map(Some);
+        return infer_binary_type(unit, node, bindings).map(Some);
     }
     if node.kind == SyntaxKind::TypeMembershipExpression {
         return Ok(Some(ValueType::Scalar(ScalarType::Bool)));
@@ -1652,7 +1733,7 @@ fn infer_value_type(
         && let [receiver, member] = node.children.as_slice()
         && node_text(&unit.source, member) == "length"
     {
-        let receiver_type = infer_value_type(unit, receiver, aliases, bindings)?;
+        let receiver_type = infer_value_type(unit, receiver, bindings)?;
         if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
             return Ok(Some(ValueType::Scalar(ScalarType::Int)));
         }
@@ -1668,7 +1749,7 @@ fn infer_value_type(
         ));
     }
     if node.kind == SyntaxKind::CallExpression {
-        if let Some(value_type) = infer_integer_coercion_type(unit, node, aliases, bindings)? {
+        if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
         if let Some(callee) = node.children.first()
@@ -1693,7 +1774,6 @@ fn infer_value_type(
 fn infer_unary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<ValueType, SemanticFailure> {
     let Some(operand_node) = node.children.last() else {
@@ -1703,8 +1783,7 @@ fn infer_unary_type(
             "unary operator requires an operand",
         ));
     };
-    let Some(ValueType::Scalar(operand)) = infer_value_type(unit, operand_node, aliases, bindings)?
-    else {
+    let Some(ValueType::Scalar(operand)) = infer_value_type(unit, operand_node, bindings)? else {
         return Err(operator_failure(
             unit,
             node,
@@ -1741,7 +1820,6 @@ fn infer_unary_type(
 fn infer_integer_coercion_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
     let Some(callee) = node.children.first() else {
@@ -1774,8 +1852,7 @@ fn infer_integer_coercion_type(
         }
         return Ok(None);
     };
-    let Some(ValueType::Scalar(source_type)) =
-        infer_value_type(unit, source_node, aliases, bindings)?
+    let Some(ValueType::Scalar(source_type)) = infer_value_type(unit, source_node, bindings)?
     else {
         return Err(failure(
             &unit.source,
@@ -1862,6 +1939,10 @@ fn integer_coercion_result_type(
     }
 }
 
+/// Resolves the canonical `.coerce` callable family and its selected policy child.
+///
+/// The returned policy is shared semantic metadata for analysis and lowering; the
+/// Rust helper names used after family erasure are not independent source members.
 pub(crate) fn integer_coercion_call<'a>(
     source: &SourceFile,
     callee: &'a SyntaxNode,
@@ -1922,7 +2003,6 @@ fn obsolete_integer_coercion_member<'a>(
 fn infer_binary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<ValueType, SemanticFailure> {
     let [left_node, right_node] = node.children.as_slice() else {
@@ -1932,8 +2012,8 @@ fn infer_binary_type(
             "binary operator requires two operands",
         ));
     };
-    let left = infer_value_type(unit, left_node, aliases, bindings)?;
-    let right = infer_value_type(unit, right_node, aliases, bindings)?;
+    let left = infer_value_type(unit, left_node, bindings)?;
+    let right = infer_value_type(unit, right_node, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
     if operator == "is" {
         return Ok(ValueType::Scalar(ScalarType::Bool));
@@ -2488,8 +2568,7 @@ fn validate_flow_statement(
             if statement.children.len() == 4 {
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
-                let collection_type =
-                    infer_value_type(unit, collection, &BTreeMap::new(), bindings)?;
+                let collection_type = infer_value_type(unit, collection, bindings)?;
                 if collection_type != Some(ValueType::Scalar(ScalarType::String)) {
                     return Err(failure(
                         &unit.source,
@@ -2535,7 +2614,7 @@ fn validate_flow_statement(
             };
             if operand.kind != SyntaxKind::Name
                 || !matches!(
-                    infer_value_type(unit, operand, &BTreeMap::new(), bindings)?,
+                    infer_value_type(unit, operand, bindings)?,
                     Some(ValueType::Scalar(ty)) if ty.is_integer()
                 )
             {
@@ -2558,7 +2637,7 @@ fn validate_bool_condition(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     if matches!(
-        infer_value_type(unit, condition, &BTreeMap::new(), bindings)?,
+        infer_value_type(unit, condition, bindings)?,
         Some(ValueType::Scalar(ScalarType::Bool))
     ) {
         return Ok(());
@@ -2644,7 +2723,7 @@ fn validate_return(
             statement.span,
         )),
         (Some(expected), Some(value)) => {
-            let actual = infer_value_type(unit, value, &BTreeMap::new(), bindings)?;
+            let actual = infer_value_type(unit, value, bindings)?;
             if actual == Some(ValueType::Scalar(expected)) {
                 Ok(())
             } else {
@@ -2835,6 +2914,28 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
         .collect()
 }
 
+fn bootstrap_descriptor_constructs() -> BTreeMap<String, Symbol> {
+    ScalarType::ALL
+        .into_iter()
+        .map(|ty| {
+            let name = ty.source_name().to_owned();
+            (
+                name.clone(),
+                Symbol {
+                    identity: format!("/core/types::{name}"),
+                    name,
+                    namespace: "/core/types".to_owned(),
+                    object_form: false,
+                    visibility: Visibility::Public,
+                    global: false,
+                    kind: SymbolKind::TypeDescriptor,
+                    declaration_span: None,
+                },
+            )
+        })
+        .collect()
+}
+
 fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     let mut namespaces = BTreeMap::new();
     namespaces.insert(
@@ -2864,22 +2965,23 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             SymbolKind::TypeDescriptor,
         ),
     );
-    namespaces.insert(
-        "/core/errors".to_owned(),
-        namespace_with_objects(
-            "/core/errors",
-            [
-                "error",
-                "arithmetic-overflow",
-                "division-by-zero",
-                "integer-conversion-overflow",
-                "negative-shift-count",
-                "coercion-error",
-            ],
-            SymbolKind::Binding,
-        ),
+    let mut errors = namespace_with_objects(
+        "/core/errors",
+        [
+            "arithmetic-overflow",
+            "division-by-zero",
+            "integer-conversion-overflow",
+            "negative-shift-count",
+            "coercion-error",
+        ],
+        SymbolKind::ErrorObject,
     );
-    namespaces.insert("/collections".to_owned(), Namespace::default());
+    errors.objects.insert(
+        "error".to_owned(),
+        compiler_owned_object("/core/errors", "error", SymbolKind::Interface),
+    );
+    namespaces.insert("/core/errors".to_owned(), errors);
+    namespaces.insert("/core/collections".to_owned(), Namespace::default());
     namespaces
 }
 
@@ -2939,25 +3041,24 @@ fn namespace_with_objects<'a>(
 ) -> Namespace {
     let objects = names
         .into_iter()
-        .map(|name| {
-            (
-                name.to_owned(),
-                Symbol {
-                    identity: format!("{path}::{name}"),
-                    name: name.to_owned(),
-                    namespace: path.to_owned(),
-                    object_form: true,
-                    visibility: Visibility::Public,
-                    global: false,
-                    kind,
-                    declaration_span: None,
-                },
-            )
-        })
+        .map(|name| (name.to_owned(), compiler_owned_object(path, name, kind)))
         .collect();
     Namespace {
         ordinary: BTreeMap::new(),
         objects,
+    }
+}
+
+fn compiler_owned_object(path: &str, name: &str, kind: SymbolKind) -> Symbol {
+    Symbol {
+        identity: format!("{path}::{name}"),
+        name: name.to_owned(),
+        namespace: path.to_owned(),
+        object_form: true,
+        visibility: Visibility::Public,
+        global: false,
+        kind,
+        declaration_span: None,
     }
 }
 

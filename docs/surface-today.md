@@ -39,13 +39,14 @@ Terrane package
 │   │   │   ├── .none                         type descriptor
 │   │   │   └── .bytes                        descriptor name only
 │   │   └── /core/errors
-│   │       ├── .error                         object name only
-│   │       ├── .arithmetic-overflow           object name only
-│   │       ├── .division-by-zero              object name only
-│   │       ├── .integer-conversion-overflow   object name only
-│   │       ├── .negative-shift-count          object name only
-│   │       └── .coercion-error                object name only
-│   └── /collections                           empty namespace; name only
+│   │       ├── .error                         structural interface name only
+│   │       ├── .arithmetic-overflow           error object name only
+│   │       ├── .division-by-zero              error object name only
+│   │       ├── .integer-conversion-overflow   error object name only
+│   │       ├── .negative-shift-count          error object name only
+│   │       ├── .resource-error                error object name only
+│   │       └── .coercion-error                error object name only
+│   └── /core/collections                      empty namespace; name only
 ├── default prelude
 │   ├── print                                  ordinary binding to /core/output::.print
 │   ├── bool                                   type name for /core/types::.bool
@@ -307,7 +308,7 @@ print; values... -> none
 
 ### Source-declared functions
 
-```text
+```terrane
 function name ReturnType; required Type, optional Type = default
 ```
 
@@ -372,11 +373,17 @@ Namespaces form a package-wide tree assembled before reference resolution. Root 
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |
 | fixed-width integer | `.coerce.saturate; D` | family child | destination value with saturation policy |
 
+The compiler represents these spellings as one canonical callable family with a
+distinguished default and typed policy children. Semantic analysis resolves that family
+before lowering; generated Rust then erases the family object to the matching support
+operation. The support-crate helper names are backend details, not additional Terrane
+members or direct source-level coercion operations.
+
 No other value properties or methods are recognized by the current semantic/lowering pipeline.
 
 ## Compiler-owned names without implemented object behavior
 
-These names exist so the namespace and resolution model has stable canonical identities. They must not be mistaken for completed runtime objects:
+These names exist so the namespace and resolution model has stable canonical identities. They must not be mistaken for completed runtime behavior. The `.error` name is classified as a structural interface and the remaining `/core/errors` names as error objects, but fields, inheritance, constructors, catchability, and runtime instances remain unimplemented:
 
 ```text
 /core/types::.bytes
@@ -385,8 +392,9 @@ These names exist so the namespace and resolution model has stable canonical ide
 /core/errors::.division-by-zero
 /core/errors::.integer-conversion-overflow
 /core/errors::.negative-shift-count
+/core/errors::.resource-error
 /core/errors::.coercion-error
-/collections
+/core/collections
 ```
 
 In particular, runtime arithmetic diagnostics currently use deterministic compiler support paths; they do not construct catchable instances of the `/core/errors` names.

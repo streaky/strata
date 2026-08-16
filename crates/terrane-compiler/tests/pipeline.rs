@@ -251,12 +251,12 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     assert!(
         compilation
             .rust
-            .contains("let member: bool = { let _ = value; true };")
+            .contains("let member: bool = { let _ = value.clone(); true };")
     );
     assert!(
         compilation
             .rust
-            .contains("let parameter_member: bool = { let _ = item; true };")
+            .contains("let parameter_member: bool = { let _ = item.clone(); true };")
     );
     assert!(
         compilation
@@ -266,7 +266,7 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     assert!(
         compilation
             .rust
-            .contains("let different_alias: bool = {  false };")
+            .contains("let different_alias: bool = {  true };")
     );
     assert!(
         compilation

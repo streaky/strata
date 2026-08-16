@@ -1,0 +1,3 @@
+package = "descriptor-constructs-no-prelude"
+prelude = false
+sources = ["main.trn"]

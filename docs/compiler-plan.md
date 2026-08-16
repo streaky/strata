@@ -106,7 +106,7 @@ Do not create a general runtime crate before an implemented feature requires one
 
 Each conformance case is a directory or manifest entry containing only the artifacts relevant to its assertion:
 
-```text
+```terrane
 case.trn     # single-source input
 package.toml    # optional package manifest for multi-source cases
 case.toml       # phase, expected status, entrypoint, arguments
@@ -141,7 +141,7 @@ Golden files must be reviewed output, not snapshots accepted blindly. Unstable d
 Create these incrementally rather than borrowing from `demos/`:
 
 1. **hello:** import/bind output, define `main`, print exact text.
-2. **build-report:** kebab-case bindings, typed integers and strings, receiver-based string concatenation, named arguments, and output. Because fixed-width names are `/core types` descriptor objects rather than prelude bindings, the authored file either uses `int` or writes the explicit descriptor import and ordinary binding for each width it names.
+2. **build-report:** kebab-case bindings, typed integers and strings, receiver-based string joining, named arguments, and output. Because fixed-width names are `/core/types` descriptor objects rather than prelude bindings, the authored file either uses `int` or writes the explicit descriptor import and ordinary binding for each width it names.
 3. **fizz-buzz:** arithmetic, comparisons, `if`/`else`, a loop, function calls, and return.
 4. **word-count:** command-line arguments, string iteration or splitting, a standard collection, mutation, and deterministic formatted output. Add only after milestone 4 selects and implements an explicit grapheme/scalar/byte iteration contract and a collection subset whose mutation preserves version-one value semantics.
 5. **multi-file greeting:** two namespaces, explicit object import, ordinary binding, and deterministic module lowering.
@@ -236,7 +236,7 @@ Deliver:
 
 Required conformance boundaries include:
 
-```text
+```terrane
 ipv4/ipv6
 ipv4 / ipv6
 a+b
@@ -288,7 +288,7 @@ Deliver:
 - namespace-local bindings, typed bindings with and without initializers, visibility modifiers, `global`, and `constant`;
 - function declarations and parameter lists;
 - block statements and legal empty blocks;
-- literals, names, object-form lookup, member access, calls, unary/binary expressions, assignment, grouping, and postfix `++`/`--`;
+- literals, names, object-form lookup, member access, calls, unary/binary expressions, assignment, grouping, and postfix `++`/`--` as an update *statement* rather than an expression, so a value-position use fails to parse;
 - `if`/`else`, `while`, collection and three-clause `for`, `return`, `break`, and `continue` syntax;
 - parser recovery at newline and dedent boundaries;
 - normalized parse-tree serializer for goldens;
@@ -300,7 +300,7 @@ Highest-risk ambiguities must receive dedicated tests before broad grammar work:
 - `.thing` versus the explicit zero-argument call `.thing;`;
 - tail-string markers versus comparison and shift operators;
 - operator-bearing identifiers, prefix negation, postfix `++`/`--`, and spaced operators;
-- namespace whitespace tiers versus expressions;
+- namespace `/` separators versus division, and namespace segments versus identifiers;
 - call semicolon precedence, named arguments, and grouping of nested calls;
 - grouping calls inside the clauses of a three-clause `for`;
 - `is a` as identity against an ordinary binding versus type membership when `a` is followed by a complete type expression.
@@ -358,7 +358,7 @@ vertical work unit as the behavior.
 Deliver:
 
 - a minimal package manifest contract and loader that enumerate the complete source-unit set and select whether the default prelude is enabled;
-- a single-file CLI input modeled as an implicit one-unit package with a stable package identity and the default prelude, without filename-to-namespace inference or on-demand namespace search;
+- a single-file CLI input modeled as an implicit one-unit package with a stable package identity and the default prelude, without filename-to-namespace inference or on-demand namespace search (**superseded by milestone 4.7**, which introduces checked namespace-to-directory correspondence; on-demand search remains excluded);
 - namespace tree assembled from the complete manifest-enumerated set of package source units before resolution;
 - deterministic multi-file discovery and source-unit assembly order;
 - exact root `/` and parent `..` anchoring;
@@ -367,8 +367,8 @@ Deliver:
 - explicit `global` handling for program-global creation/replacement and rejection of plain top-level assignment where a global operation is required;
 - duplicate, shadowing, visibility/inaccessibility, unresolved-name, and same-scope object-form collision diagnostics;
 - idempotent reimport of the same object-form export, with aliases required for distinct colliding exports;
-- fixed bootstrap importer whose milestone-3 module table registers versioned `/core output`, `/core types`, `/core errors`, and `/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core types`, while milestone 4 populates `/collections` with its selected collection subset;
-- the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`;
+- fixed bootstrap importer whose milestone-3 module table registers versioned `/core/output`, `/core/types`, `/core/errors`, and `/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core/types`, while milestone 4 populates `/collections` with its selected collection subset;
+- the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`, requiring no import at any use site;
 - import resolution that does not create an ordinary binding automatically, and proof that an ordinary binding named `import` cannot alter structural import syntax or importer selection.
 
 Defer custom importer execution and package acquisition. The initial bootstrap environment may resolve compiler-owned modules from a fixed, versioned table.
@@ -397,7 +397,7 @@ Deliver:
 - direct native lowering types for `bool`, fixed-width signed and unsigned integers through 128 bits, `float`, the explicit widths `float32` and `float64`, `string`, and `none`, where the Rust representation preserves the complete Terrane contract;
 - core `int` as an exact signed integer with adaptive `i64`, `i128`, and arbitrary-precision tiers, including normalization to the smallest exact tier;
 - the initial integer support component and lowering hooks for checked tier promotion, exact wide operations, normalization, and capability rejection where arbitrary-precision promotion is unavailable;
-- explicit `/core types` resolution for fixed-width descriptor objects: programs import dot-object descriptors and bind ordinary type names, while the exact default prelude remains unchanged;
+- explicit `/core/types` resolution for fixed-width descriptor objects: programs import dot-object descriptors and bind ordinary type names, while the exact default prelude remains unchanged;
 - typed literals and inferred local bindings, with destination-range checking applied to every compile-time constant expression and signed fixed-width minima accepted without first rejecting their positive magnitude;
 - typed parameters, optional parameters with defaults, and return contracts;
 - initialized and uninitialized typed bindings, with definite-assignment analysis rejecting reads before assignment across control flow;
@@ -421,8 +421,8 @@ Deliver:
 
 Core text display and receiver-based text behavior must be exercised through the canonical object model, including integer output:
 
-```text
-message = ': '.concat; project-name, build-target, build-status
+```terrane
+message = ': '.join; project-name, build-target, build-status
 print; message
 print; completed-count
 ```
@@ -473,16 +473,19 @@ Exit criterion: canonical grouped coercion cases compile and run with warnings d
 flat spellings fail at Terrane source spans, and no compiler-facing documentation or
 fixture presents them as valid syntax.
 
-Implemented evidence: the compiler resolves the canonical `.coerce` family and its
-`.checked`, `.wrap`, and `.saturate` children through one typed policy resolver shared by
-semantic analysis and lowering. Availability is keyed by source type, destination type, and
-policy; unsupported pairs, unknown policy chains, escaped family values, and obsolete flat
-spellings fail at Terrane source spans. Accepted conformance cases cover every policy,
-including both absent and present membership for checked results, a package-level adaptive
-integer receiver, parameter-sourced coercion inside a typed function, and a side-effecting
-function-call receiver proving exactly-once evaluation. Reviewed generated-Rust goldens
-preserve the throwing, partial, wrapping, and saturating helper contracts without redundant
-references, and every accepted generated crate compiles with warnings denied.
+Implemented evidence: the compiler resolves the canonical `.coerce` callable family and
+its `.checked`, `.wrap`, and `.saturate` children through one typed policy resolver shared
+by semantic analysis and lowering. This is compiler-owned semantic object metadata rather
+than four independent direct-invocation paths: lowering erases the resolved family and
+policy to backend support calls without exposing those helper names as Terrane members.
+Availability is keyed by source type, destination type, and policy; unsupported pairs,
+unknown policy chains, escaped family values, and obsolete flat spellings fail at Terrane
+source spans. Accepted conformance cases cover every policy, including both absent and
+present membership for checked results, a package-level adaptive integer receiver,
+parameter-sourced coercion inside a typed function, and a side-effecting function-call
+receiver proving exactly-once evaluation. Reviewed generated-Rust goldens preserve the
+throwing, partial, wrapping, and saturating result contracts without redundant references,
+and every accepted generated crate compiles with warnings denied.
 
 ### Milestone 4.6 — Reconcile shipped behavior with the settled decisions
 
@@ -493,7 +496,7 @@ every item here is a divergence in something already implemented.
 
 Deliver:
 
-- rename the compiler-owned collection namespace from `/collections` to `/core collections`
+- rename the compiler-owned collection namespace from `/collections` to `/core/collections`
   in the bootstrap module table, the namespace registry, and every diagnostic and fixture
   that names it. The empty placeholder is removed rather than aliased, per the clean-cutover
   rule;
@@ -504,17 +507,26 @@ Deliver:
   import and aliasing remain available and are still how a name is rebound or shadowed;
 - implement descriptors as language constructs backed by canonical objects rather than as
   independently instantiated values. A descriptor binding such as `d = int8` names the
-  construct, is a compile-time alias, and has no runtime representation, so it lowers to
-  nothing. Today `d = int` passes `terrane check` and emits `d = int;` into generated Rust,
-  handing the user a projected rustc `E0425` instead of a Terrane diagnostic — the exact
-  failure milestone 6 forbids. Erasure here is definitional: there is no storage to elide;
+  construct and is a compile-time alias, so a statically resolved use needs no runtime storage
+  and lowers to nothing. Today `d = int` passes `terrane check` and emits `d = int;` into
+  generated Rust, handing the user a projected rustc `E0425` instead of a Terrane diagnostic —
+  the exact failure milestone 6 forbids. The defect is emitting a plain Rust binding as if the
+  descriptor were an ordinary value; a descriptor may still be materialised as its canonical
+  object where reflection or dynamic descriptor use requires it (milestone 18);
 - accept a descriptor alias everywhere the construct is valid — annotation position, a
   coercion destination, and the right side of `is a` — which fixes the currently rejected
   `target-type = float` followed by `x.coerce; target-type` that the specification documents;
 - reject a descriptor alias at its source span wherever a runtime value is required, including
   `print; d`, arithmetic, and value parameters, since a descriptor has no display or value
   protocol in version one;
-- align the `/core errors` object set and its diagnostic text with the structural `error`
+- fix `.concat` lowering when its result is bound. `m = sep.concat; 'a', 'b'` emits
+  `m = format!(...)` with no `let`, so the generated Rust does not compile and the user
+  receives a projected rustc `E0425`. Binding a `.length` or `.coerce` result emits `let`
+  correctly, so the defect is specific to `concat`. The conformance corpus never binds a
+  concat result — every fixture passes it straight to `print` — which is why it was not
+  caught, so the fix ships with a fixture that binds one;
+
+- align the `/core/errors` object set and its diagnostic text with the structural `error`
   interface now specified — stable `kind`, human-readable `message`, optional `cause`, and a
   source-context chain — even though construction and catching remain later work. Reserved
   names must not imply a shape the specification has since replaced;
@@ -532,6 +544,70 @@ with a Terrane diagnostic in every value position, never reaching rustc; and
 Note on scope: the arithmetic families, abstract category descriptors, structured errors,
 and float/string coercion destinations are **not** part of this milestone. They are new
 surface rather than corrections, and they arrive with milestones 7 onward.
+
+### Milestone 4.7 — Namespace path syntax, name casing, and directory correspondence
+
+Milestone 3 shipped whitespace-separated namespace paths with no relationship between a
+namespace and its location on disk. Both decisions have been reversed. This milestone
+implements the replacement and migrates everything already built on the old form.
+
+Deliver:
+
+- `/` as the single namespace boundary marker, anchoring the root and separating every
+  segment: `namespace my-app/http/handlers`, `from /core/output import .print`,
+  `from ../shared/config import .settings`. Repeated parents nest as ordinary path
+  components, replacing the `.. ..` form, which does not scale and reads as a typo;
+- removal of `/` from the identifier-joiner set. A character cannot be both a joiner and the
+  namespace separator without making `namespace foo/bar` ambiguous between one segment and
+  two, and context-sensitive lexing would contradict the rule that a compact joiner sequence
+  is always an identifier. `ipv4/ipv6` becomes `ipv4-ipv6`; update the Rust-name encoding,
+  which currently escapes the slash;
+- the segment grammar `[a-z][a-z0-9-]*`, enforced as an allowlist so that every
+  filesystem-hazardous character is unformable rather than blocklisted, plus the reserved
+  whole-name set `con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, which is made of
+  legal characters and therefore invisible to the allowlist. Reserve them now even though
+  version one targets Linux first, because adding the restriction later breaks existing names;
+- lowercase enforcement for every user-declared name, with uppercase parsing and then failing
+  semantically with a diagnostic naming the lowercase form and a formatter fixit. Never fold
+  silently: that is the silent repair principle 5 forbids. Type parameters remain uppercase;
+- namespace-to-directory correspondence, with a declaration that disagrees with its location
+  rejected unless the manifest declares that mapping; manifest namespace-root to
+  directory-root mappings resolved by longest prefix; two roots mapped to one directory
+  rejected at manifest load; a source file under a declared root but outside every mapping
+  rejected rather than silently ignored;
+- bounded discovery over declared roots with sorted expansion, a dependency's namespaces read
+  from its own manifest rather than by scanning its tree, and the resolved source set recorded
+  in build metadata so a build stays auditable once the manifest no longer enumerates files;
+- migration of every fixture, golden, example, and document to the new path syntax.
+
+Also in scope, because it is the same migration:
+
+- implement `string.join`, whose receiver is the separator and whose arguments are the parts,
+  distinct from the existing `concat`, which appends without one. It is scheduled here rather
+  than with the string families because it depends on nothing: `concat` already lowers
+  correctly, and `join` is the same shape with a separator interleaved. It needs no descriptor
+  model, callable-family machinery, error propagation, or byte views. Two things make it
+  release-blocking earlier than its neighbours — milestone 4 is already delivered and its own
+  text-composition example uses `': '.join`, and the specification's representative program,
+  the first code any reader meets, uses it too. A flagship example that cannot run is the same
+  defect class as the redundant imports removed below. Specify the boundary cases from the
+  string-composition section: an empty call yields the empty string, a single argument yields
+  that argument with no separator, and the separator never precedes the first or follows the
+  last part;
+- remove the redundant prelude imports from the conformance corpus. Fixtures currently open
+  with `from /core/output import .print` and `print = .print`, but the prelude and descriptor
+  constructs already make those unnecessary — `tests/conformance/run/fixed-overflow/case.trn`
+  behaves identically with no import lines at all, including its expected `.arithmetic-overflow`
+  failure. No compiler change is required; the fixtures teach a pattern the language does not
+  need, and every reader copies it. Keep explicit imports only in cases that are specifically
+  about importing, aliasing, or shadowing.
+
+Exit criterion: no document, fixture, golden, or example uses a whitespace-separated namespace
+path; a slash in an identifier is a lexical error; an uppercase or reserved segment fails with
+a source-span diagnostic naming the correction; a misplaced source file fails the correspondence
+check unless the manifest maps it; the conformance corpus contains no redundant prelude import;
+and the specification's representative program compiles and runs, producing its documented
+output exactly.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -573,7 +649,7 @@ Exit criterion: at least one deliberately induced backend error is mapped to its
 
 Deliver:
 
-- compiler-owned abstract category descriptors `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the `value` and `object` identity roots, exported from `/core types` and never prelude names;
+- compiler-owned abstract category descriptors `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the `value` and `object` identity roots, exported from `/core/types` and never prelude names;
 - declared conformance on every concrete scalar descriptor, replacing the enumerated match arms and "is integer" predicates that currently encode category membership;
 - category-driven member attachment, compatibility, and finite-union reasoning, so a member set is derived from declared contracts rather than from a per-type list;
 - the declared-conversion protocol behind `coerce`, with `coerce` fixed as option-free; the `parse` member taking a required, statically resolvable callback and typed by that callback's declared return, including its `checked` child; and the `radix` pair interpreting base-N text to `int` and rendering `int` to `string`;
@@ -604,7 +680,7 @@ Deliver:
 - `throw`, `try`, `catch`, and `finally` over a compiler-owned result propagation representation rather than native unwinding;
 - catch matching in source order, with a compile-time diagnostic for a clause made unreachable by an earlier one;
 - `finally` semantics that always run and may replace a pending outcome only by explicitly returning or throwing;
-- construction and catchability for the reserved `/core errors` objects, converting the existing deterministic arithmetic and coercion failures onto this path;
+- construction and catchability for the reserved `/core/errors` objects, converting the existing deterministic arithmetic and coercion failures onto this path;
 - deterministic uncaught rendering of the cause and source chain, preserving the current outermost reporting policy and exit code.
 
 Exit criterion: an arithmetic overflow and a failed coercion are catchable, a rethrow preserves the cause chain, uncaught output is unchanged from the current normative text, and generated Rust contains no panic-based control flow for recoverable failures.
@@ -660,7 +736,7 @@ Exit criterion: a user-defined iterator drives `for` through the same path as th
 
 Deliver:
 
-- list, map, set, tuple, range, and entry types under `/core collections`, added vertically rather than as one batch;
+- list, map, set, tuple, range, and entry types under `/core/collections`, added vertically rather than as one batch;
 - lookup and indexing whose default child throws `missing-key` or `index-error` and whose `checked` child returns absence, with no operation returning absence by default;
 - insertion-ordered map and set as the observable contract, plus a separate unordered type that is deterministic under a fixed hash seed rather than merely unordered;
 - half-open ranges with an explicit inclusive constructor, non-zero step, and empty-range rules;
@@ -706,6 +782,7 @@ Exit criterion: ownership analysis accompanies the first non-scalar mutable valu
 Deliver:
 
 - the closed effect vocabulary `throws E`, `io`, `blocks`, `awaits`, `mutates`, `unsafe`, and `foreign`, with allocation tracked internally rather than declared publicly;
+- descriptor materialisation: reflection is the case that requires a canonical descriptor object at runtime, so this milestone supplies what milestone 4.6 deliberately does not. A statically resolved descriptor still lowers to nothing; a profile that strips reflection metadata removes the materialisation, not the identity;
 - effect inference for private functions and declared public effect contracts for exported ones;
 - capability objects that authorize effects without being effects, as linear authority values never synthesised from descriptive profile metadata;
 - retained descriptor identity and public callable/type metadata in ordinary profiles, stripped private bodies and unrequested inventories, and a compile-time failure when code requests metadata a profile does not retain.
@@ -803,6 +880,14 @@ Exit criterion: structured fields survive to the sink unflattened, a secret-type
 
 Deliver:
 
+- the governing dependency principle, which this milestone implements for Rust and later
+  milestones specialise elsewhere: declarations name ecosystems and packages rather than APIs,
+  the build resolves the exact package and generates only the boundary machinery Terrane source
+  actually crosses, and tooling projects an advisory surface that never decides whether a
+  program compiles. No generated adapter layer, no translation of Rust generics into
+  instantiations, and no mapping of Rust traits, lifetimes, or error types into the Terrane
+  model — those stay in Rust and are touched only inside native Rust bodies. A Terrane-visible
+  wrapper is authored deliberately, never produced automatically;
 - `use rust crate-name` adding a locked dependency directly to the generated Cargo graph, with exact version or lock-resolved requirement, feature set, default-feature policy, and target conditions declared in the manifest;
 - build scripts and proc macros executing only under an explicit build capability and sandbox policy, with their outputs part of cache identity;
 - Cargo errors source-mapped to the dependency declaration or native Rust span, without presenting Rust API errors as Terrane member errors;
@@ -877,7 +962,7 @@ The release pipeline must prove, from a clean checkout:
 - structured errors with `throw`/`try`/`catch`/`finally`, catchable core errors, and deterministic uncaught rendering;
 - the named bounded-arithmetic families with their policy children and named result types;
 - `bytes` as a real value type, explicit encoding objects, and typed decode failures;
-- the iterator protocol with `iteration-step of Item`, and list, map, set, tuple, range, and entry under `/core collections`;
+- the iterator protocol with `iteration-step of Item`, and list, map, set, tuple, range, and entry under `/core/collections`;
 - function values, closures, and storable bound method families;
 - classes, single inheritance, structural interfaces, traits, `construct`, and deterministic drop;
 - ownership: semantic value assignment, linear resources, explicit `ref`/`move`/weak references, and the drop pipeline;
@@ -950,7 +1035,7 @@ Constraints on any future design:
 Milestone 4.5 establishes one compiler-owned `.coerce` family carrying `.checked`,
 `.wrap`, and `.saturate` members, reached through ordinary receiver syntax:
 
-```text
+```terrane
 value.coerce; int8              # throwing default
 value.coerce.checked; int8      # int8|none
 value.coerce.wrap; int8
@@ -1015,7 +1100,7 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 Milestones 0 through 4.5 are delivered. The next work in order:
 
-1. Rename `/collections` to `/core collections` throughout the bootstrap table, registry, diagnostics, and fixtures.
+1. Rename `/collections` to `/core/collections` throughout the bootstrap table, registry, diagnostics, and fixtures.
 2. Implement the descriptor-construct rule: accept an alias in every construct position, reject it at its source span in every value position, and lower a descriptor binding to nothing.
 3. Update the specification text that requires explicit import for fixed-width descriptors, and add the construct-availability category alongside the seven prelude bindings.
 4. Sweep diagnostics for text written against superseded spellings.

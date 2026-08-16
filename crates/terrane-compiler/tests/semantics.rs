@@ -151,6 +151,53 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
 
     let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
     assert!(disabled.prelude_bindings.is_empty());
+    assert_eq!(enabled.descriptor_constructs.len(), ScalarType::ALL.len());
+    assert_eq!(disabled.descriptor_constructs.len(), ScalarType::ALL.len());
+    for ty in ScalarType::ALL {
+        let construct = disabled
+            .descriptor_constructs
+            .get(ty.source_name())
+            .unwrap();
+        assert_eq!(construct.descriptor_type(), Some(ty));
+    }
+}
+
+#[test]
+fn descriptor_construct_aliases_are_typed_without_the_prelude() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            "namespace app\ntarget = int8\nsame = target\nfunction main\n  value int8 = 1\n  result bool = value is a same\n",
+        )],
+    ))
+    .unwrap();
+    let unit = &analyzed.units[0];
+    for name in ["target", "same"] {
+        assert!(unit.typed_bindings.iter().any(|binding| {
+            binding.name == name
+                && binding.value_type
+                    == terrane_compiler::semantics::ValueType::TypeDescriptor(ScalarType::Int8)
+        }));
+    }
+}
+#[test]
+fn descriptor_constructs_are_rejected_as_runtime_values() {
+    for runtime_use in [
+        "print; target",
+        "result = target + 1",
+        "result = consume; target",
+    ] {
+        let source = format!(
+            "namespace app\nfrom /core output import .print\nprint = .print\ntarget = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
+        );
+        let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0019", "{runtime_use}");
+        assert_eq!(
+            failure.diagnostics[0].primary.unwrap().start,
+            source.rfind("target").unwrap()
+        );
+    }
 }
 
 #[test]
@@ -162,15 +209,40 @@ fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
         "/core/output",
         "/core/types",
         "/core/errors",
-        "/collections",
+        "/core/collections",
     ] {
         assert!(analyzed.namespaces.contains_key(namespace));
     }
+    assert!(!analyzed.namespaces.contains_key("/collections"));
     for name in [
         "int8", "int16", "int32", "int64", "int128", "uint8", "uint16", "uint32", "uint64",
         "uint128", "float32", "float64",
     ] {
         assert!(analyzed.object("/core/types", name).is_some(), "{name}");
+    }
+}
+
+#[test]
+fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
+    let analyzed = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
+    let errors = &analyzed.namespaces["/core/errors"].objects;
+
+    assert_eq!(
+        errors.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "arithmetic-overflow",
+            "coercion-error",
+            "division-by-zero",
+            "error",
+            "integer-conversion-overflow",
+            "negative-shift-count",
+        ]
+    );
+    assert_eq!(errors["error"].kind, SymbolKind::Interface);
+    for (name, symbol) in errors {
+        if name != "error" {
+            assert_eq!(symbol.kind, SymbolKind::ErrorObject, "{name}");
+        }
     }
 }
 
