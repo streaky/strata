@@ -1186,16 +1186,25 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.5 are delivered. The next work in order:
+Milestones 0 through 4.7 are delivered except for the corrections below, which reach back into milestone 4 as well as 4.7. The next work in order:
 
-1. Rename `/collections` to `/core/collections` throughout the bootstrap table, registry, diagnostics, and fixtures.
-2. Implement the descriptor-construct rule: accept an alias in every construct position, reject it at its source span in every value position, and lower a descriptor binding to nothing.
-3. Update the specification text that requires explicit import for fixed-width descriptors, and add the construct-availability category alongside the seven prelude bindings.
-4. Sweep diagnostics for text written against superseded spellings.
-5. Refresh `docs/surface-today.md` and re-verify its status labels.
-6. Close milestone 4.6, then continue milestone by milestone, adding real programs only when every construct they contain is supported.
+1. Type float literals. Literal inference has no float case, so every numeric literal is an `int`: `value float = 1.5` is rejected as an `int` assignment, and `value = 1.5` lowers to `Int::from_decimal("1.5")`, which builds and then panics at runtime with the compiler's own internal-error text. A hexadecimal literal fails the same way, though `L0009` advertises the form. Ship float literals with their lowering and display contract, and make a literal that lowering cannot render a Terrane diagnostic rather than an `expect` in a support crate. `docs/surface-today.md` documents floating-point values as implemented and must agree with whatever ships.
+2. Fix initializer selection in lowering. A binding whose value is a bare name is skipped as though it were the binding target, so `b = a` emits an uninitialized `let` inside a function and no item at all at namespace level. The target is already the first `Name` child, so exclude it by identity rather than by kind; descriptor bindings return earlier on their value type and must keep lowering to nothing.
+3. Normalise manifest directory paths at load, so a `.` or `./` component cannot defeat suffix derivation and two spellings of one directory cannot both map.
+4. Validate each discovered directory component against the segment grammar and the reserved set, reporting against the path rather than the source declaration, which cannot legally be changed to match a directory named `Http`.
+5. Preserve receiver evaluation in the empty `join` lowering; the result is the empty string, but the separator expression still runs.
+6. Reject namespace roots no source unit can declare: the bare root `/`, and segments the lexer cannot form.
+7. Tighten both segment checks to the normative grammar, which admits only internal single hyphens. Semantic validation and the manifest root parser currently accept doubled and trailing hyphens, so `namespace foo--bar` is accepted and `"app-"` loads as a namespace root. The `S2018` message quotes the loose form and changes with the check. Narrowing now and loosening later is the safe direction; the reverse breaks existing names.
+8. Migrate `demos/fork.trn` to the canonical path syntax, the last source in the repository on the superseded form.
+9. Root the generated build tree at the package root. It is currently placed beside the unit declaring `main`, so a package build writes into a mapped namespace directory that discovery then scans; a `.trn` file there is treated as a package source.
+10. Record the resolved source set in build metadata, the one milestone 4.7 deliverable that is absent rather than defective, and the one that keeps a directory-root manifest auditable.
+11. Reject a bound string member used as a value, as the coercion family already is. `value = text.concat` lowers to Rust that does not compile, where `value = number.coerce` fails at its source span; storable bound methods arrive in milestone 8.
+12. Settle milestone 4's minimal collection subset. `/core/collections` is registered empty, there is no collection literal, and `for` iterates string graphemes only. Either ship the subset before milestone 5 or move it to milestone 14 and say so in milestones 3 and 4.
+13. Sharpen path diagnostics: split the manifest root message into its grammar and reserved cases, name the `//` comment collision when it truncates a path, and settle whether whitespace may surround `/`.
+14. Add conformance cases for the segment, reserved, and correspondence diagnostics, for the specification's representative program, for name aliasing, and for every literal form the lexer admits.
+15. Close milestone 4.8, then continue milestone by milestone, adding real programs only when every construct they contain is supported.
 
-Milestone 4.6 has no unresolved design question left; every item above is implementation. The `coerce` versus `parse` boundary that previously blocked milestone 7 is now settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
+Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
 ## 13. Definition of done
 
