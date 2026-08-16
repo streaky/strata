@@ -1412,13 +1412,11 @@ fn collect_typed_bindings(
     bindings: &mut Vec<TypedBinding>,
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::FunctionDeclaration {
-        let Some(contract) = unit
+        let contract = unit
             .functions
             .iter()
             .find(|contract| contract.span == node.span)
-        else {
-            return Ok(());
-        };
+            .expect("analyzed function declaration must have a semantic contract");
         let mut function_bindings = visible_bindings.clone();
         function_bindings.extend(contract.parameters.iter().filter_map(|parameter| {
             parameter.value_type.map(|value_type| TypedBinding {

@@ -109,14 +109,12 @@ impl Emitter<'_> {
         }
     }
     fn function(&mut self, node: &SyntaxNode) {
-        let Some(contract) = self
+        let contract = self
             .unit
             .functions
             .iter()
             .find(|item| item.span == node.span)
-        else {
-            return;
-        };
+            .expect("analyzed function declaration must have a semantic contract");
         self.line_start();
         let name = function_name(contract);
         write!(self.output, "fn {name}(").unwrap();
