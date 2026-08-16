@@ -315,6 +315,27 @@ fn missing_namespace_directories_are_package_errors() {
 }
 
 #[test]
+fn empty_namespace_roots_are_package_errors() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"empty-root\"\n[namespaces]\napp = \"app\"\ntools = \"tools\"\n",
+    );
+    package.write("app/main.trn", "namespace app\n");
+    fs::create_dir_all(package.0.join("tools")).unwrap();
+
+    let errors = Package::load(package.0.join("package.toml")).unwrap_err();
+
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .diagnostic
+            .message
+            .contains("namespace root `/tools` contains no `.trn` source files")
+    );
+}
+
+#[test]
 fn namespace_mappings_discover_sources_in_sorted_order() {
     let package = TempPackage::new();
     package.write(

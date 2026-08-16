@@ -277,7 +277,17 @@ fn discover_source_units(
     for mapping in namespace_roots {
         let directory = root.join(&mapping.directory);
         let mut paths = BTreeSet::new();
+        let errors_before_discovery = errors.len();
         discover_trn_files(&directory, root, &mut paths, &mut errors);
+        if paths.is_empty() && errors.len() == errors_before_discovery {
+            errors.push(PackageLoadError::unreadable(
+                directory,
+                format!(
+                    "namespace root `{}` contains no `.trn` source files",
+                    mapping.namespace
+                ),
+            ));
+        }
         let depth = mapping.directory.components().count();
         for relative_path in paths {
             let suffix = relative_path
