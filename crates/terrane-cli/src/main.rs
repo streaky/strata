@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -102,8 +103,8 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         return Ok(ExitCode::SUCCESS);
     }
     ensure_rust_toolchain()?;
-    let crate_dir = generated_crate_path(compilation.source.path(), &compilation.rust)?;
-    write_generated_crate(&crate_dir, &compilation.rust)?;
+    let crate_dir = generated_crate_path(&package.root, &compilation.rust)?;
+    write_generated_crate(&crate_dir, &compilation.rust, &package.units)?;
     let cargo_command = if command == "check" { "check" } else { "build" };
     let status = Command::new("cargo")
         .args([cargo_command, "--quiet", "--manifest-path"])
@@ -134,17 +135,11 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     ))
 }
 
-fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, CliFailure> {
-    let source = source.canonicalize().map_err(|error| {
+fn generated_crate_path(package_root: &Path, rust: &str) -> Result<PathBuf, CliFailure> {
+    let root = package_root.canonicalize().map_err(|error| {
         CliFailure::backend(format!(
-            "cannot locate source file {}: {error}",
-            source.display()
-        ))
-    })?;
-    let root = source.parent().ok_or_else(|| {
-        CliFailure::backend(format!(
-            "source file {} has no parent directory",
-            source.display()
+            "cannot locate package root {}: {error}",
+            package_root.display()
         ))
     })?;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -161,7 +156,11 @@ fn generated_crate_path(source: &Path, rust: &str) -> Result<PathBuf, CliFailure
     Ok(root.join(".trn/build").join(format!("{hash:016x}")))
 }
 
-fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure> {
+fn write_generated_crate(
+    directory: &Path,
+    rust: &str,
+    units: &[terrane_compiler::SourceUnit],
+) -> Result<(), CliFailure> {
     fs::create_dir_all(directory.join("src"))
         .map_err(|error| CliFailure::backend(format!("cannot create generated crate: {error}")))?;
     let manifest = "[package]\nname = \"terrane_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
@@ -176,6 +175,17 @@ fn write_generated_crate(directory: &Path, rust: &str) -> Result<(), CliFailure>
     })?;
     write_if_changed(&directory.join("src/main.rs"), rust.as_bytes())
         .map_err(|error| CliFailure::backend(format!("cannot write generated Rust: {error}")))?;
+    let mut sources = String::from("version = 1\n\n");
+    for unit in units {
+        write!(
+            sources,
+            "[[sources]]\npath = {:?}\n",
+            unit.relative_path.to_string_lossy()
+        )
+        .expect("writing to a String cannot fail");
+    }
+    write_if_changed(&directory.join("terrane-build.toml"), sources.as_bytes())
+        .map_err(|error| CliFailure::backend(format!("cannot write build metadata: {error}")))?;
     Ok(())
 }
 

@@ -209,22 +209,42 @@ fn parse_namespace_roots(
     let mut directories = BTreeMap::<PathBuf, String>::new();
     let mut roots = Vec::new();
     for (namespace, value) in mappings {
-        let canonical = canonical_namespace_root(namespace);
-        if canonical.is_none() {
+        if namespace == "/" {
             errors.push(manifest_error(
                 manifest_path,
                 text,
-                format!(
-                    "namespace root `{namespace}` must be `/` or a slash-separated lowercase path"
-                ),
+                "namespace root `/` cannot be declared by a source file",
                 Some(namespace),
             ));
             continue;
         }
-        let Some(directory) = value
-            .as_str()
-            .filter(|value| valid_relative_directory(value))
-        else {
+        let path = namespace.trim_start_matches('/');
+        if let Some(segment) = path
+            .split('/')
+            .find(|segment| !valid_namespace_segment(segment))
+        {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!("namespace segment `{segment}` must match `[a-z]([a-z0-9]|-[a-z0-9])*`"),
+                Some(namespace),
+            ));
+            continue;
+        }
+        if let Some(segment) = path
+            .split('/')
+            .find(|segment| reserved_namespace_segment(segment))
+        {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!("namespace segment `{segment}` is reserved"),
+                Some(namespace),
+            ));
+            continue;
+        }
+        let canonical = format!("/{path}");
+        let Some(directory) = value.as_str().and_then(normalized_relative_directory) else {
             errors.push(manifest_error(
                 manifest_path,
                 text,
@@ -233,7 +253,6 @@ fn parse_namespace_roots(
             ));
             continue;
         };
-        let directory = PathBuf::from(directory);
         if let Some(existing) = directories.insert(directory.clone(), namespace.clone()) {
             errors.push(manifest_error(
                 manifest_path,
@@ -247,7 +266,7 @@ fn parse_namespace_roots(
             continue;
         }
         roots.push(NamespaceRoot {
-            namespace: canonical.expect("validated namespace root"),
+            namespace: canonical,
             directory,
         });
     }
@@ -292,9 +311,19 @@ fn discover_source_units(
         for relative_path in paths {
             let suffix = relative_path
                 .parent()
-                .and_then(|parent| parent.strip_prefix(&mapping.directory).ok())
-                .unwrap_or_else(|| Path::new(""));
-            let expected = expected_namespace(&mapping.namespace, suffix);
+                .expect("discovered source has a parent")
+                .strip_prefix(&mapping.directory)
+                .expect("discovered source is beneath its normalized namespace root");
+            let expected = match expected_namespace(&mapping.namespace, suffix) {
+                Ok(expected) => expected,
+                Err(message) => {
+                    errors.push(PackageLoadError::unreadable(
+                        root.join(&relative_path),
+                        message,
+                    ));
+                    continue;
+                }
+            };
             match discovered.get(&relative_path) {
                 Some((existing_depth, _)) if *existing_depth >= depth => {}
                 _ => {
@@ -361,12 +390,25 @@ fn discover_trn_files(
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            errors.push(PackageLoadError::unreadable(
-                path,
-                "cannot inspect namespace source entry",
-            ));
-            continue;
+        let file_type = match entry.file_type() {
+            Ok(file_type) if file_type.is_symlink() => match fs::metadata(&path) {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    errors.push(PackageLoadError::unreadable(
+                        path,
+                        format!("cannot inspect symlinked namespace source entry: {error}"),
+                    ));
+                    continue;
+                }
+            },
+            Ok(file_type) => file_type,
+            Err(_) => {
+                errors.push(PackageLoadError::unreadable(
+                    path,
+                    "cannot inspect namespace source entry",
+                ));
+                continue;
+            }
         };
         if file_type.is_dir() {
             discover_trn_files(&path, root, paths, errors);
@@ -386,45 +428,54 @@ fn discover_trn_files(
     }
 }
 
-fn expected_namespace(root: &str, suffix: &Path) -> String {
-    let suffix = suffix
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => value.to_str(),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    if suffix.is_empty() {
-        root.to_owned()
-    } else if root == "/" {
-        format!("/{suffix}")
+fn expected_namespace(root: &str, suffix: &Path) -> Result<String, String> {
+    let mut segments = Vec::new();
+    for component in suffix.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err("source directory is not a normalized relative path".to_owned());
+        };
+        let Some(segment) = value.to_str() else {
+            return Err("source directory contains a non-UTF-8 namespace segment".to_owned());
+        };
+        if !valid_namespace_segment(segment) {
+            return Err(format!(
+                "source directory segment `{segment}` must match `[a-z]([a-z0-9]|-[a-z0-9])*`"
+            ));
+        }
+        if reserved_namespace_segment(segment) {
+            return Err(format!("source directory segment `{segment}` is reserved"));
+        }
+        segments.push(segment);
+    }
+    if segments.is_empty() {
+        Ok(root.to_owned())
     } else {
-        format!("{root}/{suffix}")
+        Ok(format!("{root}/{}", segments.join("/")))
     }
 }
 
-fn canonical_namespace_root(value: &str) -> Option<String> {
-    if value == "/" {
-        return Some("/".to_owned());
+fn valid_namespace_segment(segment: &str) -> bool {
+    let mut bytes = segment.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
     }
-    let path = value.trim_start_matches('/');
-    if path.is_empty()
-        || path.split('/').any(|segment| {
-            segment.is_empty()
-                || reserved_namespace_segment(segment)
-                || !segment.bytes().enumerate().all(|(index, byte)| {
-                    if index == 0 {
-                        byte.is_ascii_lowercase()
-                    } else {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    }
-                })
-        })
-    {
-        return None;
+    let mut previous_hyphen = false;
+    for byte in bytes {
+        if byte == b'-' {
+            if previous_hyphen {
+                return false;
+            }
+            previous_hyphen = true;
+        } else if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+            previous_hyphen = false;
+        } else {
+            return false;
+        }
     }
-    Some(format!("/{path}"))
+    !previous_hyphen
 }
 
 fn reserved_namespace_segment(segment: &str) -> bool {
@@ -435,14 +486,18 @@ fn reserved_namespace_segment(segment: &str) -> bool {
             .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
 }
 
-fn valid_relative_directory(value: &str) -> bool {
+fn normalized_relative_directory(value: &str) -> Option<PathBuf> {
     let path = Path::new(value);
-    !value.is_empty()
-        && !path.is_absolute()
-        && !path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir | std::path::Component::RootDir
-            )
-        })
+    if value.is_empty() || path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => normalized.push(component),
+            _ => return None,
+        }
+    }
+    Some(normalized)
 }

@@ -1481,6 +1481,20 @@ fn resolves_slash_separated_root_and_nested_parent_paths() {
     );
 }
 
+#[test]
+fn rejects_extracted_string_methods_as_values() {
+    for member in ["concat", "join"] {
+        let source = format!("namespace app\nfunction main\n  formatter = ','.{member}\n");
+        let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0018");
+        assert!(
+            failure.diagnostics[0]
+                .message
+                .contains("string methods are not storable values")
+        );
+    }
+}
+
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
 }

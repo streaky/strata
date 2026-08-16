@@ -360,7 +360,7 @@ Implemented ordinary entities are:
 - imported ordinary names;
 - `.print` after object-form resolution.
 
-Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
+Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
 
 ## Properties and methods index
 

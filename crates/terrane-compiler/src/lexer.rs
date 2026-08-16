@@ -255,6 +255,19 @@ fn lex_line(
                 break;
             }
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                if namespace_path_line(tokens)
+                    && start > 0
+                    && !line[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace)
+                {
+                    diagnostics.push(Diagnostic::error(
+                        "L0007",
+                        "`//` cannot begin a comment inside a namespace path",
+                        Span::new(source.id(), base + start, base + start + 2),
+                    ));
+                }
                 trivia.push(Trivia {
                     kind: TriviaKind::LineComment,
                     span: Span::new(source.id(), base + start, base + bytes.len()),
@@ -562,6 +575,21 @@ fn lex_line(
                     _ => TokenKind::Operator,
                 };
                 let attached = attachment(line, start, index);
+                if text == "/" && namespace_path_line(tokens) {
+                    let leading_anchor = tokens.last().is_some_and(|token| token.text == "from");
+                    let compact = if leading_anchor {
+                        matches!(attached, Attachment::Right)
+                    } else {
+                        matches!(attached, Attachment::Both)
+                    };
+                    if !compact {
+                        diagnostics.push(Diagnostic::error(
+                            "L0007",
+                            "namespace path separators must not have surrounding whitespace",
+                            Span::new(source.id(), base + start, base + index),
+                        ));
+                    }
+                }
                 let allowed_left_attachment =
                     matches!(kind, TokenKind::Increment | TokenKind::Decrement)
                         || matches!(text, ">" | ">=")

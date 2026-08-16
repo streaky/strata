@@ -76,4 +76,30 @@ fn manifest_file_and_package_directory_use_the_shared_cli_pipeline() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8(run.stdout).unwrap(), "manifest CLI\n");
+
+    let build = Command::new(executable)
+        .args(["build", package.0.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let executable_path = PathBuf::from(String::from_utf8(build.stdout).unwrap().trim());
+    let build_root = executable_path
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == ".trn"))
+        .unwrap();
+    assert_eq!(build_root.parent(), Some(package.0.as_path()));
+    let metadata = fs::read_to_string(
+        executable_path
+            .ancestors()
+            .nth(3)
+            .unwrap()
+            .join("terrane-build.toml"),
+    )
+    .unwrap();
+    assert!(metadata.contains("path = \"app/main.trn\""));
+    assert!(metadata.contains("path = \"support/support.trn\""));
 }

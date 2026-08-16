@@ -1,0 +1,4 @@
+package = "namespace-mismatch"
+prelude = false
+[namespaces]
+app = "src"

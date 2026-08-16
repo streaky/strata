@@ -620,8 +620,7 @@ impl Emitter<'_> {
                 }
                 text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float)),
                 text if text.chars().all(|character| {
-                    character.is_ascii_hexdigit()
-                        || matches!(character, '_' | 'x' | 'o' | 'b')
+                    character.is_ascii_hexdigit() || matches!(character, '_' | 'x' | 'o' | 'b')
                 }) =>
                 {
                     Some(ValueType::Scalar(ScalarType::Int))
@@ -701,7 +700,7 @@ impl Emitter<'_> {
                 .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
                 .collect::<Vec<_>>();
             if values.is_empty() {
-                return "String::new()".to_owned();
+                return format!("{{ let _ = {separator}; String::new() }}");
             }
             return format!("vec![{}].join(&({separator}))", values.join(", "));
         }

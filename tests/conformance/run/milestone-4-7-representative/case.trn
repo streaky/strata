@@ -1,0 +1,12 @@
+namespace milestone-representative
+from /core/types import .uint8
+byte = .uint8
+
+function main
+  heading = 'Terrane'.concat; ' ', 4, '.', 7
+  joined = ' / '.join; heading, 'namespaces', 'strings'
+  count = 'a🇺🇳'.length
+  converted = 300.coerce.saturate; byte
+  if count == 2
+    print; joined
+  print; converted

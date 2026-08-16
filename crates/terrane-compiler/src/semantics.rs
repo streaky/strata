@@ -337,7 +337,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 "S2017",
                 format!(
                     "cannot declare into compiler-owned namespace `{}`",
-                    source_namespace(&unit.namespace)
+                    unit.namespace
                 ),
                 span,
             ));
@@ -505,31 +505,40 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
 }
 
 fn validate_namespace_segment(component: &str, span: Span) -> Result<(), Diagnostic> {
-    let valid = component.bytes().enumerate().all(|(index, byte)| {
-        if index == 0 {
-            byte.is_ascii_lowercase()
-        } else {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+    fn valid(component: &str) -> bool {
+        let mut bytes = component.bytes();
+        let Some(first) = bytes.next() else {
+            return false;
+        };
+        if !first.is_ascii_lowercase() {
+            return false;
         }
-    });
-    if !valid {
+        let mut previous_hyphen = false;
+        for byte in bytes {
+            if byte == b'-' {
+                if previous_hyphen {
+                    return false;
+                }
+                previous_hyphen = true;
+            } else if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+                previous_hyphen = false;
+            } else {
+                return false;
+            }
+        }
+        !previous_hyphen
+    }
+
+    if !valid(component) {
         let lowercase = component.to_ascii_lowercase();
         let mut diagnostic = Diagnostic::error(
             "S2018",
             format!(
-                "invalid namespace segment `{component}`; segments must match `[a-z][a-z0-9-]*`"
+                "invalid namespace segment `{component}`; segments must match `[a-z]([a-z0-9]|-[a-z0-9])*`"
             ),
             span,
         );
-        if lowercase != component
-            && lowercase.bytes().enumerate().all(|(index, byte)| {
-                if index == 0 {
-                    byte.is_ascii_lowercase()
-                } else {
-                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                }
-            })
-        {
+        if lowercase != component && valid(&lowercase) {
             diagnostic = diagnostic.with_help(format!("use `{lowercase}`"));
         }
         return Err(diagnostic);
@@ -817,8 +826,7 @@ fn imported_object(
                 "S2009",
                 format!(
                     "unresolved object `.{}` in `{}`",
-                    import.object,
-                    source_namespace(&import.target)
+                    import.object, import.target
                 ),
                 import.span,
             )
@@ -1873,24 +1881,8 @@ fn infer_value_type(
             node.span,
         ));
     }
-    if node.kind == SyntaxKind::MemberExpression
-        && let [receiver, member] = node.children.as_slice()
-        && node_text(&unit.source, member) == "length"
-    {
-        let receiver_type = infer_value_type(unit, receiver, bindings)?;
-        if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
-            return Ok(Some(ValueType::Scalar(ScalarType::Int)));
-        }
-        return Err(failure(
-            &unit.source,
-            "T0013",
-            format!(
-                "`.length` requires `string`, found `{}`",
-                receiver_type
-                    .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
-            ),
-            receiver.span,
-        ));
+    if node.kind == SyntaxKind::MemberExpression {
+        return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
         if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
@@ -1934,6 +1926,41 @@ fn infer_value_type(
         return Ok(None);
     }
     Ok(None)
+}
+
+fn infer_member_value_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let [receiver, member] = node.children.as_slice() else {
+        return Ok(None);
+    };
+    if matches!(node_text(&unit.source, member), "concat" | "join") {
+        return Err(failure(
+            &unit.source,
+            "T0018",
+            "string methods are not storable values before bound methods exist",
+            node.span,
+        ));
+    }
+    if node_text(&unit.source, member) != "length" {
+        return Ok(None);
+    }
+    let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    Err(failure(
+        &unit.source,
+        "T0013",
+        format!(
+            "`.length` requires `string`, found `{}`",
+            receiver_type
+                .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
+        ),
+        receiver.span,
+    ))
 }
 
 fn infer_unary_type(
@@ -3006,10 +3033,6 @@ fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item
         current = scope.parent;
         Some(scope)
     })
-}
-
-fn source_namespace(namespace: &str) -> String {
-    namespace.to_owned()
 }
 
 fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {

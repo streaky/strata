@@ -218,7 +218,7 @@ fn malformed_manifests_report_all_manifest_errors() {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("slash-separated lowercase"))
+            .any(|message| message.contains("must match `[a-z]"))
     );
     assert!(
         messages
@@ -405,4 +405,93 @@ fn semantic_analysis_checks_mapped_directory_correspondence() {
             .message
             .contains("does not match `/app/http`")
     );
+}
+
+#[test]
+fn namespace_mapping_directories_are_normalized_before_discovery_and_deduplication() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\napp = \"./src\"\ntools = \"src\"\n",
+    );
+    package.write("src/http/main.trn", "namespace app/http\n");
+
+    let errors = Package::load(&package.0).unwrap_err();
+    assert!(
+        errors[0]
+            .diagnostic
+            .message
+            .contains("map to the same directory")
+    );
+
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\napp = \"./src\"\n",
+    );
+    let loaded = Package::load(&package.0).unwrap();
+    assert_eq!(
+        loaded.units[0].expected_namespace.as_deref(),
+        Some("/app/http")
+    );
+}
+
+#[test]
+fn namespace_mapping_rejects_invalid_roots_and_directory_segments() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\n\"/\" = \"root\"\n\"app/con\" = \"reserved\"\n\"app/bad-\" = \"bad\"\nvalid = \"src\"\n",
+    );
+    package.write("src/Http/main.trn", "namespace valid/http\n");
+
+    let errors = Package::load(&package.0).unwrap_err();
+    let messages = errors
+        .iter()
+        .map(|error| error.diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("cannot be declared"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`con` is reserved"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`bad-` must match"))
+    );
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\nvalid = \"src\"\n",
+    );
+    let errors = Package::load(&package.0).unwrap_err();
+    assert!(
+        errors[0]
+            .diagnostic
+            .message
+            .contains("directory segment `Http` must match")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn namespace_discovery_follows_symlinked_source_files() {
+    use std::os::unix::fs::symlink;
+
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\napp = \"src\"\n",
+    );
+    package.write("elsewhere/helper.trn", "namespace app\n");
+    fs::create_dir_all(package.0.join("src")).unwrap();
+    symlink("../elsewhere/helper.trn", package.0.join("src/helper.trn")).unwrap();
+
+    let loaded = Package::load(&package.0).unwrap();
+    assert_eq!(loaded.units.len(), 1);
+    assert_eq!(loaded.units[0].relative_path, Path::new("src/helper.trn"));
 }

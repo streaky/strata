@@ -1,0 +1,4 @@
+phase = "check"
+status = "reject"
+entrypoint = "case.trn"
+code = "S2019"

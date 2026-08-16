@@ -368,7 +368,7 @@ Deliver:
 - explicit `global` handling for program-global creation/replacement and rejection of plain top-level assignment where a global operation is required;
 - duplicate, shadowing, visibility/inaccessibility, unresolved-name, and same-scope object-form collision diagnostics;
 - idempotent reimport of the same object-form export, with aliases required for distinct colliding exports;
-- fixed bootstrap importer whose milestone-3 module table registers versioned `/core/output`, `/core/types`, `/core/errors`, and `/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core/types`, while milestone 4 populates `/collections` with its selected collection subset;
+- fixed bootstrap importer whose milestone-3 module table registers versioned `/core/output`, `/core/types`, `/core/errors`, and `/core/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core/types`, while `/core/collections` remains an empty reserved namespace until the iterator protocol and collections ship in milestones 13 and 14;
 - the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`, requiring no import at any use site;
 - import resolution that does not create an ordinary binding automatically, and proof that an ordinary binding named `import` cannot alter structural import syntax or importer selection.
 
@@ -435,11 +435,13 @@ descriptors, infers and checks typed bindings, parameters, defaults, returns, ca
 operators, assignments, branches, loops, updates, and finite descriptor alternatives.
 Native fixed-width values lower directly to Rust with checked default arithmetic and
 shift operations; adaptive `int` operations use the dedicated exact-integer support
-crate, and deterministic source-oriented failures cover unsupported or invalid arithmetic
-and coercion paths. Canonical scalar display, grapheme-counted string length, descriptor
-and value-type identity, and the supported collection iteration slice are checked before
-lowering. Manifest-driven accepted cases and focused rejected cases exercise these semantic
-boundaries, while semantic unit tests cover the broader diagnostic set. The conformance
+crate. Deterministic source-oriented failures cover unsupported or invalid arithmetic and
+coercion paths. Canonical scalar display, grapheme-counted string length, descriptor identity,
+and value-type identity are checked before lowering. Collection values remain deferred until
+the iterator protocol and collections ship in milestones 13 and 14; the only iterable
+implemented today is `string`, whose `for` loop visits grapheme clusters. Manifest-driven
+accepted cases and focused rejected cases exercise these semantic boundaries, while semantic
+unit tests cover the broader diagnostic set. The conformance
 corpus includes adaptive logical comparisons, destination-aware returns, assignments, and
 lengths, fixed-width overflow, invalid member receivers, compound membership and identity,
 and identity operand evaluation order. The `fizz-buzz`, `build-report`,
@@ -806,7 +808,7 @@ Exit criterion: a user-defined iterator drives `for` through the same path as th
 
 Deliver:
 
-- list, map, set, tuple, range, and entry types under `/core/collections`, added vertically rather than as one batch;
+- list, map, set, tuple, range, and entry types under `/core/collections`, populating the empty compiler-owned namespace reserved since milestone 3 and adding each collection vertically rather than as one batch;
 - lookup and indexing whose default child throws `missing-key` or `index-error` and whose `checked` child returns absence, with no operation returning absence by default;
 - insertion-ordered map and set as the observable contract, plus a separate unordered type that is deterministic under a fixed hash seed rather than merely unordered;
 - half-open ranges with an explicit inclusive constructor, non-zero step, and empty-range rules;
@@ -1186,23 +1188,16 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.7 are delivered except for the corrections below, which reach back into milestone 4 as well as 4.7. The next work in order:
+Milestones 0 through 4.7 are delivered. The 4.7 completeness audit corrections are also
+closed: numeric literal lowering, bare-name initializers, normalized and validated namespace
+discovery, empty-join receiver evaluation, manifest root validation, strict segment grammar,
+canonical demo paths, package-root build placement, auditable resolved-source metadata,
+bound-string-method rejection, path diagnostics, and conformance coverage all have focused
+regressions. The previously ambiguous minimal collection subset is explicitly deferred:
+`/core/collections` remains an empty reserved namespace until the iterator protocol and
+collections arrive in milestones 13 and 14.
 
-1. Type float literals. Literal inference has no float case, so every numeric literal is an `int`: `value float = 1.5` is rejected as an `int` assignment, and `value = 1.5` lowers to `Int::from_decimal("1.5")`, which builds and then panics at runtime with the compiler's own internal-error text. A hexadecimal literal fails the same way, though `L0009` advertises the form. Ship float literals with their lowering and display contract, and make a literal that lowering cannot render a Terrane diagnostic rather than an `expect` in a support crate. `docs/surface-today.md` documents floating-point values as implemented and must agree with whatever ships.
-2. Fix initializer selection in lowering. A binding whose value is a bare name is skipped as though it were the binding target, so `b = a` emits an uninitialized `let` inside a function and no item at all at namespace level. The target is already the first `Name` child, so exclude it by identity rather than by kind; descriptor bindings return earlier on their value type and must keep lowering to nothing.
-3. Normalise manifest directory paths at load, so a `.` or `./` component cannot defeat suffix derivation and two spellings of one directory cannot both map.
-4. Validate each discovered directory component against the segment grammar and the reserved set, reporting against the path rather than the source declaration, which cannot legally be changed to match a directory named `Http`.
-5. Preserve receiver evaluation in the empty `join` lowering; the result is the empty string, but the separator expression still runs.
-6. Reject namespace roots no source unit can declare: the bare root `/`, and segments the lexer cannot form.
-7. Tighten both segment checks to the normative grammar, which admits only internal single hyphens. Semantic validation and the manifest root parser currently accept doubled and trailing hyphens, so `namespace foo--bar` is accepted and `"app-"` loads as a namespace root. The `S2018` message quotes the loose form and changes with the check. Narrowing now and loosening later is the safe direction; the reverse breaks existing names.
-8. Migrate `demos/fork.trn` to the canonical path syntax, the last source in the repository on the superseded form.
-9. Root the generated build tree at the package root. It is currently placed beside the unit declaring `main`, so a package build writes into a mapped namespace directory that discovery then scans; a `.trn` file there is treated as a package source.
-10. Record the resolved source set in build metadata, the one milestone 4.7 deliverable that is absent rather than defective, and the one that keeps a directory-root manifest auditable.
-11. Reject a bound string member used as a value, as the coercion family already is. `value = text.concat` lowers to Rust that does not compile, where `value = number.coerce` fails at its source span; storable bound methods arrive in milestone 8.
-12. Settle milestone 4's minimal collection subset. `/core/collections` is registered empty, there is no collection literal, and `for` iterates string graphemes only. Either ship the subset before milestone 5 or move it to milestone 14 and say so in milestones 3 and 4.
-13. Sharpen path diagnostics: split the manifest root message into its grammar and reserved cases, name the `//` comment collision when it truncates a path, and settle whether whitespace may surround `/`.
-14. Add conformance cases for the segment, reserved, and correspondence diagnostics, for the specification's representative program, for name aliasing, and for every literal form the lexer admits.
-15. Close milestone 4.8, then continue milestone by milestone, adding real programs only when every construct they contain is supported.
+The next work in order is milestone 4.8, followed by milestone 5.
 
 Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
