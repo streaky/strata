@@ -41,15 +41,27 @@ encoding: UTF-8
 layout: indentation-delimited; NEWLINE/INDENT/DEDENT
 empty_block: legal; no pass/no-op statement
 comments: ['# line', '// line', '/* first terminator closes */']
+identifier_case:
+  rule: all user-declared names are lowercase - namespaces, functions, classes, interfaces, traits, fields, bindings
+  form: kebab-case; 'parse-json' not 'parseJSON', which removes the acronym-casing bikeshed permanently
+  rationale: case carries no semantic load in Terrane - object-form '.x' versus ordinary 'x' already makes the distinction other languages spend case on
+  enforcement: uppercase parses, then is rejected with a precise diagnostic and formatter fixit; never silently folded
+  carve_out: type parameters are uppercase ('list of T', 'map of K, V', 'iteration-step of Item') - a different KIND of name, standing in for a thing rather than naming one; never user-declared in v1 and never part of a path
+charset:
+  v1: ASCII only, per the version-one identifier policy
+  namespaces: ASCII PERMANENTLY - non-ASCII segments hit the filesystem, where macOS NFD and Linux NFC produce different bytes for one identifier
+  post_v1_extension: non-ASCII permitted in non-namespace identifiers only, and only with UAX #31 for the character set, NFC for equality, UTS #39 mixed-script confusable linting, and bidi control characters rejected outright (CVE-2021-42574, Trojan Source)
+  ordering: widening an identifier set is backward compatible, narrowing is not; ship ASCII and extend later
 identifier:
   version_1_characters: ASCII letters and digits only
   start: ASCII letter
   continuation: ASCII letters|digits|joiners
   joiners: punctuation admitted by normative grammar
   exact_identity: punctuation retained; no normalization
-  examples_valid: [http2, sha256, ipv4/ipv6, foo+bar, sha3-256sum]
+  examples_valid: [http2, sha256, ipv4-ipv6, foo+bar, sha3-256sum]
   permanent_identifier: compact letter-joiner-letter, e.g. total-count
-  lexical_error: terminal joiner + digits-only unit, e.g. count-1, page/2, x+4
+  lexical_error: terminal joiner + digits-only unit, e.g. count-1, x+4
+  slash_excluded: '/' is the namespace separator, NOT an identifier joiner; a character cannot be both without making 'namespace foo/bar' ambiguous
   fix: insert operator spaces, e.g. count - 1
 operators:
   spaced_infix: 'a + b'
@@ -83,14 +95,25 @@ Text literals:
 ## NAMESPACE
 
 ```yaml
-package_sources: manifest enumerates complete source-unit set; parse all before namespace resolution
-filename_mapping: none
-namespace_declaration: whitespace-separated tiers
-example: 'namespace my-output formatters'
-root_anchor: '/'; anchor only, NEVER separator
-relative_parent: '.. tier'
-relative_current: unanchored tier path
+separator: '/' - one delimiter for every boundary, including the root anchor
+namespace_declaration: 'namespace my-output/formatters'
+root_anchor: '/leading' - same character as the separator
+relative_parent: '../tier', '../../tier'; repeated parents nest as ordinary path components
+relative_current: unanchored path
+segment_grammar: '[a-z][a-z0-9-]*' - lowercase ASCII letter, then letters, digits, internal hyphens
+segment_vs_identifier: DISTINCT production and a strict subset; identifier admits joiners + * % < >, a segment admits only '-'; 'foo+bar' is a legal identifier and an illegal segment; never reuse the identifier production for segments
+segment_allowlist_rationale: excludes / \ : * ? " < > | NUL, control chars, leading/trailing space, dot, '.', '..' BY CONSTRUCTION; no blocklist needed
+segment_reserved: con prn aux nul com1..com9 lpt1..lpt9 (Windows devices, reserved with any extension); empty segment
+segment_reserved_rationale: made of legal characters, so the allowlist cannot exclude them; reserved now because adding later breaks existing names
+uppercase: parses, then REJECTED semantically with a fixit; never silently lowercased (principle 5, no silent repair)
 identity: exact source spelling
+package_sources: manifest declares namespace-root to directory-root mappings; discovery is bounded to declared roots
+filename_mapping: namespace tree corresponds to directory tree; a declaration that disagrees with its location is an ERROR unless the manifest declares that mapping
+root_mapping: 'foo/bar -> ./some/path' makes foo/bar/dave resolve under ./some/path/dave
+overlap: longest matching namespace prefix wins; two roots mapped to one directory is a manifest-load error
+unmapped_file: a .trn file under a declared root but outside every mapping is an error, never silently ignored
+third_party: a dependency's namespaces come from ITS manifest and are never discovered by scanning its tree
+determinism: the resolved source set is recorded in build metadata; sorted expansion, ambiguity is an error
 lookup_views:
   ordinary: foo
   object_form: .foo
@@ -105,7 +128,7 @@ reimport_different_same_name: collision; alias required
 Top-level plain assignment is namespace-local, including root namespace. `global` explicitly creates/replaces program-global identity and does not erase lexical provenance/visibility.
 
 ```terrane
-namespace application commands
+namespace application/commands
 print = .print
 private cache = .map;
 global shared-limit int = 10
@@ -115,8 +138,9 @@ global shared-limit int = 10
 
 ```terrane
 use (system) sqlite
-from /core output import .print
-from /core collections import .map as .ordered-map
+from /core/output import .print
+from /core/collections import .map as .ordered-map
+from ../shared/config import .settings
 import with .custom-import
 ```
 
@@ -124,6 +148,7 @@ Rules:
 
 - `use` declares a build dependency; it does not automatically bind supplied names.
 - `from ... import .x` adds object-form `.x`, not ordinary `x`.
+- Prelude names and descriptor constructs need NO import: `print; value` and `value int8 = 42` are complete programs. Importing `.print` or `.int8` is redundant, not required, and should not appear in examples or fixtures unless the case is specifically about importing.
 - Bind ordinary name explicitly: `print = .print`.
 - Imports are structural compile-time slots, never ordinary calls/bindings.
 - Importer selection is scoped; `global import with` selects program fallback.
@@ -140,6 +165,7 @@ Version-one default ordinary program-global bindings EXACTLY:
 print int float bool string bytes none
 ```
 
+- These need no import. `print; value` is a complete statement in a program with no import lines at all.
 - Prelude may be disabled.
 - Explicit `/core` object imports still work and may shadow/replace defaults deliberately.
 - Object-form facilities such as `.map`, `.list`, `.range`, `.file` are NOT implicitly prelude imports.
@@ -150,7 +176,7 @@ prelude_bindings: the seven ordinary program-globals listed above; unchanged
 descriptor_constructs: int8..int128, uint8..uint128, float32, float64, and the abstract category descriptors
 construct_availability: usable in construct position without import ('value int8 = 42')
 construct_value_use: still rejected in value position; a construct is not a runtime value
-explicit_import: remains available for rebinding, aliasing, and shadowing ('from /core types import .int64 as .word')
+explicit_import: remains available for rebinding, aliasing, and shadowing ('from /core/types import .int64 as .word')
 ```
 
 ## CALL
@@ -188,7 +214,7 @@ default_args: call site, after supplied args, parameter order
 Compact precedence, high -> low:
 
 ```text
-postfix/member/index/update/call
+postfix member/index/call   (NOTE: '++'/'--' are NOT here - they are update STATEMENTS)
 prefix: not - ~ ; ref move await consume postfix operand
 * / %
 + -
@@ -214,7 +240,7 @@ or
 
 Canonical statement inventory (some not version-one implementation scope):
 
-```text
+```terrane
 namespace, use, from/import, import with
 binding/declaration, assignment, expression
 function, class, protocol, interface, trait
@@ -282,7 +308,7 @@ function_type: 'function from A, B to R'; associates right
 - Values always have types; unconstrained binding may be dynamic without weakening values.
 - No implicit cross-type arithmetic/coercion.
 - Explicit coercion is object-driven.
-- Abstract descriptors are interface/category contracts exported from `/core types`, never prelude names. `int` implements `integer` and `number`; fixed widths add `fixed-integer` plus their signedness contract; `float`/`float32`/`float64` implement `floating` and `number`. Conformance drives member attachment and finite-union reasoning; it creates no implicit assignment conversion and no storage supertype.
+- Abstract descriptors are interface/category contracts exported from `/core/types`, never prelude names. `int` implements `integer` and `number`; fixed widths add `fixed-integer` plus their signedness contract; `float`/`float32`/`float64` implement `floating` and `number`. Conformance drives member attachment and finite-union reasoning; it creates no implicit assignment conversion and no storage supertype.
 - Type violations compile-time when provable.
 - Conditions invoke truth protocol.
 - `==` value equality; `is` source-visible identity; `is a` type membership/assignability. `===` invalid.
@@ -294,12 +320,13 @@ function_type: 'function from A, B to R'; associates right
 binding: 'd = int8' names the construct; it is a compile-time descriptor alias, not a value
 alias_use: legal in annotation position, coercion destination, and 'is a' right side
 value_use: REJECTED at the source span - no display or value protocol in v1 (print; d, arithmetic, value parameter)
-lowering: a descriptor binding has NO runtime representation and lowers to nothing; erasure is definitional, not an optimisation
-defect: emitting a Rust name for a descriptor binding is a compiler defect, never a fallback
+lowering: a statically resolved descriptor needs NO runtime storage and lowers to nothing
+materialisation: reflection or dynamic descriptor use may require the canonical descriptor object at runtime; 'not an ordinary value' does NOT mean 'never has a runtime representation'
+defect: emitting a plain Rust binding for a descriptor, as if it were an ordinary value, is a compiler defect
 backing_object: real - .type returns it, 'is a' compares it, identity survives rebinding, reflection exposes it later
 ```
 
-- Type descriptors have stable identity. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
+- Type descriptors are semantic objects with stable canonical identity, not ordinary values. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
 
 ## INTEGER
 
@@ -334,7 +361,9 @@ div_rem: returns 'div-rem-result of T' with quotient T and remainder T; default 
 div_rem_reason: a wrapped quotient breaks the quotient/remainder identity the result object exists to guarantee
 shift_fixed: default and checked reject counts outside the width; wrap reduces count modulo width; saturate absent
 shift_int: shift-left unbounded and total; shift-right arithmetic; no count-policy children
-postfix: '++' and '--' select the default add/subtract only; other policies need explicit assignment
+postfix: '++' and '--' are STATEMENTS, never expressions; they produce no value
+postfix_rationale: expression-valued increment is the source of C read-modify-write sequencing problems and buys nothing; write the two operations
+postfix_policy: they select the default add/subtract child only; other policies need explicit assignment
 ```
 
 ## COERCION
@@ -415,7 +444,7 @@ for i = 0; i < limit; i++
 ```
 
 - Three-clause calls require grouping: `for i = (start-at; limit); ...`.
-- `++`/`--` are statement/update operations on compatible mutable numeric bindings.
+- `++`/`--` are statement/update operations on compatible mutable numeric bindings. They produce NO value and cannot appear in expression position; grammar places them in `update-statement`, not `postfix-expression`, and they are permitted in a three-clause `for` clause.
 - Labels/goto function-local; cannot enter deeper scope or cross initialization/lifetime/cleanup unsafely.
 - `match` reserved shape but outside minimum compiler milestone.
 
@@ -432,7 +461,7 @@ finally
 ```
 
 - Recoverable source throws lower primarily via Rust `Result`-like flow, not panic.
-- `/core errors` defines the standard error protocol and EXACTLY these language-mandated error objects:
+- `/core/errors` defines the standard error protocol and EXACTLY these language-mandated error objects:
 
 ```text
 .arithmetic-overflow          checked fixed-width result outside receiver range, incl. signed MIN / -1
@@ -492,6 +521,12 @@ iteration_end: exhaustion is NOT none, because none may be a valid item; end is 
 String members follow the same callable-family shape:
 
 ```yaml
+concat: 'a.concat; b, c' -> 'abc'; appends arguments to the receiver, NO separator
+join: "': '.join; a, b, c" -> 'a: b: c'; the RECEIVER is the separator (Python str.join / PHP implode shape)
+join_bounds: zero args -> ''; one arg -> that arg with no separator; separator never precedes the first or follows the last part
+composition_display: every argument converts through canonical text display; no display protocol is a typed error, never a silent rendering
+composition_purity: neither member mutates the receiver; both return a new string
+concat_vs_join: distinct operations sharing a subject, not modes of one; two members, not a family
 trim: 'text.trim;' both ends | trim.start | trim.end
 trim_argument: 'trim.start; "foo"' removes that literal when present, returns unchanged when absent; no separate strip-prefix member
 position_children: start means logical index 0 and end the logical last scalar, for every string regardless of script
@@ -571,6 +606,21 @@ sources = ["src/main.trn", "src/support.trn"] # required complete source set
 - Dependency graph/order deterministic.
 - Separate compilation honors published representation/ABI; downstream cannot silently respecialize upstream public layout.
 
+## DEPENDENCY PRINCIPLE
+
+```yaml
+rule: declarations name ECOSYSTEMS and PACKAGES, never APIs
+truth: the resolved manifest/lock/features/target/toolchain define the interface; nothing in the language predefines it
+bridging: the build generates boundary machinery ONLY for what Terrane source actually crosses; no wholesale projection
+tooling: LSP projects an ADVISORY surface (cargo metadata, rustdoc, runtime introspection); never compiler-authoritative, never invents members, never alters output
+authority: the ecosystem's own toolchain - cargo/rustc, C compiler/linker, the foreign runtime
+no_execution: tooling must not execute arbitrary package code to inspect it
+cache_identity: manifest contents + lock checksum + features + target triple + toolchain + source checksums
+rust_specialisation: no generated adapter layer, no generic instantiation translation, no trait/lifetime/error mapping; those stay in Rust and are touched only inside native Rust bodies
+rust_wrapper: a Terrane-visible wrapper is authored deliberately, never generated automatically
+foreign_specialisation: 'from python/x import .y' names a crossing point, not an API import; adapters define boundary behaviour, not a translation of the ecosystem
+```
+
 ## RUST
 
 - Rust is native lowering, not foreign runtime.
@@ -649,7 +699,7 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 2. Values always typed; dynamic != weak coercion; constraints optional/local/real; coercion explicit.
 3. Assignment value-semantic; COW allowed; `ref` shared identity; `move` ownership transfer.
 4. Ordinary/object-form lookup distinct; imports do not auto-bind ordinary names.
-5. Namespace tiers whitespace-separated; `/` root anchor only.
+5. Namespace segments `/`-separated, lowercase `[a-z][a-z0-9-]*`; `/` is both root anchor and separator, and is never an identifier character.
 6. Compact operator-bearing names differ lexically from spaced operators.
 7. `foo.bar` member; `.bar` object; `foo; .bar` explicit argument; adjacency never call.
 8. Compile-time structural slots never depend on same-spelled ordinary bindings.
@@ -701,7 +751,7 @@ Not version-one; no private incompatible syntax:
 Before writing Terrane:
 
 1. Determine implemented subset from conformance cases, not this design.
-2. Declare namespace tiers with spaces; never slash separators.
+2. Declare namespace segments with `/` separators, lowercase only; never whitespace tiers.
 3. Import object forms explicitly; bind ordinary names explicitly.
 4. Preserve compact punctuated identifiers; put spaces around infix operators.
 5. Use `;` for every call, including zero args.

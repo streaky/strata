@@ -141,7 +141,7 @@ Descriptor identity is canonical. Rebinding `.int8` under an ordinary name does 
 
 A method family is an immutable, bound callable object:
 
-```text
+```terrane
 selected = value.coerce
 selected; Destination             # the bare invocation is the throwing default
 selected.checked; Destination     # looks up child, then invokes it
@@ -297,7 +297,7 @@ integer.div-rem; divisor -> div-rem-result of T
 
 `div-rem` exposes only its invocation and `checked`. `wrap` and `saturate` are absent even on fixed-width receivers, because a wrapped or clamped quotient no longer satisfies the quotient/remainder identity the result object exists to guarantee. Both operands evaluate once and one backend operation is performed.
 
-`/` and `%` use Euclidean semantics. Division by zero throws under every policy and is never converted into a wrapped or saturated value. Fixed signed `MIN / -1` follows each policy's contract. Unsigned `negate` is absent. Postfix `++` and `--` select the default `add`/`subtract` child only.
+`/` and `%` use Euclidean semantics. Division by zero throws under every policy and is never converted into a wrapped or saturated value. Fixed signed `MIN / -1` follows each policy's contract. Unsigned `negate` is absent. Postfix `++` and `--` are statements rather than expressions: they produce no value, and there is no form yielding the previous or updated result. They select the default `add`/`subtract` child only.
 
 ### 5.3 Bitwise families
 
@@ -389,7 +389,9 @@ Other string operations form ordinary method objects unless they have genuine mo
 
 ```text
 string
-+-- concat; values implementing text/string contract -> string
++-- concat; values... -> string                       append to receiver, no separator; 'a'.concat; 'b','c' = 'abc'
++-- join; values... -> string                        receiver is the SEPARATOR; ': '.join; 'a','b' = 'a: b'
+|   zero args -> ''; one arg -> that arg, no separator; never leads or trails
 +-- contains                                         literal substring predicates
 |   +-- invocation; string -> bool                   occurs anywhere
 |   +-- start; string -> bool                        occurs at the logical start
@@ -531,7 +533,8 @@ callable
 +-- default invocation; positional/named arguments
 +-- parameter descriptor list
 +-- return descriptor
-+-- effects: throws/allocates/I-O/blocks/awaits/mutation/unsafe/FFI
++-- effects: throws E / io / blocks / awaits / mutates / unsafe / foreign
+|   allocation is compiler-internal, NOT public vocabulary
 
 class descriptor
 +-- default invocation -> construct
@@ -566,23 +569,23 @@ error                                              structural interface; all cat
 +-- cause -> error|none                            where wrapped
 +-- source-context chain
 
-/core errors::.arithmetic-overflow
+/core/errors::.arithmetic-overflow
 +-- operation
 +-- fixed-width type
 
-/core errors::.division-by-zero
+/core/errors::.division-by-zero
 +-- operation
 +-- numeric type
 
-/core errors::.integer-conversion-overflow
+/core/errors::.integer-conversion-overflow
 +-- source value/type
 +-- destination type
 
-/core errors::.negative-shift-count
+/core/errors::.negative-shift-count
 +-- attempted count
 +-- shift operation
 
-/core errors::.coercion-error
+/core/errors::.coercion-error
 +-- source value/type
 +-- destination type
 ```
@@ -619,7 +622,7 @@ Scalar, string, collection, ordinary class, closure, and bound-method values hav
 
 These constructs are syntax in v1, not replaceable prelude functions:
 
-```text
+```terrane
 if / else if / else
 while
 for ... in ...
@@ -637,14 +640,43 @@ rust / unsafe rust / foreign runtime blocks
 
 Postfix `++` and `--` are statements, not expression values. Pattern matching and user-replaceable core constructs remain later.
 
+### 11.0 Namespace paths and the prelude
+
+`/` is the only namespace boundary marker: it anchors the root and separates every segment.
+
+```terrane
+namespace my-app/http/handlers
+from /core/output import .print
+from ../shared/config import .settings
+from ../../platform import .clock
+```
+
+A segment is `[a-z][a-z0-9-]*` — lowercase ASCII letter, then letters, digits, and internal hyphens. The allowlist makes every filesystem-hazardous character unformable rather than rejected, and `/` is therefore not an identifier character: `ipv4-ipv6`, never `ipv4/ipv6`. Windows device names (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`) are reserved as whole segments, since they are made of legal characters and the allowlist cannot see them.
+
+All user-declared names are lowercase kebab-case. Uppercase parses and is then rejected with a fixit rather than silently folded. Type parameters are the carve-out and stay uppercase: `list of T`, `map of K, V`.
+
+The namespace tree corresponds to a directory tree; a declaration disagreeing with its location is an error unless the manifest declares that mapping. The manifest maps a namespace root to a directory root, longest prefix wins, and a dependency's namespaces come from its own manifest rather than from scanning its tree.
+
+**Most programs need no imports at all.** The prelude supplies `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none` as ordinary bindings, and every descriptor is a construct available without import. This is a complete program:
+
+```terrane
+namespace demo
+
+function main
+  value int8 = 120
+  print; value
+```
+
+Importing `.print` or `.int8` is redundant. Explicit import remains available for rebinding, aliasing, and shadowing, and the examples below use it because they are specifically about importing.
+
 ### 11.1 Import aliases bind only the ordinary scope
 
 `as` on a `from ... import` selection removes the otherwise necessary object-form import followed by an ordinary binding:
 
 ```terrane
 namespace integer-coercions
-from /core output import .print as print
-from /core types import .int8 as int8, .uint8 as uint8
+from /core/output import .print as print
+from /core/types import .int8 as int8, .uint8 as uint8
 ```
 
 Each selection has the form `.imported-object as ordinary-name`. It resolves the same exported object that an unaliased `.imported-object` selection would resolve, but binds that object directly under `ordinary-name` in the current ordinary scope. The alias has no leading dot, does not additionally introduce the imported spelling into the local object-form scope, and preserves the imported object's identity and visibility checks.
@@ -652,8 +684,8 @@ Each selection has the form `.imported-object as ordinary-name`. It resolves the
 This replaces the following two-step pattern when only the ordinary names are wanted:
 
 ```terrane
-from /core output import .print
-from /core types import .int8, .uint8
+from /core/output import .print
+from /core/types import .int8, .uint8
 print = .print
 int8 = .int8
 uint8 = .uint8
@@ -663,20 +695,20 @@ It is not declaration-modifier syntax. In particular, an import alias can never 
 
 ```terrane
 # rejected
-from /core output import .print as global print
+from /core/output import .print as global print
 ```
 
 Global creation or replacement remains an explicit `global` declaration, visibly separate from import:
 
 ```terrane
 namespace foo
-from /core output import .print
+from /core/output import .print
 global print = .print
 ```
 
 ```terrane
 namespace foo
-from /core output import .print as printfoo
+from /core/output import .print as printfoo
 global print = printfoo
 ```
 
@@ -1099,6 +1131,12 @@ Logging is not a core-prelude replacement for `print`: it is a structured, capab
 
 ## 14. Packages, adapters, and foreign objects
 
+One principle governs every ecosystem below, and each entry is a specialisation of it:
+
+> Dependency declarations name ecosystems and packages, not APIs. The build resolves the exact package and generates only the boundary machinery that Terrane source actually crosses. Tooling projects an advisory surface, which is never compiler-authoritative.
+
+A declaration names `serde` or `numpy`; it does not describe what they contain. The resolved manifest, lock, features, target, and toolchain define the interface for a given build, because a predefined surface would be a second, weaker copy of the ecosystem's own type system and would drift with every release. Nothing is projected wholesale: boundary machinery exists for the specific calls and values a program crosses, so generated output stays proportional to use. Editor knowledge — Cargo metadata, rustdoc, runtime introspection — is advisory, never invents members, and never decides whether a program compiles. Tooling must not execute arbitrary package code to inspect it.
+
 ```text
 package descriptor
 +-- identity/version/content
@@ -1112,13 +1150,14 @@ Rust crate dependency
 +-- build-time native Rust interface from resolved package graph
 +-- optional editor index/cache; not a compiler API projection
 system/C adapter
-foreign runtime adapter
+foreign runtime adapter                            boundary machinery, NOT a translation of the ecosystem
 +-- runtime/module loading
-+-- proxy type descriptors
++-- proxy type descriptors for crossings the program contains
 +-- explicit scalar/collection conversion
 +-- errors and traceback translation
 +-- ownership/thread/lifetime rules
 +-- reflection/debug/profiling metadata
++-- does NOT enumerate, mirror, or typecheck the foreign package's API
 ```
 
 ### 14.1 Rust crates and editor contracts
@@ -1129,7 +1168,7 @@ The compiler’s reproducibility contract is the generated Cargo manifest and lo
 
 Editor package knowledge is an optional, light-touch index over the same resolved graph, never an input that changes compilation. The language server obtains package/version/feature/target facts from Cargo metadata and lock data, then uses cached rustdoc JSON or Rust-analyzer for completion, signature help, hover, and documentation in inline or maintained Rust. It refreshes or invalidates that cache when the relevant manifest, lock, feature, target, or package source changes; it must not execute arbitrary package code merely to offer hints. Hints remain advisory: availability and correctness are settled by deterministic lowering and the build.
 
-`reqwest` is the required v1 proving case. A Terrane package declares a locked `reqwest` dependency with `default-features = false` and explicit `blocking`, `rustls`, and optional `json` features; direct `reqwest::blocking` use in a native Rust body proves that the build-selected Rust interface flows through Cargo lowering without a Terrane wrapper. The language server may index that exact resolved package for Rust-native hints, but does not manufacture Terrane members or a request/result object model. The fixture uses a deterministic loopback server, compiles generated Rust with warnings denied, and runs it. Async `reqwest` awaits the general async model instead of imposing a one-off future abstraction.
+`reqwest` is the required v1 proving case. A Terrane package declares a locked `reqwest` dependency with `default-features = false` and explicit `blocking` and `rustls-tls` features, an explicitly chosen roots variant, and optional `json`; direct `reqwest::blocking` use in a native Rust body proves that the build-selected Rust interface flows through Cargo lowering without a Terrane wrapper. The language server may index that exact resolved package for Rust-native hints, but does not manufacture Terrane members or a request/result object model. The fixture uses a deterministic loopback server, compiles generated Rust with warnings denied, and runs it. Async `reqwest` awaits the general async model instead of imposing a one-off future abstraction.
 
 ## 15. Reflection and tooling-visible descriptors
 
@@ -1143,6 +1182,8 @@ value: source type, identity category, storage/copy facts where permitted
 foreign proxy: runtime, foreign type, ownership, transition contracts
 build: target, profile, capabilities, selected branches, adapter inputs
 ```
+
+Descriptors are semantic objects with canonical identity, not ordinary values. A statically resolved descriptor needs no runtime storage and lowers to nothing; reflection is the case that requires the canonical descriptor object to be materialised at runtime. "Not an ordinary value" is therefore a statement about storage and assignment, not a claim that a descriptor can never exist at run time — and a profile that strips reflection metadata removes the materialisation, not the identity.
 
 Debugging, tracing, profiling, and generated Rust all preserve stable source identities. Physical Rust representations are supplementary and never redefine source semantics.
 

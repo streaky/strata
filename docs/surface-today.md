@@ -308,7 +308,7 @@ print; values... -> none
 
 ### Source-declared functions
 
-```text
+```terrane
 function name ReturnType; required Type, optional Type = default
 ```
 
