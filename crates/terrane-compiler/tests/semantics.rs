@@ -162,10 +162,11 @@ fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
         "/core/output",
         "/core/types",
         "/core/errors",
-        "/collections",
+        "/core/collections",
     ] {
         assert!(analyzed.namespaces.contains_key(namespace));
     }
+    assert!(!analyzed.namespaces.contains_key("/collections"));
     for name in [
         "int8", "int16", "int32", "int64", "int128", "uint8", "uint16", "uint32", "uint64",
         "uint128", "float32", "float64",

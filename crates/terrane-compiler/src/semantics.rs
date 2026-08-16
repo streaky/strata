@@ -286,7 +286,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     for unit in &units {
         if matches!(
             unit.namespace.as_str(),
-            "/core/output" | "/core/types" | "/core/errors" | "/collections"
+            "/core/output" | "/core/types" | "/core/errors" | "/core/collections"
         ) {
             let span = unit
                 .tree
@@ -2879,7 +2879,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             SymbolKind::Binding,
         ),
     );
-    namespaces.insert("/collections".to_owned(), Namespace::default());
+    namespaces.insert("/core/collections".to_owned(), Namespace::default());
     namespaces
 }
 
