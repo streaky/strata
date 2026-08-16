@@ -1,0 +1,9 @@
+namespace string-join
+
+function main
+  empty = '--'.join;
+  single = '--'.join; 'one'
+  many = '--'.join; 'one', 2, true
+  print; empty
+  print; single
+  print; many

@@ -702,6 +702,22 @@ impl Emitter<'_> {
             && callee
                 .children
                 .get(1)
+                .is_some_and(|member| self.text(member) == "join")
+        {
+            let separator = self.expression(&callee.children[0]);
+            let values = values
+                .into_iter()
+                .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                return "String::new()".to_owned();
+            }
+            return format!("vec![{}].join(&({separator}))", values.join(", "));
+        }
+        if callee.kind == SyntaxKind::MemberExpression
+            && callee
+                .children
+                .get(1)
                 .is_some_and(|member| self.text(member) == "concat")
         {
             let receiver = self.expression(&callee.children[0]);

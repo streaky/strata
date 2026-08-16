@@ -1084,6 +1084,16 @@ fn validate_call_nodes<'a>(
     {
         infer_value_type(unit, node, scoped_bindings)?;
     }
+    if node.kind == SyntaxKind::CallExpression
+        && node.children.first().is_some_and(|callee| {
+            callee.kind == SyntaxKind::MemberExpression
+                && callee.children.get(1).is_some_and(|member| {
+                    matches!(node_text(&unit.source, member), "concat" | "join")
+                })
+        })
+    {
+        infer_value_type(unit, node, scoped_bindings)?;
+    }
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
         if node.kind == SyntaxKind::CallExpression
@@ -1871,6 +1881,27 @@ fn infer_value_type(
     if node.kind == SyntaxKind::CallExpression {
         if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
             return Ok(Some(value_type));
+        }
+        if let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = callee.children.as_slice()
+            && matches!(node_text(&unit.source, member), "concat" | "join")
+        {
+            let receiver_type = infer_value_type(unit, receiver, bindings)?;
+            if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+                return Ok(Some(ValueType::Scalar(ScalarType::String)));
+            }
+            return Err(failure(
+                &unit.source,
+                "T0013",
+                format!(
+                    "`.{}` requires a `string` receiver, found `{}`",
+                    node_text(&unit.source, member),
+                    receiver_type
+                        .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string())
+                ),
+                receiver.span,
+            ));
         }
         if let Some(callee) = node.children.first()
             && callee.kind == SyntaxKind::Name
