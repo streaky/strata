@@ -570,7 +570,7 @@ Deliver:
   two, and context-sensitive lexing would contradict the rule that a compact joiner sequence
   is always an identifier. `ipv4/ipv6` becomes `ipv4-ipv6`; update the Rust-name encoding,
   which currently escapes the slash;
-- the segment grammar `[a-z][a-z0-9-]*`, enforced as an allowlist so that every
+- the segment grammar `[a-z]([a-z0-9]|-[a-z0-9])*`, enforced as an allowlist so that every
   filesystem-hazardous character is unformable rather than blocklisted, plus the reserved
   whole-name set `con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, which is made of
   legal characters and therefore invisible to the allowlist. Reserve them now even though

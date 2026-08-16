@@ -99,7 +99,7 @@ namespace_declaration: 'namespace my-output/formatters'
 root_anchor: '/leading' - same character as the separator
 relative_parent: '../tier', '../../tier'; repeated parents nest as ordinary path components
 relative_current: unanchored path
-segment_grammar: '[a-z][a-z0-9-]*' - lowercase ASCII letter, then letters, digits, internal hyphens
+segment_grammar: '[a-z]([a-z0-9]|-[a-z0-9])*' - lowercase ASCII letter, then letters, digits, internal hyphens
 segment_vs_identifier: DISTINCT production and a strict subset; identifier admits joiners + * % < >, a segment admits only '-'; 'foo+bar' is a legal identifier and an illegal segment; never reuse the identifier production for segments
 segment_allowlist_rationale: excludes / \ : * ? " < > | NUL, control chars, leading/trailing space, dot, '.', '..' BY CONSTRUCTION; no blocklist needed
 segment_reserved: con prn aux nul com1..com9 lpt1..lpt9 (Windows devices, reserved with any extension); empty segment
@@ -744,7 +744,7 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 2. Values always typed; dynamic != weak coercion; constraints optional/local/real; coercion explicit.
 3. Assignment value-semantic; COW allowed; `ref` shared identity; `move` ownership transfer.
 4. One lookup view; imports bind ordinary names scoped to the containing block, function, or namespace.
-5. Namespace segments `/`-separated, lowercase `[a-z][a-z0-9-]*`; `/` is both root anchor and separator, and is never an identifier character.
+5. Namespace segments `/`-separated, lowercase `[a-z]([a-z0-9]|-[a-z0-9])*`; `/` is both root anchor and separator, and is never an identifier character.
 6. Compact operator-bearing names differ lexically from spaced operators.
 7. `foo.bar` member; `.bar` object; `foo; bar` explicit argument; adjacency never call.
 8. Compile-time structural slots never depend on same-spelled ordinary bindings.

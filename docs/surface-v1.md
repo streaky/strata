@@ -651,7 +651,7 @@ from ../shared/config import settings
 from ../../platform import clock
 ```
 
-A segment is `[a-z][a-z0-9-]*` — lowercase ASCII letter, then letters, digits, and internal hyphens. The allowlist makes every filesystem-hazardous character unformable rather than rejected, and `/` is therefore not an identifier character: `ipv4-ipv6`, never `ipv4/ipv6`. Windows device names (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`) are reserved as whole segments, since they are made of legal characters and the allowlist cannot see them.
+A segment is `[a-z]([a-z0-9]|-[a-z0-9])*` — lowercase ASCII letter, then letters, digits, and internal hyphens. The allowlist makes every filesystem-hazardous character unformable rather than rejected, and `/` is therefore not an identifier character: `ipv4-ipv6`, never `ipv4/ipv6`. Windows device names (`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`) are reserved as whole segments, since they are made of legal characters and the allowlist cannot see them.
 
 All user-declared names are lowercase kebab-case. Uppercase parses and is then rejected with a fixit rather than silently folded. Type parameters are the carve-out and stay uppercase: `list of T`, `map of K, V`.
 

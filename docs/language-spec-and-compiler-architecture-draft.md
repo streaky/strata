@@ -742,7 +742,7 @@ Correspondence is directory-level, not file-level. A namespace spans as many sou
 A namespace segment is:
 
 ```text
-[a-z][a-z0-9-]*
+[a-z]([a-z0-9]|-[a-z0-9])*
 ```
 
 A lowercase ASCII letter, followed by letters, digits, and internal hyphens.
@@ -5612,7 +5612,7 @@ The following are the design’s constitutional layer. They govern the entire do
 10. `move` is the visible ownership-transfer operation.
 11. Imports bind ordinary names in the scope containing them; lexical scope, not a second spelling, is what keeps them from leaking.
 12. There is one lookup view. `.` appears only between a receiver and its member, never as a name prefix.
-13. Namespace segments are `/`-separated, lowercase `[a-z][a-z0-9-]*`, and a strict subset of `identifier`.
+13. Namespace segments are `/`-separated, lowercase `[a-z]([a-z0-9]|-[a-z0-9])*`, and a strict subset of `identifier`.
 14. `/` is both the root anchor and the segment separator, and is never an identifier character.
 15. Operator-bearing identifiers and spaced infix expressions are lexically distinct and formatter-protected.
 16. `foo.bar` is member lookup and `foo; bar` passes `bar` as an argument; whitespace adjacency never invokes, and a leading `.` is not a name form.
