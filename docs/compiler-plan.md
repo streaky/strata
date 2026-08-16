@@ -473,16 +473,19 @@ Exit criterion: canonical grouped coercion cases compile and run with warnings d
 flat spellings fail at Terrane source spans, and no compiler-facing documentation or
 fixture presents them as valid syntax.
 
-Implemented evidence: the compiler resolves the canonical `.coerce` family and its
-`.checked`, `.wrap`, and `.saturate` children through one typed policy resolver shared by
-semantic analysis and lowering. Availability is keyed by source type, destination type, and
-policy; unsupported pairs, unknown policy chains, escaped family values, and obsolete flat
-spellings fail at Terrane source spans. Accepted conformance cases cover every policy,
-including both absent and present membership for checked results, a package-level adaptive
-integer receiver, parameter-sourced coercion inside a typed function, and a side-effecting
-function-call receiver proving exactly-once evaluation. Reviewed generated-Rust goldens
-preserve the throwing, partial, wrapping, and saturating helper contracts without redundant
-references, and every accepted generated crate compiles with warnings denied.
+Implemented evidence: the compiler resolves the canonical `.coerce` callable family and
+its `.checked`, `.wrap`, and `.saturate` children through one typed policy resolver shared
+by semantic analysis and lowering. This is compiler-owned semantic object metadata rather
+than four independent direct-invocation paths: lowering erases the resolved family and
+policy to backend support calls without exposing those helper names as Terrane members.
+Availability is keyed by source type, destination type, and policy; unsupported pairs,
+unknown policy chains, escaped family values, and obsolete flat spellings fail at Terrane
+source spans. Accepted conformance cases cover every policy, including both absent and
+present membership for checked results, a package-level adaptive integer receiver,
+parameter-sourced coercion inside a typed function, and a side-effecting function-call
+receiver proving exactly-once evaluation. Reviewed generated-Rust goldens preserve the
+throwing, partial, wrapping, and saturating result contracts without redundant references,
+and every accepted generated crate compiles with warnings denied.
 
 ### Milestone 4.6 — Reconcile shipped behavior with the settled decisions
 

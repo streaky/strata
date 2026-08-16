@@ -1939,6 +1939,10 @@ fn integer_coercion_result_type(
     }
 }
 
+/// Resolves the canonical `.coerce` callable family and its selected policy child.
+///
+/// The returned policy is shared semantic metadata for analysis and lowering; the
+/// Rust helper names used after family erasure are not independent source members.
 pub(crate) fn integer_coercion_call<'a>(
     source: &SourceFile,
     callee: &'a SyntaxNode,

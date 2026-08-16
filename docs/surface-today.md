@@ -373,6 +373,12 @@ Namespaces form a package-wide tree assembled before reference resolution. Root 
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |
 | fixed-width integer | `.coerce.saturate; D` | family child | destination value with saturation policy |
 
+The compiler represents these spellings as one canonical callable family with a
+distinguished default and typed policy children. Semantic analysis resolves that family
+before lowering; generated Rust then erases the family object to the matching support
+operation. The support-crate helper names are backend details, not additional Terrane
+members or direct source-level coercion operations.
+
 No other value properties or methods are recognized by the current semantic/lowering pipeline.
 
 ## Compiler-owned names without implemented object behavior
