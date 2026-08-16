@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+use num_bigint::BigInt;
+
 use crate::{
     ScalarType, SourceFile,
     semantics::{
@@ -75,25 +77,16 @@ impl Emitter<'_> {
         if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
             return;
         }
-        let Some(name) = node
+        let Some((name_index, name)) = node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::Name)
+            .enumerate()
+            .find(|(_, child)| child.kind == SyntaxKind::Name)
         else {
             return;
         };
-        let Some(initializer) = node.children.iter().rev().find(|child| {
-            !matches!(
-                child.kind,
-                SyntaxKind::Name
-                    | SyntaxKind::TypeExpression
-                    | SyntaxKind::DeclarationModifier
-                    | SyntaxKind::Visibility
-                    | SyntaxKind::DeclarationQualifier
-            )
-        }) else {
-            return;
-        };
+        let initializer = binding_initializer(node, name_index)
+            .expect("analyzed value binding must have an initializer");
         let ValueType::Scalar(scalar) = binding.value_type else {
             return;
         };
@@ -232,10 +225,11 @@ impl Emitter<'_> {
     }
 
     fn binding(&mut self, node: &SyntaxNode) {
-        let Some(name_node) = node
+        let Some((name_index, name_node)) = node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::Name)
+            .enumerate()
+            .find(|(_, child)| child.kind == SyntaxKind::Name)
         else {
             return;
         };
@@ -257,16 +251,8 @@ impl Emitter<'_> {
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
             ValueType::TypeDescriptor(_) => "()".to_owned(),
         });
-        let initializer = node.children.iter().rev().find(|child| {
-            !matches!(
-                child.kind,
-                SyntaxKind::Name
-                    | SyntaxKind::TypeExpression
-                    | SyntaxKind::DeclarationModifier
-                    | SyntaxKind::Visibility
-                    | SyntaxKind::DeclarationQualifier
-            )
-        });
+        let initializer = binding_initializer(node, name_index)
+            .expect("analyzed value binding must have an initializer");
         let mutable = binding.is_some_and(|binding| binding.mutable);
         self.line_start();
         self.output.push_str("let ");
@@ -277,14 +263,12 @@ impl Emitter<'_> {
         if let Some(ty) = ty {
             write!(self.output, ": {ty}").unwrap();
         }
-        if let Some(initializer) = initializer {
-            let initializer = if let Some(binding) = binding {
-                self.expression_as(initializer, binding.value_type)
-            } else {
-                self.expression(initializer)
-            };
-            write!(self.output, " = {initializer}").unwrap();
-        }
+        let initializer = if let Some(binding) = binding {
+            self.expression_as(initializer, binding.value_type)
+        } else {
+            self.expression(initializer)
+        };
+        write!(self.output, " = {initializer}").unwrap();
         self.output.push_str(";\n");
     }
 
@@ -431,6 +415,11 @@ impl Emitter<'_> {
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
         match value_type {
             ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
+            ValueType::Scalar(ScalarType::Float32)
+                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float)) =>
+            {
+                format!("({}) as f32", self.expression(node))
+            }
             ValueType::Scalar(ScalarType::String)
                 if node.kind == SyntaxKind::Name
                     && self.lazy_namespace_binding_type(node).is_some() =>
@@ -629,9 +618,11 @@ impl Emitter<'_> {
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
-                text if text
-                    .chars()
-                    .all(|character| character.is_ascii_digit() || character == '_') =>
+                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float)),
+                text if text.chars().all(|character| {
+                    character.is_ascii_hexdigit()
+                        || matches!(character, '_' | 'x' | 'o' | 'b')
+                }) =>
                 {
                     Some(ValueType::Scalar(ScalarType::Int))
                 }
@@ -1068,8 +1059,12 @@ fn literal_or_text(source: &SourceFile, node: &SyntaxNode) -> String {
 
 fn literal(text: &str) -> String {
     let trimmed = text.trim();
-    if trimmed == "true" || trimmed == "false" || trimmed.parse::<i128>().is_ok() {
+    if trimmed == "true" || trimmed == "false" {
         return trimmed.to_owned();
+    }
+    let compact = trimmed.replace('_', "");
+    if compact.parse::<i128>().is_ok() || compact.parse::<f64>().is_ok() {
+        return compact;
     }
     let value = if let Some(value) = trimmed.strip_prefix('>') {
         if let Some(block) = value.strip_prefix('>') {
@@ -1089,12 +1084,28 @@ fn literal(text: &str) -> String {
 }
 
 fn adaptive_literal(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.parse::<i128>().is_ok() {
-        format!("terrane_int_support::Int::from({trimmed}_i128)")
+    let compact = text.trim().replace('_', "");
+    let value = integer_literal(&compact)
+        .expect("semantic analysis accepted a non-integer adaptive literal");
+    let decimal = value.to_string();
+    if decimal.parse::<i128>().is_ok() {
+        format!("terrane_int_support::Int::from({decimal}_i128)")
     } else {
-        format!("terrane_int_support::Int::from_decimal({trimmed:?})")
+        format!("terrane_int_support::Int::from_decimal({decimal:?})")
     }
+}
+
+fn integer_literal(text: &str) -> Option<BigInt> {
+    let (radix, digits) = if let Some(digits) = text.strip_prefix("0x") {
+        (16, digits)
+    } else if let Some(digits) = text.strip_prefix("0o") {
+        (8, digits)
+    } else if let Some(digits) = text.strip_prefix("0b") {
+        (2, digits)
+    } else {
+        (10, text)
+    };
+    BigInt::parse_bytes(digits.as_bytes(), radix)
 }
 
 fn block_string(text: &str) -> String {
@@ -1136,6 +1147,24 @@ fn unescape(value: &str) -> String {
         }
     }
     output
+}
+
+fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNode> {
+    node.children
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(index, child)| {
+            *index != name_index
+                && !matches!(
+                    child.kind,
+                    SyntaxKind::TypeExpression
+                        | SyntaxKind::DeclarationModifier
+                        | SyntaxKind::Visibility
+                        | SyntaxKind::DeclarationQualifier
+                )
+        })
+        .map(|(_, child)| child)
 }
 
 fn rust_type(ty: ScalarType) -> &'static str {

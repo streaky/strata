@@ -1,0 +1,10 @@
+namespace numeric-literals
+function main
+  adaptive = 0x10
+  single float32 = 1.5
+  double float64 = 2.25
+  inferred = 3.5
+  print; adaptive
+  print; single
+  print; double
+  print; inferred

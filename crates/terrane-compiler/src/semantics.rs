@@ -1805,6 +1805,12 @@ fn validate_value_assignment(
         {
             return check_integer_range(source, expected, &integer, value.span);
         }
+        if actual == ScalarType::Float
+            && matches!(expected, ScalarType::Float32 | ScalarType::Float64)
+            && infer_literal_type_from_source(source, value) == Some(ScalarType::Float)
+        {
+            return Ok(());
+        }
     }
     Err(failure(
         source,
@@ -2221,19 +2227,24 @@ fn operator_failure(
 }
 
 fn infer_literal_type(unit: &SemanticUnit, node: &SyntaxNode) -> Option<ScalarType> {
+    infer_literal_type_from_source(&unit.source, node)
+}
+
+fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<ScalarType> {
     if node.kind == SyntaxKind::UnaryExpression {
         return node
             .children
             .last()
-            .and_then(|child| infer_literal_type(unit, child));
+            .and_then(|child| infer_literal_type_from_source(source, child));
     }
     if node.kind != SyntaxKind::Literal {
         return None;
     }
-    let text = node_text(&unit.source, node);
+    let text = node_text(source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
         value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
+        value if value.contains('.') => Some(ScalarType::Float),
         _ => Some(ScalarType::Int),
     }
 }
