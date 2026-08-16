@@ -276,6 +276,32 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 source: source.clone(),
                 diagnostics: vec![diagnostic],
             })?;
+        if let Some(expected) = &unit.expected_namespace
+            && &namespace != expected
+        {
+            let span = parsed
+                .tree
+                .root
+                .children
+                .iter()
+                .find(|node| node.kind == SyntaxKind::NamespaceDeclaration)
+                .map_or(Span::new(source.id(), 0, source.text().len()), |node| {
+                    node.span
+                });
+            return Err(SemanticFailure {
+                source: source.clone(),
+                diagnostics: vec![
+                    Diagnostic::error(
+                        "S2020",
+                        format!(
+                            "declared namespace `{namespace}` does not match `{expected}` required by its source directory"
+                        ),
+                        span,
+                    )
+                    .with_help(format!("declare `namespace {}`", expected.trim_start_matches('/'))),
+                ],
+            });
+        }
         units.push(SemanticUnit {
             source: source.clone(),
             tree: parsed.tree,

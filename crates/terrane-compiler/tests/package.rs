@@ -301,3 +301,75 @@ fn missing_enumerated_sources_are_package_errors() {
             .contains("cannot read package source")
     );
 }
+
+#[test]
+fn namespace_mappings_discover_sources_in_sorted_order() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\nprelude = false\n[namespaces]\napp = \"src\"\n\"app/private\" = \"src/http/private\"\n",
+    );
+    package.write("src/zeta.trn", "namespace app\n");
+    package.write("src/http/beta.trn", "namespace app/http\n");
+    package.write("src/http/alpha.trn", "namespace app/http\n");
+    package.write("src/http/private/internal.trn", "namespace app/private\n");
+    package.write("outside.trn", "namespace ignored\n");
+
+    let loaded = Package::load(&package.0).unwrap();
+    assert_eq!(
+        loaded
+            .units
+            .iter()
+            .map(|unit| unit.relative_path.as_path())
+            .collect::<Vec<_>>(),
+        [
+            Path::new("src/http/alpha.trn"),
+            Path::new("src/http/beta.trn"),
+            Path::new("src/http/private/internal.trn"),
+            Path::new("src/zeta.trn"),
+        ]
+    );
+    assert_eq!(
+        loaded
+            .units
+            .iter()
+            .map(|unit| unit.expected_namespace.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["/app/http", "/app/http", "/app/private", "/app"]
+    );
+}
+
+#[test]
+fn namespace_mappings_reject_duplicate_directories() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\napp = \"src\"\ntools = \"src\"\n",
+    );
+
+    let errors = Package::load(&package.0).unwrap_err();
+    assert!(
+        errors[0]
+            .diagnostic
+            .message
+            .contains("map to the same directory")
+    );
+}
+
+#[test]
+fn semantic_analysis_checks_mapped_directory_correspondence() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"mapped\"\n[namespaces]\napp = \"src\"\n",
+    );
+    package.write("src/http/main.trn", "namespace app/wrong\n");
+
+    let failure = analyze(&Package::load(&package.0).unwrap()).unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "S2020");
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("does not match `/app/http`")
+    );
+}

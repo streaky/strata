@@ -21,6 +21,7 @@ fn package(prelude: bool, sources: &[(&str, &str)]) -> Package {
                     PathBuf::from(path),
                     (*text).to_owned(),
                 ),
+                expected_namespace: None,
             })
             .collect(),
     }
