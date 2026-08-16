@@ -47,6 +47,7 @@ Version one still does not need universal dynamic values, source-declared generi
 6. **Deterministic output.** The same source, compiler version, target, and declared inputs produce byte-identical generated source and manifests.
 7. **Readable lowering.** Generated Rust is a public debugging surface, not opaque compiler debris.
 8. **Narrow runtime.** Statically known fixed-width scalars and functions lower directly to Rust types and calls where Rust preserves the complete Terrane contract; core `int` uses the narrowest exact representation required by its adaptive semantics. The first compiler must not introduce a universal boxed `Value` as a shortcut.
+9. **Standard facilities are written in Terrane.** The Rust core stays deliberately minimal. Document formats, networking protocols, compression framing, date and time arithmetic, paths, CLI parsing, and logging are Terrane packages over that core, not Rust support crates. A Rust support crate is permanently opaque to the compiler, so implementing a facility in Rust forecloses inlining, specialisation, and whole-program analysis for it forever; it also loses the readable Terrane frames the diagnostics contract requires. The boundary runs per layer rather than per facility: Rust owns the layer that is a syscall or ABI boundary, carries a guarantee the optimiser would destroy, is a large audited security-critical implementation, or is generated data — and a layer claiming to be Rust states which of the four applies. Everything above it is Terrane. Core libraries reach Rust through the ordinary dependency mechanism, so they carry no privileged path and double as worked examples. Two consequences are load-bearing rather than incidental: package-level artifact caching, because a source-form standard library would otherwise be recompiled by every build, and capability profiles expressed as which packages are present rather than which crates were compiled in.
 
 ## 4. Proposed repository layout
 
@@ -545,6 +546,13 @@ Note on scope: the arithmetic families, abstract category descriptors, structure
 and float/string coercion destinations are **not** part of this milestone. They are new
 surface rather than corrections, and they arrive with milestones 7 onward.
 
+Implemented evidence: the collection namespace is registered as `/core/collections`. Type
+descriptors behave as constructs — a descriptor in value position fails with a Terrane
+diagnostic rather than reaching rustc, while construct positions including a coercion
+destination accept a descriptor bound under another name. Binding a `.concat` result emits a
+correct Rust binding. `/core/errors` exposes `error` as an interface symbol. `surface-today.md`
+was refreshed with the rest of the corpus.
+
 ### Milestone 4.7 — Namespace path syntax, name casing, and directory correspondence
 
 Milestone 3 shipped whitespace-separated namespace paths with no relationship between a
@@ -602,6 +610,20 @@ Also in scope, because it is the same migration:
   need, and every reader copies it. Keep explicit imports only in cases that are specifically
   about importing, aliasing, or shadowing.
 
+Scope warning: the specification and both surface maps already describe the settled version-one
+design, which includes the single-lookup-view model that milestone 4.8 delivers. Every import
+example in those documents is therefore written without the dot-prefixed form. That form is
+still valid until 4.8 lands, so an implementer of this milestone migrates namespace *paths* and
+leaves name *forms* alone:
+
+```text
+from /core output import .print     ->  from /core/output import .print
+```
+
+The path gains its separator; the dot-prefixed name and the `print = .print` binding that
+follows it both stay until 4.8. Reading the specification alone will suggest more change than
+this milestone authorises.
+
 Exit criterion: no document, fixture, golden, or example uses a whitespace-separated namespace
 path; a slash in an identifier is a lexical error; an uppercase or reserved segment fails with
 a source-span diagnostic naming the correction; a misplaced source file fails the correspondence
@@ -619,6 +641,44 @@ through the shared call pipeline with empty, singleton, and multi-part conforman
 The migrated corpus has no redundant default-prelude imports, and the representative
 program runs with the documented output.
 
+### Milestone 4.8 — Collapse the two-namespace lookup model
+
+Milestone 3 shipped separate ordinary and object-form symbol tables, so an import made
+`.print` available and the program then wrote `print = .print` to bind the ordinary name.
+That second view is removed. There is one lookup view, and `.` appears only between a
+receiver and its member.
+
+Deliver:
+
+- one symbol table and one lookup chain. The `object_form` discriminator on symbols and
+  declarations, and the paired table selection it drives, are removed rather than left
+  defaulted;
+- `from path import name` binding an ordinary name directly in the scope containing the
+  import, with `as` renaming it. The declare-then-bind step disappears, and with it every
+  `print = .print` line in the corpus;
+- a leading `.` in expression position rejected at its source span. This is the diagnostic
+  that replaces object-form lookup, so it must name the receiver form rather than reporting an
+  unresolved name;
+- collision, shadowing, visibility, and idempotent-reimport rules restated over the single
+  view. The two-view versions of those rules go away, not merely one of their branches;
+- `import with selector` resolving its operand through ordinary lexical scope;
+- migration of the reject fixtures that currently encode the two-view model:
+  `import-collision` and `private-import` import `.item` and `.secret` and must keep failing
+  for the same reasons under the new spelling, while `unresolved-object` currently binds
+  `print = .missing` and needs a form that still exercises an unresolved import;
+- migration of every remaining fixture, golden, example, and document.
+
+Exit criterion: no source anywhere in the repository contains a leading `.` outside member
+position; a program that writes one fails with a diagnostic naming the receiver form; the
+collision, visibility, and shadowing cases fail for their original reasons under single-view
+lookup; and no compiler type carries an object-form discriminator.
+
+Sequencing note: milestone 4.7 changes namespace *paths* and this milestone changes *name
+forms*. Both migrate the whole corpus, so running them back to back keeps the fixture churn
+to two passes rather than interleaving it through later work. They are separate milestones
+because they are separate language changes with separate exit criteria, not because the
+migrations are independent.
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:
@@ -628,10 +688,11 @@ Deliver:
 - injective source-name-to-Rust-name encoding;
 - direct fixed-width scalar and function lowering where Rust preserves the source contract;
 - integration of the adaptive core-`int` support component into the explicit Rust IR, preserving checked tier promotion, exact wide operations, result normalization, normative runtime failures, and target capability diagnostics;
-- structured expression/block emission with a pinned formatter policy;
+- structured expression/block emission with a pinned formatter policy, including the nesting threshold at which the formatter reports a call better bound to a named intermediate;
 - generated `Cargo.toml`, source tree, compiler metadata, and entrypoint;
 - deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
+- package-level artifact caching, keyed the same way, so a package compiles once per identity rather than once per dependent build. Delivery principle 9 makes this load-bearing rather than an optimisation: a Terrane-source standard library is recompiled by every build without it;
 - `cargo check`, build, and run process wrappers with captured structured output;
 - `terrane rust` output or path display suitable for inspection, clearly distinguishing authored generated modules from vendored support source.
 
@@ -816,6 +877,9 @@ Exit criterion: a cancelled scope joins its children and reports partial progres
 
 ### Milestone 20 — Byte and text streams and process standard streams
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - byte reader and writer protocols with partial-operation and EOF contracts;
@@ -827,6 +891,9 @@ Deliver:
 Exit criterion: partial reads and writes, EOF, and use-after-close each have cases; a cancelled stream operation reports what it completed.
 
 ### Milestone 21 — Paths, filesystem, and process facilities
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
@@ -840,6 +907,9 @@ Exit criterion: lexical resolution and filesystem canonicalization are separatel
 
 ### Milestone 22 — Document values, JSON, YAML, and URLs
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - the shared document-value model with exact `document-integer` and `document-decimal`, never routed through `float`;
@@ -851,6 +921,9 @@ Deliver:
 Exit criterion: a decode failure reports its document path and expected descriptor; canonical output is byte-identical across runs; a YAML alias bomb is refused by limit.
 
 ### Milestone 23 — Randomness, codecs, digests, and compression
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
@@ -864,6 +937,9 @@ Exit criterion: a pseudo-random source cannot satisfy a secure-random parameter;
 
 ### Milestone 24 — Networking and TLS
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - parsed `ip-address`, `socket-address`, and a distinct `host-name` type, serialising IPv6 per RFC 5952;
@@ -875,6 +951,9 @@ Deliver:
 Exit criterion: a loopback client and server exchange data under a deadline; certificate validation cannot be disabled through an ordinary option; a truncated datagram is reported rather than silently shortened.
 
 ### Milestone 25 — Structured logging
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
