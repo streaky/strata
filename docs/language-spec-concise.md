@@ -110,7 +110,7 @@ package_sources: manifest declares namespace-root to directory-root mappings; di
 filename_mapping: namespace tree corresponds to directory tree; a declaration that disagrees with its location is an ERROR unless the manifest declares that mapping
 root_mapping: 'foo/bar -> ./some/path' makes foo/bar/dave resolve under ./some/path/dave
 overlap: longest matching namespace prefix wins; two roots mapped to one directory is a manifest-load error
-unmapped_file: a .trn file under a declared root but outside every mapping is an error, never silently ignored
+unmapped_file: a .trn file no mapping reaches is not part of the package; it is neither compiled nor reported
 third_party: a dependency's namespaces come from ITS manifest and are never discovered by scanning its tree
 determinism: the resolved source set is recorded in build metadata; sorted expansion, ambiguity is an error
 lookup: ONE view; a name resolves through lexical scope, then namespace, then prelude

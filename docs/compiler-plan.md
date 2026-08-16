@@ -581,8 +581,7 @@ Deliver:
 - namespace-to-directory correspondence, with a declaration that disagrees with its location
   rejected unless the manifest declares that mapping; manifest namespace-root to
   directory-root mappings resolved by longest prefix; two roots mapped to one directory
-  rejected at manifest load; a source file under a declared root but outside every mapping
-  rejected rather than silently ignored;
+  rejected at manifest load;
 - bounded discovery over declared roots with sorted expansion, a dependency's namespaces read
   from its own manifest rather than by scanning its tree, and the resolved source set recorded
   in build metadata so a build stays auditable once the manifest no longer enumerates files;

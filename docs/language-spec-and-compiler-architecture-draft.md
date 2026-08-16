@@ -727,7 +727,7 @@ The manifest maps canonical namespace roots to relative directory roots:
 
 `foo/bar/dave` then corresponds to `some/path/dave`. The same mechanism serves two purposes: relocating your own sources, and describing a dependency whose internal layout is not your concern.
 
-- discovery recursively includes `.trn` files beneath the declared directory roots and ignores other files;
+- discovery recursively includes `.trn` files beneath the declared directory roots and ignores everything else, including a `.trn` file elsewhere in the tree: a file no mapping reaches is not part of the package, and the compiler neither compiles it nor reports it;
 - overlapping mappings resolve by longest matching namespace prefix;
 - two namespace roots mapped to the same directory are an error at manifest load, not at resolution, because a file there would have two valid namespaces;
 - each mapped root must discover at least one `.trn` source;
