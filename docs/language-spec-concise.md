@@ -143,7 +143,15 @@ print int float bool string bytes none
 - Prelude may be disabled.
 - Explicit `/core` object imports still work and may shadow/replace defaults deliberately.
 - Object-form facilities such as `.map`, `.list`, `.range`, `.file` are NOT implicitly prelude imports.
-- Fixed-width numeric descriptors are exported as dot objects from `/core types`; import and bind them explicitly (for example `from /core types import .int64`, then `int64 = .int64`). They are not reserved words or prelude bindings.
+- Fixed-width numeric descriptors are NOT prelude bindings and NOT reserved words. They are descriptor constructs available without import, a separate category from the seven ordinary bindings above.
+
+```yaml
+prelude_bindings: the seven ordinary program-globals listed above; unchanged
+descriptor_constructs: int8..int128, uint8..uint128, float32, float64, and the abstract category descriptors
+construct_availability: usable in construct position without import ('value int8 = 42')
+construct_value_use: still rejected in value position; a construct is not a runtime value
+explicit_import: remains available for rebinding, aliasing, and shadowing ('from /core types import .int64 as .word')
+```
 
 ## CALL
 
@@ -280,7 +288,18 @@ function_type: 'function from A, B to R'; associates right
 - `==` value equality; `is` source-visible identity; `is a` type membership/assignability. `===` invalid.
 - `c is a` is identity against binding `a`; `c is a widget` is membership when complete type follows.
 - Ordinary scalars/strings/collections are identity-less: `is` is false even for `x is x` and `42 is 42`. Only explicit refs, linear resources, and canonical descriptors carry identity. Exact-type-and-value comparison is `left == right and left.type is right.type`.
-- Type descriptors are canonical compiler-owned values with stable identity. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
+- Type descriptors are language constructs backed by canonical compiler-owned objects, not independently instantiated values.
+
+```yaml
+binding: 'd = int8' names the construct; it is a compile-time descriptor alias, not a value
+alias_use: legal in annotation position, coercion destination, and 'is a' right side
+value_use: REJECTED at the source span - no display or value protocol in v1 (print; d, arithmetic, value parameter)
+lowering: a descriptor binding has NO runtime representation and lowers to nothing; erasure is definitional, not an optimisation
+defect: emitting a Rust name for a descriptor binding is a compiler defect, never a fallback
+backing_object: real - .type returns it, 'is a' compares it, identity survives rebinding, reflection exposes it later
+```
+
+- Type descriptors have stable identity. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
 
 ## INTEGER
 
@@ -330,11 +349,19 @@ to_float: IEEE-754 round-to-nearest, ties-to-even
 inexact_float: ordinary result, NOT an error; precision loss shown by destination type
 float_out_of_range: throws .coercion-error; never yields an infinity
 string_parse: accepts exactly the destination's canonical text-display spelling
-parse_family: destination-owned 'int8.parse; text' with explicit radix/format and a checked child; OPEN whether plain text conversion is spelled through coerce, parse, or both
+coerce_options: NONE - coerce takes only its destination; it must never grow radix or format arguments
+parse_family: 'value.parse; callback' - the callback is REQUIRED; there is no built-in destination-owned parse
+parse_result: result type comes from the callback's declared return, not from a destination descriptor
+parse_checked: 'parse.checked; callback' catches a throwing callback and yields absence
+parse_v1: callback must be a statically resolvable function name, not an arbitrary expression; resolved and inlined like a coercion destination
+parse_union: a union return is checked at the destination by ordinary union rules; no parse-specific recheck
+radix: third distinct operation - 'text.radix; 16' -> int (interpret), 'value.radix; 16' -> string (render)
+radix_narrowing: ordinary coercion, grouped per call extent: '(text.radix; 16).coerce; int8'
 declared: conversions are declared per source/destination pair; an undeclared pair is absent from the type, not a runtime failure
 bool_to_int: declared, total, lossless (false 0, true 1)
 int_to_bool: NOT a conversion; use an explicit comparison
-failure_value: no conversion ever substitutes a default; unparseable text throws under the default child and returns none under checked, never 0
+failure_value: default child throws, checked returns none; neither substitutes a value
+lenient_child: a total 'substitute on failure' conversion (PHP intval style, 0 for unparseable) is allowed ONLY as a separately named child, never as plain coerce; optional and unspecified in v1
 callback: caller-supplied conversion callback admitted for undeclared pairs; requires function values, so later than version-one scalars
 locale_parse: imported formatting facilities only, never coerce
 universality: no guarantee any type coerces to any other
@@ -649,7 +676,6 @@ Validation/prototype points, not permission to invent semantics:
 - zero-argument dot-object shorthand beyond required explicit `;` remains a possible future ergonomic study; current grammar requires `;`;
 - map literal syntax;
 - exact COW split policy;
-- whether plain text-to-number conversion is spelled through `coerce`, through the destination-owned `parse` family, or through both; decides whether `string` declares numeric conversions at all, and blocks the conversion-protocol specification;
 - conversion-declaration coherence: conflicting declarations for one source/destination pair, and whether a declaration may be added for a type the author does not own;
 - the version-one async surface: task identity/linearity, un-awaited task disposal, scope failure semantics for surviving siblings, defined cancellation points, and the executor boundary the language fixes versus the profile selects;
 - dynamic finite-union representation;

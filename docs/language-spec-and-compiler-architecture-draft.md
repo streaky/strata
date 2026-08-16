@@ -1409,18 +1409,53 @@ Conversions are declared rather than universal. A descriptor declares the source
 
 `bool` converts to integer destinations as a declared, total, lossless conversion: `false` is `0` and `true` is `1`. The reverse is not a conversion at all. Integer-to-`bool` is a predicate choice rather than a change of representation, and must be written as an explicit comparison.
 
-No conversion ever substitutes a default value for a failure. An unrepresentable, unparseable, or undeclared conversion throws under the default child and returns `none` under `checked`. A `string` that does not denote a number must never convert to `0`; that behaviour is the defining defect of weakly typed conversion and is excluded by contract rather than by convention.
+Neither the default child nor `checked` substitutes a value for a failure: an unrepresentable, unparseable, or undeclared conversion throws under the default child and returns `none` under `checked`. A total conversion that yields a fixed value on failure — `0` for an unparseable string, in the style of PHP's `intval` — is permitted only as a separately named child, so the substitution is visible at the call site rather than inherited by every plain `coerce`. Such a child is optional and unspecified in version one; if it is added, its name must state that it substitutes.
 
-Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` when parsing fails. Parameterised text conversion — explicit radix or format — is a destination-owned `parse` family (`int8.parse; text`) with the same `checked` child. Whether plain unparameterised text conversion is spelled through `coerce`, through `parse`, or through both remains open and must be settled before the conversion protocol is specified. Locale-dependent parsing belongs to an imported formatting facility, never to `coerce`.
+Parsing coercion from `string` to a numeric destination accepts the canonical text-display spelling of that destination and throws `.coercion-error` when parsing fails. `coerce` takes no argument beyond its destination and must never acquire a radix or format option: acquiring one would absorb the interpretation role that belongs to `parse`, and the separation between the two would collapse. This is an invariant of the design rather than a description of the current surface.
+
+Interpretation in a base other than ten is a distinct operation attached by receiver: `text.radix; 16` interprets base-sixteen text and yields an adaptive `int`, while `value.radix; 16` renders a number in that base as `string`. Narrowing after interpretation is ordinary coercion and follows the call-extent rule, as in `(text.radix; 16).coerce; int8`.
+
+Locale-dependent parsing belongs to an imported formatting facility, never to `coerce`.
+
+### 11.5.1 User-supplied interpretation: `parse`
+
+`coerce` covers the conversions the language defines. Interpretation the language does not define is supplied by the program through `parse`, which always takes a callback as a required argument:
+
+```text
+function to-code int|int8; input string
+  if input == 'foobar'
+    return 10
+  return 20
+
+d string = 'foobar'
+print; d.parse; to-code
+```
+
+There is no built-in destination-owned `parse`. The member exists to apply a program's own interpretation to a receiver, so a form without a callback would have no operation to perform.
+
+`parse` differs from every other member in where its result type comes from: `coerce; int8` is typed by its destination descriptor, whereas `d.parse; to-code` is typed by the callback's declared return, here `int|int8`. That union is then checked at the destination by ordinary union rules — `value int8 = d.parse; to-code` is rejected because the `int` alternative is not assignable to `int8` — and the diagnostic is available statically from the callback's declaration. No parse-specific runtime recheck exists.
+
+The `checked` child catches a callback that throws and yields absence, which plain application of the same function cannot express:
+
+```text
+d.parse; to-code            # propagates a throw from the callback
+d.parse.checked; to-code    # int|int8|none
+```
+
+In version one the callback must be a statically resolvable function name rather than an arbitrary expression. The compiler then resolves and inlines it exactly as it resolves a coercion destination, with no runtime callable representation and no boxed value. The restriction lifts when first-class function values arrive.
 
 ### 11.6 Type objects
 
-Types are objects and can be passed as values:
+A type is a language construct backed by a canonical object, not an independently instantiated value. Binding one names the construct; it does not produce a runtime value:
 
 ```text
 target-type = float
 x = x.coerce; target-type
 ```
+
+`target-type` is a compile-time descriptor alias. It may appear anywhere the construct may appear — annotation position, a coercion destination, the right side of `is a` — and it may not appear where a runtime value is required. Passing it to `print`, using it in arithmetic, or handing it to a parameter expecting a value is rejected at the source span, because a descriptor has no display or value protocol in version one.
+
+A descriptor binding therefore has no runtime representation and lowers to nothing. Erasure is definitional rather than an optimisation the compiler is permitted to make: there is no storage to elide. A binding that emits a Rust name for a descriptor is a defect, not a fallback.
 
 A class object may be bound and used as a type expression:
 
@@ -1435,9 +1470,9 @@ The compiler resolves type compatibility through the object’s type protocol.
 
 Alongside the concrete descriptors, `/core types` exports abstract category descriptors: `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the two identity roots `value` and `object`. `int` implements `integer` and `number` but no fixed-width contract; `int8` through `int128` implement `signed-fixed-integer`, `fixed-integer`, `integer`, and `number`; `uint8` through `uint128` implement `unsigned-fixed-integer` in place of the signed contract; `float`, `float32`, and `float64` implement `floating` and `number`. The roots `value` and `object` classify identity, copy, and ownership behaviour rather than numeric capability, so no arithmetic or conversion member attaches to them.
 
-These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype, none creates an implicit assignment conversion, and none is a default-prelude name; they are imported explicitly like the concrete fixed-width descriptors. In particular, fixed-width integers are not assignment-compatible subclasses of `int`: that would contradict explicit coercion and the differing arithmetic result contracts.
+These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype, and none creates an implicit assignment conversion. Like the concrete fixed-width descriptors, they are descriptor constructs available without import rather than prelude bindings: the default prelude's ordinary bindings are unchanged, and a construct name is usable in construct position directly while explicit import remains available for rebinding, aliasing, and shadowing. In particular, fixed-width integers are not assignment-compatible subclasses of `int`: that would contradict explicit coercion and the differing arithmetic result contracts.
 
-Type objects are canonical compiler-owned descriptor values with stable type identity. A statically known descriptor argument may be erased during lowering, but source-observable behavior must remain the same as passing the descriptor value: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
+Type objects are canonical compiler-owned descriptors with stable type identity. The backing object is real — `.type` returns it, `is a` compares it, canonical identity survives rebinding under another name, and reflection exposes it later — but it is never independently constructed by source. Source-observable behavior must remain the same as naming the descriptor directly: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
 
 ### 11.7 Union and parameterised types
 
