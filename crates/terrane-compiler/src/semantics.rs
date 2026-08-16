@@ -184,7 +184,7 @@ pub struct SemanticUnit {
 impl SemanticUnit {
     /// Returns the compiler-resolved value type for an expression when it is statically known.
     pub(crate) fn inferred_value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
-        infer_value_type(self, node, &BTreeMap::new(), &self.typed_bindings)
+        infer_value_type(self, node, &self.typed_bindings)
             .ok()
             .flatten()
     }
@@ -962,7 +962,7 @@ fn validate_call_nodes<'a>(
             .get(1)
             .is_some_and(|member| node_text(&unit.source, member) == "length")
     {
-        infer_value_type(unit, node, &BTreeMap::new(), scoped_bindings)?;
+        infer_value_type(unit, node, scoped_bindings)?;
     }
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
@@ -998,7 +998,7 @@ fn validate_integer_coercion_call(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::CallExpression {
-        infer_integer_coercion_type(unit, node, &BTreeMap::new(), bindings)?;
+        infer_integer_coercion_type(unit, node, bindings)?;
     }
     Ok(())
 }
@@ -1151,7 +1151,7 @@ fn validate_call_arguments(
         }
         if let Some(expected) = parameter.value_type {
             let value = argument.children.last().unwrap_or(argument);
-            if let Some(actual) = infer_value_type(unit, value, &BTreeMap::new(), bindings)?
+            if let Some(actual) = infer_value_type(unit, value, bindings)?
                 && actual != ValueType::Scalar(expected)
             {
                 return Err(failure(
@@ -1611,13 +1611,13 @@ fn analyze_binding_node(
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
-        && let Some(actual) = infer_value_type(unit, initializer, &BTreeMap::new(), bindings)?
+        && let Some(actual) = infer_value_type(unit, initializer, bindings)?
     {
         validate_value_assignment(&unit.source, &name, expected, actual, initializer)?;
         return Ok(());
     }
     let inferred = initializer
-        .map(|value| infer_value_type(unit, value, &BTreeMap::new(), bindings))
+        .map(|value| infer_value_type(unit, value, bindings))
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
@@ -1695,7 +1695,6 @@ fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Optio
 fn infer_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
     if node.kind == SyntaxKind::Literal {
@@ -1703,15 +1702,15 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::GroupExpression {
         return match node.children.first() {
-            Some(child) => infer_value_type(unit, child, aliases, bindings),
+            Some(child) => infer_value_type(unit, child, bindings),
             None => Ok(None),
         };
     }
     if node.kind == SyntaxKind::UnaryExpression {
-        return infer_unary_type(unit, node, aliases, bindings).map(Some);
+        return infer_unary_type(unit, node, bindings).map(Some);
     }
     if node.kind == SyntaxKind::BinaryExpression {
-        return infer_binary_type(unit, node, aliases, bindings).map(Some);
+        return infer_binary_type(unit, node, bindings).map(Some);
     }
     if node.kind == SyntaxKind::TypeMembershipExpression {
         return Ok(Some(ValueType::Scalar(ScalarType::Bool)));
@@ -1736,7 +1735,7 @@ fn infer_value_type(
         && let [receiver, member] = node.children.as_slice()
         && node_text(&unit.source, member) == "length"
     {
-        let receiver_type = infer_value_type(unit, receiver, aliases, bindings)?;
+        let receiver_type = infer_value_type(unit, receiver, bindings)?;
         if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
             return Ok(Some(ValueType::Scalar(ScalarType::Int)));
         }
@@ -1752,7 +1751,7 @@ fn infer_value_type(
         ));
     }
     if node.kind == SyntaxKind::CallExpression {
-        if let Some(value_type) = infer_integer_coercion_type(unit, node, aliases, bindings)? {
+        if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
         if let Some(callee) = node.children.first()
@@ -1777,7 +1776,6 @@ fn infer_value_type(
 fn infer_unary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<ValueType, SemanticFailure> {
     let Some(operand_node) = node.children.last() else {
@@ -1787,8 +1785,7 @@ fn infer_unary_type(
             "unary operator requires an operand",
         ));
     };
-    let Some(ValueType::Scalar(operand)) = infer_value_type(unit, operand_node, aliases, bindings)?
-    else {
+    let Some(ValueType::Scalar(operand)) = infer_value_type(unit, operand_node, bindings)? else {
         return Err(operator_failure(
             unit,
             node,
@@ -1825,7 +1822,6 @@ fn infer_unary_type(
 fn infer_integer_coercion_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
     let Some(callee) = node.children.first() else {
@@ -1858,8 +1854,7 @@ fn infer_integer_coercion_type(
         }
         return Ok(None);
     };
-    let Some(ValueType::Scalar(source_type)) =
-        infer_value_type(unit, source_node, aliases, bindings)?
+    let Some(ValueType::Scalar(source_type)) = infer_value_type(unit, source_node, bindings)?
     else {
         return Err(failure(
             &unit.source,
@@ -2006,7 +2001,6 @@ fn obsolete_integer_coercion_member<'a>(
 fn infer_binary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
     bindings: &[TypedBinding],
 ) -> Result<ValueType, SemanticFailure> {
     let [left_node, right_node] = node.children.as_slice() else {
@@ -2016,8 +2010,8 @@ fn infer_binary_type(
             "binary operator requires two operands",
         ));
     };
-    let left = infer_value_type(unit, left_node, aliases, bindings)?;
-    let right = infer_value_type(unit, right_node, aliases, bindings)?;
+    let left = infer_value_type(unit, left_node, bindings)?;
+    let right = infer_value_type(unit, right_node, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
     if operator == "is" {
         return Ok(ValueType::Scalar(ScalarType::Bool));
@@ -2572,8 +2566,7 @@ fn validate_flow_statement(
             if statement.children.len() == 4 {
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
-                let collection_type =
-                    infer_value_type(unit, collection, &BTreeMap::new(), bindings)?;
+                let collection_type = infer_value_type(unit, collection, bindings)?;
                 if collection_type != Some(ValueType::Scalar(ScalarType::String)) {
                     return Err(failure(
                         &unit.source,
@@ -2619,7 +2612,7 @@ fn validate_flow_statement(
             };
             if operand.kind != SyntaxKind::Name
                 || !matches!(
-                    infer_value_type(unit, operand, &BTreeMap::new(), bindings)?,
+                    infer_value_type(unit, operand, bindings)?,
                     Some(ValueType::Scalar(ty)) if ty.is_integer()
                 )
             {
@@ -2642,7 +2635,7 @@ fn validate_bool_condition(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     if matches!(
-        infer_value_type(unit, condition, &BTreeMap::new(), bindings)?,
+        infer_value_type(unit, condition, bindings)?,
         Some(ValueType::Scalar(ScalarType::Bool))
     ) {
         return Ok(());
@@ -2728,7 +2721,7 @@ fn validate_return(
             statement.span,
         )),
         (Some(expected), Some(value)) => {
-            let actual = infer_value_type(unit, value, &BTreeMap::new(), bindings)?;
+            let actual = infer_value_type(unit, value, bindings)?;
             if actual == Some(ValueType::Scalar(expected)) {
                 Ok(())
             } else {
