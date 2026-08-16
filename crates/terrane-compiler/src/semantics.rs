@@ -1324,7 +1324,7 @@ fn validate_descriptor_value_node(
     Ok(())
 }
 
-fn descriptor_expression_type(
+pub(crate) fn descriptor_expression_type(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,

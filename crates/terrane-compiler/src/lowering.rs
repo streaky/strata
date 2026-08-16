@@ -806,43 +806,12 @@ impl Emitter<'_> {
                     ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => None,
                 });
         }
-        let name = self.text(node).trim().trim_start_matches('.');
-        if let Some(ValueType::TypeDescriptor(ty)) = self
-            .unit
-            .typed_bindings
-            .iter()
-            .rev()
-            .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-            .map(|binding| binding.value_type)
-        {
-            return Some(format!("type:{ty}"));
-        }
-        self.package
-            .resolve_object_at(self.unit, node.span.start, name)
-            .and_then(crate::semantics::Symbol::descriptor_type)
-            .or_else(|| ScalarType::from_source_name(name))
+        crate::semantics::descriptor_expression_type(self.package, self.unit, node)
             .map(|scalar| format!("type:{scalar}"))
     }
 
     fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
-        let name = self.text(node).trim().trim_start_matches('.');
-        let resolved = ScalarType::from_source_name(name)
-            .or_else(|| {
-                self.unit
-                    .typed_bindings
-                    .iter()
-                    .rev()
-                    .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-                    .and_then(|binding| match binding.value_type {
-                        ValueType::TypeDescriptor(ty) => Some(ty),
-                        _ => None,
-                    })
-            })
-            .or_else(|| {
-                self.package
-                    .resolve_object_at(self.unit, node.span.start, name)
-                    .and_then(crate::semantics::Symbol::descriptor_type)
-            });
+        let resolved = crate::semantics::descriptor_expression_type(self.package, self.unit, node);
         resolved.or_else(|| {
             (node.kind == SyntaxKind::TypeExpression)
                 .then(|| {

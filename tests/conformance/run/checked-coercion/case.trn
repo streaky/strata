@@ -1,6 +1,6 @@
 namespace checked-coercion
 from /core output import .print
-from /core types import .int8, .none
+from /core types import .int8, .uint8, .none
 print = .print
 int8 = .int8
 tiny = .int8
@@ -14,7 +14,12 @@ function convert int8; item int
     result = item.coerce; tiny
   return result
 
+function helper
+  tiny = .uint8
+  print; 'helper'
+
 function main
+  helper;
   value int = 300
   within int = 100
   coerced = within.coerce; tiny
@@ -24,9 +29,11 @@ function main
   checked = value.coerce.checked; int8
   absent = checked is a none
   present = checked is a int8
+  shadow-safe = value.coerce.saturate; tiny
   print; coerced
   print; renamed-checked is a tiny
   print; shared-coerced
   print; parameter-coerced
   print; absent
   print; present
+  print; shadow-safe
