@@ -17,14 +17,16 @@ impl TempPackage {
         fs::create_dir_all(&path).unwrap();
         fs::write(
             path.join("package.toml"),
-            "package = \"cli-package\"\nprelude = false\nsources = [\"support.trn\", \"main.trn\"]\n",
+            "package = \"cli-package\"\nprelude = false\n[namespaces]\n\"cli/app\" = \"app\"\n\"cli/support\" = \"support\"\n",
         )
         .unwrap();
+        fs::create_dir_all(path.join("app")).unwrap();
+        fs::create_dir_all(path.join("support")).unwrap();
         fs::write(
-            path.join("main.trn"),
+            path.join("app/main.trn"),
             concat!(
-                "namespace cli app\n",
-                "from /core output import .print\n",
+                "namespace cli/app\n",
+                "from /core/output import .print\n",
                 "print = .print\n",
                 "function main\n",
                 "  print; 'manifest CLI'\n",
@@ -32,8 +34,8 @@ impl TempPackage {
         )
         .unwrap();
         fs::write(
-            path.join("support.trn"),
-            "namespace cli support\npublic .value = 1\n",
+            path.join("support/support.trn"),
+            "namespace cli/support\npublic .value = 1\n",
         )
         .unwrap();
         Self(path)
@@ -62,7 +64,7 @@ fn manifest_file_and_package_directory_use_the_shared_cli_pipeline() {
     );
     let generated = String::from_utf8(rust.stdout).unwrap();
     assert!(generated.contains("// Source: main.trn"));
-    assert!(generated.contains("// Namespace: cli app"));
+    assert!(generated.contains("// Namespace: cli/app"));
 
     let run = Command::new(executable)
         .args(["run", package.0.to_str().unwrap()])

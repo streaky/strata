@@ -37,7 +37,6 @@ fn rejects_duplicate_declarations() {
             "S0005",
             "duplicate namespace declaration",
         ),
-        ("print = .print", "S2005", "duplicate declaration `print`"),
         ("function main", "S2005", "duplicate declaration `main`"),
     ];
 
@@ -89,7 +88,10 @@ fn permits_a_comment_after_a_closed_quote() {
 
 #[test]
 fn compilation_failure_owns_the_original_source() {
-    let source = HELLO.replace("print = .print", "print = .missing");
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; .missing",
+    );
     let failure = terrane_compiler::compile("owned.trn", source.clone()).unwrap_err();
     assert_eq!(failure.source.text(), source);
     assert_eq!(failure.source.path(), PathBuf::from("owned.trn").as_path());
@@ -160,7 +162,10 @@ fn rejects_trailing_content_after_block_marker() {
 
 #[test]
 fn rejects_unresolved_object() {
-    let source = HELLO.replace("print = .print", "print = .missing");
+    let source = HELLO.replace(
+        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
+        "print; .missing",
+    );
     let diagnostics = terrane_compiler::compile("object.trn", source).unwrap_err();
     assert!(
         diagnostics
@@ -232,7 +237,7 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
 fn lowers_scalar_membership_and_descriptor_identity_statically() {
     let source = concat!(
         "namespace descriptors\n",
-        "from /core types import .int8\n",
+        "from /core/types import .int8\n",
         "function accepts; item int\n",
         "  parameter-member = item is a int\n",
         "function main\n",
@@ -386,7 +391,7 @@ terrane_string_support::length(&text) as i128);"
 fn lowers_fixed_width_arithmetic_through_checked_runtime_operations() {
     let source = concat!(
         "namespace fixed\n",
-        "from /core types import .int8\n",
+        "from /core/types import .int8\n",
         "function main\n",
         "  left int8 = 120\n",
         "  right int8 = 10\n",

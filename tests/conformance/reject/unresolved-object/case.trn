@@ -1,5 +1,5 @@
 namespace hello
-from /core output import .print
+from /core/output import .print
 print = .missing
 function main
   print; 'hello'

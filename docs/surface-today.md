@@ -212,8 +212,9 @@ string value
 ├── properties
 │   ├── .length -> int        Unicode extended grapheme-cluster count
 │   └── .type -> .string
-├── method
-│   └── .concat; values... -> string
+├── methods
+│   ├── .concat; values... -> string
+│   └── .join; values... -> string
 ├── iteration
 │   └── for item in string    item is one owned grapheme string
 ├── comparisons
@@ -227,7 +228,7 @@ string value
     └── value is a .string -> bool
 ```
 
-`.concat` accepts zero or more values. Every value is converted through Terrane's canonical scalar display and appended without a separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
+`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
 
 ### `none`
 
@@ -359,7 +360,7 @@ Implemented ordinary entities are:
 - imported ordinary names;
 - `.print` after object-form resolution.
 
-Namespaces form a package-wide tree assembled before reference resolution. Root `/` and parent `..` anchoring, selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
+Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
 
 ## Properties and methods index
 
@@ -368,6 +369,7 @@ Namespaces form a package-wide tree assembled before reference resolution. Root 
 | any implemented scalar value | `.type` | property | canonical scalar descriptor |
 | `string` | `.length` | property | adaptive `int` grapheme count |
 | `string` | `.concat; values...` | method | concatenated `string` using canonical display |
+| `string` | `.join; values...` | method | canonical displays interleaved with receiver separator |
 | any integer | `.coerce; D` | family default | exact coercion or runtime failure |
 | any integer | `.coerce.checked; D` | family child | destination value or `none` |
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |

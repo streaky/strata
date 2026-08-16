@@ -52,14 +52,14 @@ fn namespace_diagnostics_use_source_spelling() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /missing nested import .item\n",
+            "namespace app\nfrom /missing/nested import .item\n",
         )],
     ))
     .unwrap_err();
 
     assert_eq!(
         failure.diagnostics[0].message,
-        "unresolved object `.item` in `/missing nested`"
+        "unresolved object `.item` in `/missing/nested`"
     );
 }
 
@@ -67,14 +67,14 @@ fn namespace_diagnostics_use_source_spelling() {
 fn compiler_owned_namespaces_cannot_be_extended() {
     let failure = analyze(&package(
         false,
-        &[("main.trn", "namespace core output\npublic .injected = 1\n")],
+        &[("main.trn", "namespace core/output\npublic .injected = 1\n")],
     ))
     .unwrap_err();
 
     assert_eq!(failure.diagnostics[0].code, "S2017");
     assert_eq!(
         failure.diagnostics[0].message,
-        "cannot declare into compiler-owned namespace `/core output`"
+        "cannot declare into compiler-owned namespace `/core/output`"
     );
 }
 #[test]
@@ -82,14 +82,14 @@ fn resolves_exact_root_and_parent_namespace_anchors() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("exports.trn", "namespace parent shared\n.item = 1\n"),
+            ("exports.trn", "namespace parent/shared\n.item = 1\n"),
             (
                 "root.trn",
-                "namespace root\nfrom /parent shared import .item as .root-item\n",
+                "namespace root\nfrom /parent/shared import .item as .root-item\n",
             ),
             (
                 "child.trn",
-                "namespace parent child\nfrom .. shared import .item as .parent-item\n",
+                "namespace parent/child\nfrom ../shared import .item as .parent-item\n",
             ),
         ],
     ))
@@ -105,7 +105,7 @@ fn imports_are_object_form_and_require_explicit_ordinary_binding() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core output import .print\nprinter = .print\n",
+            "namespace app\nfrom /core/output import .print\nprinter = .print\n",
         )],
     ))
     .unwrap();
@@ -121,7 +121,7 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core output import .print\nfrom /core output import .print\n",
+            "namespace app\nfrom /core/output import .print\nfrom /core/output import .print\n",
         )],
     ));
     assert!(accepted.is_ok());
@@ -190,7 +190,7 @@ fn descriptor_constructs_are_rejected_as_runtime_values() {
         "result = consume; target",
     ] {
         let source = format!(
-            "namespace app\nfrom /core output import .print\nprint = .print\ntarget = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
+            "namespace app\nfrom /core/output import .print\nprint = .print\ntarget = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
         );
         let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "T0019", "{runtime_use}");
@@ -253,7 +253,7 @@ fn ordinary_import_binding_cannot_change_structural_imports() {
         false,
         &[(
             "main.trn",
-            "namespace app\nimport = 1\nfrom /core output import .print\n",
+            "namespace app\nimport = 1\nfrom /core/output import .print\n",
         )],
     ))
     .unwrap();
@@ -346,7 +346,7 @@ fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
             ),
             (
                 "child.trn",
-                "namespace app child\nparent-value = 2\nglobal shared = 1\n",
+                "namespace app/child\nparent-value = 2\nglobal shared = 1\n",
             ),
             ("peer.trn", "namespace peer\n"),
         ],
@@ -375,7 +375,7 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
     let source = concat!(
         "namespace app\n",
         "function render; argument int\n",
-        "  from /core output import .print as .local-print\n",
+        "  from /core/output import .print as .local-print\n",
         "  value = argument\n",
         "  if true\n",
         "    inner = value\n",
@@ -472,7 +472,7 @@ fn imported_fixed_width_objects_remain_canonical_type_descriptors() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core types import .int8, .uint128, .float32\n",
+            "namespace app\nfrom /core/types import .int8, .uint128, .float32\n",
         )],
     ))
     .unwrap();
@@ -531,7 +531,7 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .uint8\n",
+                "from /core/types import .uint8\n",
                 "byte = .uint8\n",
                 "maximum byte = 255\n",
             ),
@@ -605,7 +605,7 @@ fn descriptor_aliases_resolve_function_contracts_in_source_order() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .uint8\n",
+                "from /core/types import .uint8\n",
                 "byte = .uint8\n",
                 "function identity byte; value byte\n",
                 "  return value\n",
@@ -624,7 +624,7 @@ fn descriptor_aliases_resolve_function_contracts_in_source_order() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .uint8\n",
+                "from /core/types import .uint8\n",
                 "function identity byte; value byte\n",
                 "  return value\n",
                 "byte = .uint8\n",
@@ -798,7 +798,7 @@ fn types_canonical_integer_coercion_family() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .int8, .int16, .uint8\n",
+                "from /core/types import .int8, .int16, .uint8\n",
                 "int8 = .int8\n",
                 "int16 = .int16\n",
                 "uint8 = .uint8\n",
@@ -900,7 +900,7 @@ fn rejects_nested_and_escaped_coercion_family_shapes() {
             &[(
                 "main.trn",
                 &format!(
-                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                    "namespace app\nfrom /core/types import .int8\nint8 = .int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
                 ),
             )],
         ))
@@ -941,7 +941,7 @@ fn validates_calls_inside_coercion_receivers() {
             &[(
                 "main.trn",
                 &format!(
-                    "namespace app\nfrom /core types import .int8\nint8 = .int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
+                    "namespace app\nfrom /core/types import .int8\nint8 = .int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
                 ),
             )],
         ))
@@ -961,7 +961,7 @@ fn infers_cross_unit_call_results_before_binding_types() {
             ),
             (
                 "main.trn",
-                "namespace app\nfrom /core types import .uint8\nuint8 = .uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
+                "namespace app\nfrom /core/types import .uint8\nuint8 = .uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
             ),
         ],
     ))
@@ -985,7 +985,7 @@ fn function_parameters_are_in_scope_during_binding_analysis() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .int8\n",
+                "from /core/types import .int8\n",
                 "tiny = .int8\n",
                 "function convert int8; item int\n",
                 "  result int8\n",
@@ -1111,7 +1111,7 @@ fn identity_accepts_typed_scalars_and_canonical_descriptors() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core types import .int8\n",
+                "from /core/types import .int8\n",
                 "function produce\n",
                 "byte = .int8\n",
                 "same-type = byte is byte\n",
@@ -1270,7 +1270,7 @@ fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core output import .print as .renderer\n",
+                "from /core/output import .print as .renderer\n",
                 "function consume; item\n",
                 "function main\n",
                 "  text = 'hello'\n",

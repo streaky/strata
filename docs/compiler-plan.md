@@ -609,6 +609,16 @@ check unless the manifest maps it; the conformance corpus contains no redundant 
 and the specification's representative program compiles and runs, producing its documented
 output exactly.
 
+Implemented evidence: namespace declarations and imports now use `/` between every segment,
+and declared names are checked for canonical lowercase spelling and reserved namespace
+segments. Authored manifests map namespace roots to distinct relative directories; package
+loading recursively discovers `.trn` files within those bounded roots in sorted path order,
+assigns each declaration its longest-prefix expected namespace, and rejects duplicate,
+missing, or mismatched roots before semantic resolution. `string.join` validates and lowers
+through the shared call pipeline with empty, singleton, and multi-part conformance coverage.
+The migrated corpus has no redundant default-prelude imports, and the representative
+program runs with the documented output.
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:

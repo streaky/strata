@@ -244,15 +244,7 @@ struct Import {
     span: Span,
 }
 
-/// Builds the complete namespace tree, then resolves declarations and imports.
-///
-/// Semantic phases fail at the first diagnostic in deterministic package and source
-/// order. Unlike independently discoverable manifest errors, later semantic errors can
-/// depend on declarations or imports that an earlier error prevented from assembling.
-///
-/// # Errors
-/// Returns the first source-oriented lexer, parser, namespace, scope, or import failure.
-pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
+fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> {
     let mut units = Vec::with_capacity(package.units.len());
     for unit in &package.units {
         let source = &unit.source;
@@ -288,18 +280,17 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 .map_or(Span::new(source.id(), 0, source.text().len()), |node| {
                     node.span
                 });
+            let diagnostic = Diagnostic::error(
+                "S2020",
+                format!(
+                    "declared namespace `{namespace}` does not match `{expected}` required by its source directory"
+                ),
+                span,
+            )
+            .with_help(format!("declare `namespace {}`", expected.trim_start_matches('/')));
             return Err(SemanticFailure {
                 source: source.clone(),
-                diagnostics: vec![
-                    Diagnostic::error(
-                        "S2020",
-                        format!(
-                            "declared namespace `{namespace}` does not match `{expected}` required by its source directory"
-                        ),
-                        span,
-                    )
-                    .with_help(format!("declare `namespace {}`", expected.trim_start_matches('/'))),
-                ],
+                diagnostics: vec![diagnostic],
             });
         }
         units.push(SemanticUnit {
@@ -314,6 +305,19 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             evaluation_steps: Vec::new(),
         });
     }
+    Ok(units)
+}
+
+/// Builds the complete namespace tree, then resolves declarations and imports.
+///
+/// Semantic phases fail at the first diagnostic in deterministic package and source
+/// order. Unlike independently discoverable manifest errors, later semantic errors can
+/// depend on declarations or imports that an earlier error prevented from assembling.
+///
+/// # Errors
+/// Returns the first source-oriented lexer, parser, namespace, scope, or import failure.
+pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
+    let mut units = parse_units(package)?;
 
     let mut namespaces = bootstrap_namespaces();
     for unit in &units {
@@ -553,14 +557,14 @@ fn is_reserved_namespace_segment(component: &str) -> bool {
 
 fn validate_declared_names(source: &SourceFile, tree: &SyntaxTree) -> Result<(), Diagnostic> {
     fn visit(source: &SourceFile, node: &SyntaxNode) -> Result<(), Diagnostic> {
-        let declared_children = match node.kind {
+        let declared_children = matches!(
+            node.kind,
             SyntaxKind::Binding
-            | SyntaxKind::FunctionDeclaration
-            | SyntaxKind::Parameter
-            | SyntaxKind::ForTarget
-            | SyntaxKind::ImportAlias => true,
-            _ => false,
-        };
+                | SyntaxKind::FunctionDeclaration
+                | SyntaxKind::Parameter
+                | SyntaxKind::ForTarget
+                | SyntaxKind::ImportAlias
+        );
         if declared_children {
             for child in &node.children {
                 if matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName) {
@@ -1010,6 +1014,27 @@ fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     Ok(())
 }
 
+fn validate_string_member_expression(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    let member = (node.kind == SyntaxKind::MemberExpression)
+        .then(|| node.children.get(1))
+        .flatten()
+        .map(|member| node_text(&unit.source, member));
+    let call_member = (node.kind == SyntaxKind::CallExpression)
+        .then(|| node.children.first())
+        .flatten()
+        .filter(|callee| callee.kind == SyntaxKind::MemberExpression)
+        .and_then(|callee| callee.children.get(1))
+        .map(|member| node_text(&unit.source, member));
+    if member == Some("length") || matches!(call_member, Some("concat" | "join")) {
+        infer_value_type(unit, node, bindings)?;
+    }
+    Ok(())
+}
+
 fn validate_call_nodes<'a>(
     package: &SemanticPackage,
     unit: &'a SemanticUnit,
@@ -1076,24 +1101,7 @@ fn validate_call_nodes<'a>(
         )?;
         return Ok(());
     }
-    if node.kind == SyntaxKind::MemberExpression
-        && node
-            .children
-            .get(1)
-            .is_some_and(|member| node_text(&unit.source, member) == "length")
-    {
-        infer_value_type(unit, node, scoped_bindings)?;
-    }
-    if node.kind == SyntaxKind::CallExpression
-        && node.children.first().is_some_and(|callee| {
-            callee.kind == SyntaxKind::MemberExpression
-                && callee.children.get(1).is_some_and(|member| {
-                    matches!(node_text(&unit.source, member), "concat" | "join")
-                })
-        })
-    {
-        infer_value_type(unit, node, scoped_bindings)?;
-    }
+    validate_string_member_expression(unit, node, scoped_bindings)?;
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
         if node.kind == SyntaxKind::CallExpression

@@ -1,7 +1,5 @@
 namespace fixed-overflow
-from /core output import .print
-from /core types import .int8
-print = .print
+from /core/types import .int8
 function main
   left int8 = 120
   right int8 = 10

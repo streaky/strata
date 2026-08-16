@@ -695,22 +695,25 @@ The earlier whitespace-separated form used `/` for the root and a space for ever
 
 The namespace tree corresponds to a directory tree. A source unit whose declared namespace disagrees with its location is an error, unless the manifest declares that mapping explicitly. Making the correspondence checkable is the point: a misplaced file becomes a build error rather than a namespace that silently never resolves.
 
-The manifest maps a namespace root to a directory root:
+The manifest maps canonical namespace roots to relative directory roots:
 
-```text
-foo/bar  ->  ./some/path
+```toml
+[namespaces]
+"foo/bar" = "some/path"
+"foo/generated" = "generated"
 ```
 
-`foo/bar/dave` then resolves under `./some/path/dave`. The same mechanism serves two purposes: relocating your own sources, and describing a dependency whose internal layout is not your concern.
+`foo/bar/dave` then corresponds to `some/path/dave`. The same mechanism serves two purposes: relocating your own sources, and describing a dependency whose internal layout is not your concern.
 
+- discovery recursively includes `.trn` files beneath the declared directory roots and ignores other files;
 - overlapping mappings resolve by longest matching namespace prefix;
-- two namespace roots mapped to the same directory is an error at manifest load, not at resolution, because a file there would have two valid namespaces;
-- a `.trn` file under a declared root but outside every mapping is an error, never silently ignored — silent omission is the failure this design exists to prevent;
-- a dependency's namespaces come from its own manifest and are never discovered by scanning its tree. That is a correctness boundary rather than an optimisation: a package's public namespace structure should not depend on its private file layout, and your build should not depend on either.
+- two namespace roots mapped to the same directory are an error at manifest load, not at resolution, because a file there would have two valid namespaces;
+- each mapped root must discover at least one `.trn` source;
+- a dependency's namespaces come from its own manifest and are never discovered by scanning outside those roots. That is a correctness boundary rather than an optimisation: a package's public namespace structure should not depend on unrelated private file layout, and your build should not depend on either.
 
-Discovery is bounded to declared roots rather than scanning the whole tree, expansion is sorted, and ambiguity is an error. The compiler records the resolved source set in build metadata, so a build remains auditable and reproducible from that record even though the manifest no longer enumerates every file individually.
+Expansion is bounded to declared roots and sorted by package-relative path. The compiler records the resolved source set in build metadata, so a build remains auditable and reproducible even though the manifest no longer enumerates every file individually.
 
-Correspondence is directory-level, not file-level. A namespace spans as many source units as it likes, so every `.trn` file in one directory belongs to that directory's namespace; there is no file-per-declaration rule.
+Correspondence is directory-level, not file-level. A namespace spans as many source units as it likes, so every `.trn` file in one directory belongs to that directory's namespace; there is no file-per-declaration rule. For a discovered file, the longest directory mapping determines the namespace root and its relative parent directory supplies any suffix. A differing source declaration is an error with the expected namespace. A direct single-file CLI input has no manifest directory contract and is therefore exempt.
 
 ### Namespace segment grammar
 
@@ -3145,16 +3148,23 @@ the following minimal contract:
 ```toml
 package = "example.tools"
 prelude = true
-sources = ["src/main.trn", "src/support.trn"]
+
+[namespaces]
+"example/tools" = "src"
+"example/generated" = "generated"
 ```
 
-`package` is a required non-empty package identity. `sources` is a required,
-non-empty array that enumerates the complete set of relative `.trn` source
-paths; absolute paths and paths containing `..` are invalid. Duplicate paths are
-an error. `prelude` is an optional boolean and defaults to `true`. Unknown fields
-are rejected. Source units receive stable file identities in sorted path order,
-independent of the array order. A single `.trn` CLI input is instead an
-implicit one-unit package with identity `single-file` and the default prelude.
+`package` is a required non-empty package identity. `namespaces` is a required,
+non-empty table from canonical namespace roots to distinct relative directory
+roots; absolute paths, paths containing `..`, duplicate directory roots, and
+roots containing no `.trn` source are invalid. `prelude` is an optional boolean
+and defaults to `true`. Unknown fields are rejected. The loader recursively
+discovers `.trn` files only beneath those roots and gives source units stable
+file identities in sorted package-relative path order. Every source declaration
+must match the namespace derived from the longest directory mapping and the
+file's relative parent directory. A direct `.trn` CLI input is instead an
+implicit one-unit package with identity `single-file`, the default prelude, and
+no directory-correspondence check.
 
 A package may expose one coherent object namespace regardless of which implementation language supplies each object.
 

@@ -1,3 +1,5 @@
 package = "private-import"
 prelude = false
-sources = ["exports.trn", "consumer.trn"]
+[namespaces]
+app = "app"
+hidden = "hidden"

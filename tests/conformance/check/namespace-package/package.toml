@@ -1,3 +1,5 @@
 package = "namespace-package"
 prelude = false
-sources = ["support.trn", "main.trn"]
+[namespaces]
+app = "app"
+"app/support" = "app/support"

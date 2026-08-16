@@ -1,5 +1,5 @@
 namespace integer-coercion-failure
-from /core types import .int8
+from /core/types import .int8
 int8 = .int8
 
 function main

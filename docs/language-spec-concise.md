@@ -595,11 +595,15 @@ build_scripts: declarative metadata preferred; arbitrary scripts capability-gate
 ```toml
 package = "example.tools" # required non-empty identity
 prelude = true            # optional; defaults true
-sources = ["src/main.trn", "src/support.trn"] # required complete source set
+
+[namespaces]               # required non-empty mapping table
+"example/tools" = "src"
+"example/generated" = "generated"
 ```
 - Authored manifest filename: `package.toml`; syntax is TOML; unknown fields rejected.
-- `sources`: non-empty relative `.trn` paths only; no absolute/parent paths or duplicates; stable file IDs use sorted path order.
-- A direct `.trn` CLI input is implicit package `single-file`, one unit, default prelude.
+- `namespaces`: canonical namespace-root keys mapped to distinct, relative directory roots; no absolute/parent paths. Source discovery recursively includes `.trn` files only, resolves overlapping mappings by longest namespace prefix, and assigns stable file IDs in sorted package-relative path order.
+- Every discovered declaration must equal the namespace derived from its mapping and relative parent directory. Duplicate mapped directories and mapped roots containing no `.trn` files are manifest-load errors.
+- A direct `.trn` CLI input is implicit package `single-file`, one unit, default prelude, and is exempt from directory correspondence.
 - Compiler-bundled support source is copied content-addressably into generated builds and referenced only by generated-project-relative Cargo paths; no registry, network, or installation absolute path enters reproducible output. Apply the same vendoring mechanism to admitted authored third-party dependencies.
 
 - Package import does not imply runtime mutation.

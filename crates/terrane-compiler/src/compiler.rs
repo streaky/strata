@@ -34,7 +34,7 @@ pub fn compile(path: impl Into<PathBuf>, text: String) -> Result<Compilation, Co
     compile_package(&Package::implicit(path, text))
 }
 
-/// Compiles every manifest-enumerated source unit through the shared frontend.
+/// Compiles every manifest-discovered source unit through the shared frontend.
 ///
 /// # Errors
 ///

@@ -1,6 +1,4 @@
 namespace typed-destinations
-from /core output import .print
-print = .print
 function answer int
   return 41
 function main

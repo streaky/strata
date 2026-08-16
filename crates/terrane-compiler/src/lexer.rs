@@ -562,10 +562,12 @@ fn lex_line(
                     _ => TokenKind::Operator,
                 };
                 let attached = attachment(line, start, index);
+                let allowed_left_attachment =
+                    matches!(kind, TokenKind::Increment | TokenKind::Decrement)
+                        || matches!(text, ">" | ">=")
+                        || (text == "/" && namespace_path_line(tokens));
                 if matches!(attached, Attachment::Left | Attachment::Both)
-                    && !matches!(kind, TokenKind::Increment | TokenKind::Decrement)
-                    && !matches!(text, ">" | ">=")
-                    && !(text == "/" && namespace_path_line(tokens))
+                    && !allowed_left_attachment
                 {
                     diagnostics.push(Diagnostic::error(
                         "L0006",
@@ -756,6 +758,7 @@ fn namespace_path_line(tokens: &[Token]) -> bool {
         .iter()
         .rev()
         .take_while(|token| token.kind != TokenKind::Newline)
+        .filter(|token| !matches!(token.kind, TokenKind::Indent | TokenKind::Dedent))
         .last()
         .is_some_and(|token| matches!(token.text.as_str(), "namespace" | "from"))
 }

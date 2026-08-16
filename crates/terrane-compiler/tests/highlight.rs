@@ -19,8 +19,8 @@ fn classified(source: &str) -> Vec<(String, HighlightKind, bool)> {
 #[test]
 fn classifies_real_lexical_and_syntax_constructs() {
     let source = concat!(
-        "namespace sample app\n",
-        "from /core output import .print\n",
+        "namespace sample/app\n",
+        "from /core/output import .print\n",
         "public function greet; name string\n",
         "  message = >>\n",
         "    Hello\n",

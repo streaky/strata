@@ -38,7 +38,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
                 output,
                 "// Source: {}\n// Namespace: {}",
                 display_path(unit.source.path()),
-                unit.namespace.trim_start_matches('/').replace('/', " ")
+                unit.namespace.trim_start_matches('/')
             )
             .unwrap();
             output.push_str(&emitter.output);

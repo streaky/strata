@@ -1,6 +1,4 @@
 namespace for-loops
-from /core output import .print
-print = .print
 function main
   text string = 'éx'
   for character in text

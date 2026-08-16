@@ -1,5 +1,5 @@
 namespace descriptor-runtime-value
-from /core output import .print
+from /core/output import .print
 print = .print
 target = int8
 function main
