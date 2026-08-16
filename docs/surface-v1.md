@@ -143,7 +143,7 @@ A method family is an immutable, bound callable object:
 
 ```text
 selected = value.coerce
-selected; Destination             # invokes selected.default
+selected; Destination             # the bare invocation is the throwing default
 selected.checked; Destination     # looks up child, then invokes it
 ```
 
@@ -192,7 +192,7 @@ For a finite dynamic receiver, a direct member access is valid only when every p
 |   |   +-- .float32 .float64
 |   |   +-- .function                            type constructor
 |   |   +-- .ref .weak-ref                       type constructors
-|   +-- collections
+|   +-- core collections
 |   |   +-- .list .map .set .tuple .range .entry type constructors/constructors
 |   +-- errors
 |   |   +-- .error
@@ -221,60 +221,83 @@ Fixed-width numeric descriptors and collection constructors remain explicit impo
 
 ## 5. Scalar method attachment map
 
-### 5.1 Coercion family
+### 5.1 Conversion: `coerce`, `parse`, and `radix`
 
-The canonical spelling is one callable family, attached where at least one destination is valid:
+Three distinct operations, deliberately not overlapping.
 
 ```text
 source.coerce
-+-- default; Destination   -> Destination         throws a typed conversion error
-+-- checked; Destination   -> Destination|none    no representability throw
-+-- wrap; Destination      -> Destination         modulo destination width
-+-- saturate; Destination  -> Destination         clamp to destination bounds
++-- invocation; Destination -> Destination        throws a typed conversion error
++-- checked; Destination    -> Destination|none   no representability throw
++-- wrap; Destination       -> Destination        modulo destination width
++-- saturate; Destination   -> Destination        clamp to destination bounds
 ```
+
+The bare invocation *is* the throwing default. `.default` exists in compiler metadata so reflection can describe the family uniformly, but source lookup of `.default` is rejected: one operation, one spelling.
+
+**`coerce` takes no argument beyond its destination, ever.** It must never acquire a radix or format option. That is an invariant of the design, not a description of the current surface — acquiring one would absorb the role of `parse` and collapse the separation below.
 
 Attachment and gating:
 
-| Receiver | `default` destinations | `checked` destinations | `wrap` destinations | `saturate` destinations |
+| Receiver | invocation destinations | `checked` | `wrap` | `saturate` |
 |---|---|---|---|---|
-| `int` | every integer; floating; supported parsed/text forms | fixed integer and fallible parsed/text forms | fixed integer only | fixed integer only |
-| fixed integer | every integer; floating; supported text forms | fixed integer and other fallible forms | fixed integer only | fixed integer only |
-| floating | floating; protocol-declared integer/text forms | fallible integer/text forms | absent unless a destination protocol explicitly defines it | bounded numeric destinations where meaningful |
-| `string` | numeric, bool, bytes/encoding, and descriptor-declared parse targets | every fallible parse target | absent | absent |
-| `bytes` | string through an explicit encoding/decoder descriptor; adapter-declared targets | every fallible decode target | absent | absent |
-| `bool` | string and explicitly declared numeric destinations only if the language settles those mappings | same fallible destinations | absent | absent |
-| `none` | string and union/absence-aware destinations only | same fallible destinations | absent | absent |
-| collection | explicitly declared collection/adapter destinations | fallible declared destinations | absent | absent |
+| `int` | every integer; floating | fixed integer; floating | fixed integer only | fixed integer only |
+| fixed integer | every integer; floating | fixed integer; floating | fixed integer only | fixed integer only |
+| floating | floating; integer under an explicitly named rounding operation | the same fallible destinations | absent | bounded numeric destinations where meaningful |
+| `string` | numeric destinations, from the canonical base-ten text spelling | the same numeric destinations | absent | absent |
+| `bool` | integer destinations: `false` is `0`, `true` is `1`, total and lossless | not applicable; the conversion cannot fail | absent | absent |
+| `bytes` | absent — text and bytes convert only through an explicit encoding object | absent | absent | absent |
+| `none` | absent | absent | absent | absent |
+| collection | declared sequence/map/set contracts with a statically known item conversion | the same declared destinations | absent | absent |
 
-The v1 numeric contracts already justify integer rows and numeric-to-float rounding. Bool-to-number, none-to-string, general collection conversion, and the exact distinction between `checked` and parse-specific result errors require conformance decisions before implementation; they must not be inferred silently.
+Integer to floating rounds to nearest, ties to even, and throws when the magnitude falls outside the destination's finite range rather than yielding an infinity. Integer to `bool` is *not* a conversion: it is a predicate choice and must be written as a comparison. Number to `string` uses the canonical text/display operation that `print` consumes, not `coerce`. No conversion substitutes a default value for a failure; a total substitute-on-failure conversion is permitted only as a separately named child.
+
+Conversions are declared per source/destination pair rather than universal, so an undeclared pair is absent from the type rather than a runtime failure.
+
+```text
+source.parse
++-- invocation; callback -> the callback's declared return
++-- checked; callback    -> that return, plus absence when the callback throws
+```
+
+`parse` is the user-supplied interpretation path and **always requires a callback**. There is no built-in destination-owned `parse`; without a callback there would be no operation to perform. It is the only member typed by an argument's signature rather than by a destination descriptor. A union return is checked at the destination by ordinary union rules, reported statically from the callback's declaration. In version one the callback must be a statically resolvable function name, so it resolves and inlines like a coercion destination.
+
+```text
+text.radix; base    -> int        interpret base-N text
+value.radix; base   -> string     render a number in base N
+```
+
+`radix` is a third operation attached by receiver, belonging to neither family. Narrowing after interpretation is ordinary coercion and follows the call-extent rule: `(text.radix; 16).coerce; int8`.
 
 This replaces the flat spellings `checked-coerce`, `wrapping-coerce`, and `saturating-coerce`.
 
 ### 5.2 Arithmetic families
 
-Operators remain familiar syntax, but the named surface should use the same family shape rather than six unrelated prefixed names:
+Operators remain familiar syntax and select each family's default child. The named surface uses the family shape rather than prefixed names:
 
 ```text
 fixed.add
-+-- default; rhs       -> T                       checked; throws overflow
++-- invocation; rhs    -> T                      throws overflow
 +-- checked; rhs       -> T|none
 +-- wrap; rhs          -> T
 +-- saturate; rhs      -> T
-+-- overflowing; rhs   -> { value T, overflowed bool }
++-- overflowing; rhs   -> overflow-result of T   with value T and overflowed bool
 
-fixed.subtract / multiply / negate / divide / remainder
-+-- the same mode children where the operation supports them
+fixed.subtract / multiply / negate / divide / remainder / shift-left / shift-right
++-- the same policy children where the operation supports them
 ```
 
-`int` attaches `add`, `subtract`, `multiply`, `negate`, `divide`, and `remainder`, but only their exact default operations; wrapping and saturation are absent because `int` has no width or bound. `/` and `%` use Euclidean semantics. All integer receivers also expose:
+`wrap`, `saturate`, and `overflowing` attach to `fixed-integer` only. Adaptive `int` has no bounds to wrap or clamp against, so those children are absent from its type rather than present as runtime no-ops. `int` exposes its throwing invocation always, and `checked` only where an operation is genuinely fallible: `divide`, `remainder`, and `div-rem` by zero.
 
 ```text
-integer.div-rem; divisor -> object
-+-- quotient -> receiver integer type
-+-- remainder -> receiver integer type
+integer.div-rem; divisor -> div-rem-result of T
++-- quotient  -> T
++-- remainder -> T
 ```
 
-Division by zero remains an error in every mode. Fixed signed `MIN / -1` follows each mode's explicit contract. Unsigned `negate` is absent.
+`div-rem` exposes only its invocation and `checked`. `wrap` and `saturate` are absent even on fixed-width receivers, because a wrapped or clamped quotient no longer satisfies the quotient/remainder identity the result object exists to guarantee. Both operands evaluate once and one backend operation is performed.
+
+`/` and `%` use Euclidean semantics. Division by zero throws under every policy and is never converted into a wrapped or saturated value. Fixed signed `MIN / -1` follows each policy's contract. Unsigned `negate` is absent. Postfix `++` and `--` select the default `add`/`subtract` child only.
 
 ### 5.3 Bitwise families
 
@@ -284,15 +307,11 @@ integer
 +-- bit-or; rhs
 +-- bit-xor; rhs
 +-- bit-not;
-+-- shift-left
-|   +-- default; count
-|   +-- checked/wrap/saturate only where fixed-width policy defines them
-+-- shift-right
-    +-- default; count
-    +-- checked/wrap/saturate only where fixed-width policy defines them
++-- shift-left  (see 5.2; the policy children live with the arithmetic families)
++-- shift-right (see 5.2)
 ```
 
-Adaptive `int` uses infinite two's-complement semantics and exact left shift. Fixed integers operate on exactly their declared width. Host debug/release shift behaviour is never inherited.
+Shifts accept a non-negative count. On a fixed-width receiver the invocation and `checked` reject counts outside the width and `wrap` reduces the count modulo the width; `saturate` is absent, because saturating a shift *count* has no coherent value contract. Adaptive `int` uses infinite two's-complement semantics, `shift-left` is unbounded and total, `shift-right` is arithmetic, and no count-policy children exist. Host debug/release shift behaviour is never inherited.
 
 ### 5.4 Numeric descriptors and properties
 
@@ -338,26 +357,31 @@ The grapheme operations are gated by the Unicode segmentation-data capability. M
 
 ```text
 string.trim
-+-- default;              -> string              trim both ends
-+-- left;                 -> string
-+-- right;                -> string
-+-- start/end;            -> string              aliases are not proposed; choose one pair
-+-- matching; pattern     -> string              explicit removable pattern
++-- invocation;           -> string              trim both ends
++-- start;                -> string              trim the leading whitespace run
++-- start; literal        -> string              remove that literal when present, unchanged when absent
++-- end;                  -> string              trim the trailing whitespace run
++-- end; literal          -> string              remove that literal when present, unchanged when absent
 
 string.upper
-+-- default;              -> string              uppercase all cased characters
++-- invocation;           -> string              uppercase all cased characters
 +-- first;                -> string              uppercase the first applicable cased character
 +-- words;                -> string              uppercase each word's first applicable cased character
 
 string.lower
-+-- default;              -> string              lowercase all cased characters
++-- invocation;           -> string              lowercase all cased characters
 +-- first;                -> string              lowercase the first applicable cased character
 
 string.normalise                                  Unicode-data capability; profile/later
 +-- nfc / nfd / nfkc / nfkd; -> string
 
 string.case-fold                                  Unicode-data capability; profile/later
-+-- default;              -> string              locale-independent Unicode case fold
++-- invocation;           -> string              locale-independent Unicode case fold
+```
+
+`start` and `end` denote positions in logical scalar order — `start` is index 0 — for every string regardless of script. Writing direction is a display property, not an encoding property: a `string` stores none, so `left` and `right` belong to a directional/rendered text type that carries an explicit base direction, never to `string`. The same two children are reused unchanged by `contains` below, and any family constrainable to one end of the sequence uses this pair rather than coining a near-synonym. Removing a known prefix therefore needs no separate member: `trim.start; "foo"` covers it.
+
+Any operation whose correct answer depends on how text is drawn — padding, alignment, ellipsis truncation, column layout — is a rendering operation and does not attach to `string` at all, under any name.
 
 `trim`, `upper`, and `lower` illustrate the reusable method-family rule requested for v1. `upper.words` changes only the first applicable cased character in each word and preserves the remainder; it is not editorial title casing. There is deliberately no `lower.words` child without an independently useful contract, and title styling belongs in policy-driven third-party libraries. `normalise` and `case-fold` are explicit Unicode operations rather than ambient-locale behavior; ordinary equality, `contains`, and literal search compare the actual Unicode scalar content and do not silently normalize or fold case. Locale-sensitive casing and the exact definition of a “word” need named policy/locale objects; they must not silently consult process locale. Until those contracts are settled, only locale-independent Unicode default operations can be marked v1.
 
@@ -366,14 +390,23 @@ Other string operations form ordinary method objects unless they have genuine mo
 ```text
 string
 +-- concat; values implementing text/string contract -> string
-+-- contains; string -> bool
-+-- starts-with; string -> bool
-+-- ends-with; string -> bool
++-- contains                                         literal substring predicates
+|   +-- invocation; string -> bool                   occurs anywhere
+|   +-- start; string -> bool                        occurs at the logical start
+|   +-- end; string -> bool                          occurs at the logical end
++-- find                                             position-returning search
+|   +-- invocation; string -> text-range|none
+|   +-- all; string -> iterator of text-range
+|   +-- count; string -> int
 +-- split; separator -> list of string
 +-- replace; old, new -> string
 +-- encode; encoding descriptor -> bytes
-+-- coerce                                as above
++-- coerce / parse / radix                as above
 ```
+
+`contains` and its children are boolean; `find` is a separate family because it returns a position rather than a predicate. A family is *modes of one operation*, not a bucket of related operations, so the two do not merge — they share a subject, and grouping by subject is what namespaces are for. Every child of `contains` accepts the empty pattern and returns true for it. There is no case-insensitive child: apply an explicit `case-fold` to both operands. There is no regex child either, so no member dispatches on whether its argument is a literal or a pattern object.
+
+The version-one `contains` family is exactly `start` and `end`. `any` and `all` over several patterns await variadics or collections; `at`, taking an explicit position, is the true generalisation but forces a byte/scalar/grapheme index-unit choice and awaits the `text-range` contract.
 
 Only `concat`, `length`, explicit views, encode/decode, and iteration are anchored by the current draft. The remaining everyday string API is a proposed v1 library surface and needs focused semantic cases.
 
@@ -383,13 +416,13 @@ Regular expressions are proposed as typed pattern objects rather than specially 
 
 ```text
 regex
-+-- default; pattern string, options... -> regex
++-- invocation; pattern string, options... -> regex
 +-- pattern -> string
 +-- options -> regex option set
 
 string
 +-- match
-|   +-- default; regex -> regex-match|none         first match
+|   +-- invocation; regex -> regex-match|none         first match
 |   +-- all; regex -> iterable of regex-match
 +-- matches; regex -> bool                         whole-string match
 +-- replace; regex, replacement -> string
@@ -416,7 +449,7 @@ bytes
 +-- length -> int
 +-- iteration -> uint8/int byte value contract
 +-- decode
-|   +-- default; encoding -> string               throws decoding error
+|   +-- invocation; encoding -> string               throws decoding error
 |   +-- checked; encoding -> string|none           proposed
 |   +-- replace; encoding, replacement -> string   proposed explicit policy
 +-- slice/index through range/index protocols
@@ -431,7 +464,9 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 .list / list of T
 +-- default invocation; values... -> list
 +-- length -> int
-+-- get/index; int -> T
++-- get
+|   +-- invocation; int -> T                     throws index-error
+|   +-- checked; int -> T|none
 +-- set/index assignment; int, T -> none
 +-- append; T -> none
 +-- iteration -> T stream
@@ -440,7 +475,9 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 .map / map of K, V
 +-- default invocation; entries/named entries -> map
 +-- length -> int
-+-- get/index; K -> V or declared missing-key result
++-- get
+|   +-- invocation; K -> V                       throws missing-key
+|   +-- checked; K -> V|none
 +-- set; K, V -> none
 +-- keys / values / entries -> iterable views
 +-- iteration -> entry/tuple contract
@@ -469,9 +506,23 @@ Encoding descriptors such as `utf8` are canonical objects, not magic strings. Ar
 +-- value
 ```
 
-Lists, maps, and sets are COW value objects. Mutation triggers separation where aliases exist. Tuples are fixed-length values. Iterator exhaustion is distinct from `none`.
+Lists, maps, and sets are COW value objects, separating at the first mutation visible through a non-unique handle. Tuples are fixed-length values.
 
-The draft fixes these constructors and broad protocols but not every everyday method above. Missing-key behaviour, index errors, mutator return values, ordering guarantees, range endpoint inclusion, and element type inference must be settled by accepted/rejected cases before their v1 implementation.
+Lookup and indexing follow the family convention used everywhere else: the invocation throws (`missing-key` for a map, `index-error` for a sequence) and `checked` returns absence. Absence is always the `checked` spelling — no operation returns absence by default, and there is no separately named `get-required`.
+
+Maps and sets preserve insertion order as an observable contract. A separate unordered map and set type exists for cases where the index-map layout costs too much; it is deterministic under a fixed hash seed rather than merely unordered, because the performance option must never be the nondeterministic one. It is a distinct type rather than a flag, so the guarantee stays visible in signatures.
+
+Ranges are half-open by default with an explicit `through` constructor for inclusive ends; the step defaults to `1`, must be non-zero, and a direction inconsistent with the endpoints yields an empty range. Homogeneous literals infer the narrowest common declared type; heterogeneous literals require an explicit union or annotation. Mutable values and identity-bearing resources cannot be hash keys.
+
+Iteration advances through a dedicated finite result:
+
+```text
+iterator.next; -> iteration-step of Item
++-- item of Item
++-- end
+```
+
+Exhaustion is `end`, never `none`, because `none` may be a legitimate item. Iterators are stateful linear objects, `end` is sticky, and advancing after `end` returns `end` without consulting the source again. `for` desugars through this protocol and neither exposes nor synthesises a sentinel.
 
 ## 8. Functions, classes, interfaces, and traits
 
@@ -509,10 +560,11 @@ class instance
 ## 9. Errors
 
 ```text
-error
-+-- message -> string
+error                                              structural interface; all catchable failures implement it
++-- kind -> stable matchable identity
++-- message -> string                              for humans; never a matching key
 +-- cause -> error|none                            where wrapped
-+-- source location / structured fields
++-- source-context chain
 
 /core errors::.arithmetic-overflow
 +-- operation
@@ -535,7 +587,7 @@ error
 +-- destination type
 ```
 
-`throw`, `try`, `catch`, and `finally` are v1 control flow. Ordinary language errors lower through result-like control flow, not Rust panic. `panic` is separate and profile-selectable. Package/adapter errors such as `.file-error` and `.python-error` are not implicit `/core` children.
+`throw`, `try`, `catch`, and `finally` are v1 control flow. Ordinary language errors lower through a compiler-owned result propagation representation, not Rust panic or native unwinding. `catch` clauses are tried in source order, and a clause made unreachable by an earlier one is a compile-time diagnostic rather than a silent reorder; `finally` always runs and may replace a pending outcome only by explicitly returning or throwing. Uncaught rendering prints the deterministic cause and source chain, then exits through the profile's failure policy. `panic` is separate and profile-selectable. Package/adapter errors such as `.file-error` and `.python-error` are not implicit `/core` children.
 
 ## 10. Ownership, identity, and lifetime objects
 
@@ -637,20 +689,22 @@ async callable -> task object
 +-- await result through control-flow syntax
 +-- cancellation/lifetime metadata
 
-structured task scope
-+-- child tasks
-+-- cancellation propagation
-+-- failure observation
+structured task scope                              v1 language-level object, not a library convenience
++-- child tasks; the scope joins them before completing
++-- cooperative cancellation with defined cancellation points
++-- deadline inheritance: a child may shorten but never extend its parent's
++-- failure observation for a child that throws while siblings run
 
 profile library objects
 +-- channel
 +-- mutex
 +-- read/write lock
 +-- atomic by supported width
-+-- task group
 +-- thread-local facility
 +-- shared collection variants
 ```
+
+The async callable type, the task object, the structured scope, and cancellation with deadline propagation are all version one. Channels, locks, atomics, and executor selection are not: they are library objects over that core. Deadlines are explicit values that additionally propagate down scope boundaries — not ambient task-local state, because the boundary is written in the source. The language fixes the executor boundary but never hard-codes one executor.
 
 These are ordinary objects supplied by selected packages/profiles, not universal prelude names. Capabilities gate allocator, threads, filesystem, sockets, process spawning, dynamic loading, reflection, unwinding, clocks, entropy, floating point, Unicode data, exact-big-integer storage, and atomic widths. Unavailable semantics are rejected; profiles never quietly change a type's behaviour.
 
@@ -764,7 +818,7 @@ JSON numbers are represented as exact `document-integer` or `document-decimal` v
 
 ```text
 url
-+-- default; string -> url                        parse and validate
++-- invocation; string -> url                        parse and validate
 +-- checked; string -> url|none
 +-- scheme / username / password / host / port
 +-- path segments
@@ -786,7 +840,7 @@ URL parsing follows one named standard and version rather than platform helpers.
 
 ```text
 path
-+-- default; string|components -> path
++-- invocation; string|components -> path
 +-- name / parent / stem / extension
 +-- components
 +-- join; path -> path
@@ -885,14 +939,14 @@ process arguments
 +-- raw values -> platform argument values        profile-specific
 
 argument parser
-+-- default; argument schema -> argument parser
++-- invocation; argument schema -> argument parser
 +-- parse; process arguments|list of string -> parsed arguments
 +-- usage/help rendering
 +-- typed positional, option, flag, repeat, default, and remainder descriptors
 +-- structured parse errors
 
 exit-status
-+-- default; int -> exit-status
++-- invocation; int -> exit-status
 +-- success -> bool
 +-- code -> int|none
 +-- signal/termination detail -> profile object|none
@@ -908,14 +962,14 @@ Environment access, argument decoding, and process termination are explicit effe
 
 ```text
 ip-address
-+-- default; string -> ip-address                 parse IPv4 or IPv6
++-- invocation; string -> ip-address                 parse IPv4 or IPv6
 +-- checked; string -> ip-address|none
 +-- version -> ipv4|ipv6
 +-- string; -> string                             canonical presentation
 +-- is-loopback / is-unspecified / is-multicast
 
 socket-address
-+-- default; ip-address, port -> socket-address
++-- invocation; ip-address, port -> socket-address
 +-- ip-address / port
 +-- string; -> string
 
@@ -1001,7 +1055,7 @@ mac algorithm
 +-- verify; key, bytes|byte-reader, mac -> bool
 
 uuid
-+-- default; string -> uuid
++-- invocation; string -> uuid
 +-- checked; string -> uuid|none
 +-- random; secure-random -> uuid
 +-- name; namespace uuid, name bytes|string, version -> uuid
