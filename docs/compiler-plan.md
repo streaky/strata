@@ -33,7 +33,9 @@ and the toolchain can compile and run a small but nontrivial command-line progra
 - deterministic generated Rust and a Cargo project;
 - source-oriented lexer, parser, resolver, type, and backend diagnostics.
 
-The first version does not need classes, universal dynamic values, copy-on-write collections, `ref`/`move`, exceptions, custom importers, third-party packages, foreign runtimes, async, reflection, inline Rust, `no_std`, embedded targets, or kernel targets. Syntax for deferred features may be recognized only when doing so enables a precise “not supported in this compiler version” diagnostic; it must never be accepted and lowered incorrectly.
+That list is the **first runnable outcome**, reached at milestone 6, not the boundary of version one. Version one as now specified also requires structured errors, the callable-family and descriptor models, collections and iteration, classes and interfaces, ownership and resources, capabilities and effects, async with structured concurrency, and the standard facilities in milestones 20 through 26. Milestones 7 onward deliver those.
+
+Version one still does not need universal dynamic values, source-declared generics, general pattern matching, multiple class inheritance, generators, labels and `goto`, hot-code replacement, `no_std`, embedded targets, or kernel targets. Syntax for deferred features may be recognized only when doing so enables a precise “not supported in this compiler version” diagnostic; it must never be accepted and lowered incorrectly.
 
 ## 3. Delivery principles
 
@@ -482,6 +484,55 @@ function-call receiver proving exactly-once evaluation. Reviewed generated-Rust 
 preserve the throwing, partial, wrapping, and saturating helper contracts without redundant
 references, and every accepted generated crate compiles with warnings denied.
 
+### Milestone 4.6 — Reconcile shipped behavior with the settled decisions
+
+Milestones 3 and 4 shipped against contracts that have since changed. This milestone
+closes the gap between what the compiler does and what the specification now says, so that
+later work is not built on top of superseded behavior. It adds no new language surface:
+every item here is a divergence in something already implemented.
+
+Deliver:
+
+- rename the compiler-owned collection namespace from `/collections` to `/core collections`
+  in the bootstrap module table, the namespace registry, and every diagnostic and fixture
+  that names it. The empty placeholder is removed rather than aliased, per the clean-cutover
+  rule;
+- record descriptor constructs as available without import, a category distinct from the seven
+  prelude ordinary bindings, which are unchanged. `value int8 = 42` needs no import today and
+  should not start needing one; the specification text stating that fixed widths require
+  explicit import and binding predates the construct model and is what changes here. Explicit
+  import and aliasing remain available and are still how a name is rebound or shadowed;
+- implement descriptors as language constructs backed by canonical objects rather than as
+  independently instantiated values. A descriptor binding such as `d = int8` names the
+  construct, is a compile-time alias, and has no runtime representation, so it lowers to
+  nothing. Today `d = int` passes `terrane check` and emits `d = int;` into generated Rust,
+  handing the user a projected rustc `E0425` instead of a Terrane diagnostic — the exact
+  failure milestone 6 forbids. Erasure here is definitional: there is no storage to elide;
+- accept a descriptor alias everywhere the construct is valid — annotation position, a
+  coercion destination, and the right side of `is a` — which fixes the currently rejected
+  `target-type = float` followed by `x.coerce; target-type` that the specification documents;
+- reject a descriptor alias at its source span wherever a runtime value is required, including
+  `print; d`, arithmetic, and value parameters, since a descriptor has no display or value
+  protocol in version one;
+- align the `/core errors` object set and its diagnostic text with the structural `error`
+  interface now specified — stable `kind`, human-readable `message`, optional `cause`, and a
+  source-context chain — even though construction and catching remain later work. Reserved
+  names must not imply a shape the specification has since replaced;
+- re-check every rejection message written against a superseded spelling. Diagnostics that
+  suggest a flat coercion spelling, a `/collections` path, or an operation name the arithmetic
+  family decision renamed must be corrected, since a diagnostic is a contract surface;
+- refresh `docs/surface-today.md` so each entry matches the reconciled behavior, and
+  re-verify the status labels rather than assuming they carried over.
+
+Exit criterion: no compiler-owned name, diagnostic, fixture, or golden refers to a
+superseded contract; a descriptor alias is accepted in every construct position and rejected
+with a Terrane diagnostic in every value position, never reaching rustc; and
+`docs/surface-today.md` agrees with the pipeline entry for entry.
+
+Note on scope: the arithmetic families, abstract category descriptors, structured errors,
+and float/string coercion destinations are **not** part of this milestone. They are new
+surface rather than corrections, and they arrive with milestones 7 onward.
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:
@@ -518,7 +569,260 @@ The frontend should prevent ordinary type/name errors from reaching rustc. Backe
 
 Exit criterion: at least one deliberately induced backend error is mapped to its Terrane source location, and raw rustc information remains available.
 
-### Milestone 7 — First-version hardening and release gate
+### Milestone 7 — Semantic descriptor, protocol, and category model
+
+Deliver:
+
+- compiler-owned abstract category descriptors `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the `value` and `object` identity roots, exported from `/core types` and never prelude names;
+- declared conformance on every concrete scalar descriptor, replacing the enumerated match arms and "is integer" predicates that currently encode category membership;
+- category-driven member attachment, compatibility, and finite-union reasoning, so a member set is derived from declared contracts rather than from a per-type list;
+- the declared-conversion protocol behind `coerce`, with `coerce` fixed as option-free; the `parse` member taking a required, statically resolvable callback and typed by that callback's declared return, including its `checked` child; and the `radix` pair interpreting base-N text to `int` and rendering `int` to `string`;
+- explicit rejection of fixed-width integers as assignment-compatible subtypes of `int`, preserving explicit coercion and the differing arithmetic contracts;
+- a compiler-owned descriptor schema carrying bounds, bit width, signedness, and declared protocols, kept separate from generated-Rust representation metadata.
+
+Exit criterion: category membership drives at least one real decision the compiler previously made by enumeration, `is a` answers abstract descriptors correctly, and no scalar is boxed merely to model source conformance.
+
+### Milestone 8 — Callable signatures and bound-method families
+
+Milestone 4.5 delivered the `.coerce` family as a special case. This generalises that machinery so later families reuse it instead of adding parallel special cases.
+
+Deliver:
+
+- general member-family, bound-method, callable-signature, and member-availability semantic forms, with the coercion family re-expressed in terms of them;
+- typed child lookup and explicit default invocation in the model rather than in name matching;
+- one call-checking path shared by ordinary function calls and member calls;
+- member lookup returning typed candidates and availability constraints instead of a boolean "known member", with destination narrowing applied before call validation;
+- the version-one restriction that a family selection must be invoked in the same expression, diagnosed at its source span.
+
+Exit criterion: adding a new member family requires no new parser or lowering route, proven by re-expressing coercion and adding one further family through the shared path only.
+
+### Milestone 9 — Structured errors and typed propagation
+
+Deliver:
+
+- the structural `error` interface with stable `kind`, human-readable `message`, optional `cause`, and a source-context chain;
+- `throw`, `try`, `catch`, and `finally` over a compiler-owned result propagation representation rather than native unwinding;
+- catch matching in source order, with a compile-time diagnostic for a clause made unreachable by an earlier one;
+- `finally` semantics that always run and may replace a pending outcome only by explicitly returning or throwing;
+- construction and catchability for the reserved `/core errors` objects, converting the existing deterministic arithmetic and coercion failures onto this path;
+- deterministic uncaught rendering of the cause and source chain, preserving the current outermost reporting policy and exit code.
+
+Exit criterion: an arithmetic overflow and a failed coercion are catchable, a rethrow preserves the cause chain, uncaught output is unchanged from the current normative text, and generated Rust contains no panic-based control flow for recoverable failures.
+
+### Milestone 10 — Named bounded-arithmetic families
+
+Deliver:
+
+- the `add`, `subtract`, `multiply`, `divide`, `remainder`, `div-rem`, `negate`, `shift-left`, and `shift-right` families attached to `integer`, with operators selecting each default child;
+- `checked`, `wrap`, `saturate`, and `overflowing` children attached to `fixed-integer` only, absent from adaptive `int` rather than present as runtime no-ops;
+- `int` exposing its throwing default always and `checked` only where genuinely fallible;
+- `overflow-result of T` and `div-rem-result of T` as named compiler-supplied result types, with `div-rem` lowering to one backend operation;
+- shift-count policy per receiver class, and postfix `++`/`--` restricted to the default child.
+
+Exit criterion: every family and child has accepted, rejected, and runtime cases; `div-rem` divides once in reviewed generated Rust; and absent children fail at the source span rather than at runtime.
+
+### Milestone 11 — Bytes, string views, and encoding objects
+
+Deliver:
+
+- `bytes` as a real sequence value with literals, byte length, indexing, slicing, and iteration, and with no text-display protocol;
+- explicit `bytes`, `scalars`, and `graphemes` string views without changing the default grapheme length;
+- the pinned Unicode version contract, sourced from the toolchain profile rather than the package lock;
+- canonical `utf8`, `utf16-le`, `utf16-be`, `utf32-le`, and `utf32-be` encoding objects, with encoding total and decoding raising a typed `decode-error` carrying encoding and byte offset;
+- prevention of arbitrary bytes reaching `print` through a blanket display implementation.
+
+Exit criterion: a round-trip encode/decode case runs, an invalid byte sequence produces the typed decode error at its offset, and view lengths differ correctly for a multi-scalar grapheme.
+
+### Milestone 12 — String transformation and search families
+
+Deliver:
+
+- the `trim` family with `start` and `end` children, where a child with no argument removes the whitespace run and a child with a literal removes that literal when present;
+- the `contains` family with `start` and `end` children, all boolean, plus the separate `find` family returning `text-range|none` with `find.all` and `find.count`;
+- `upper` and `lower` with their specified children, `normalise.nfc/nfd/nfkc/nfkd`, and locale-independent `case-fold` as explicitly named Unicode operations;
+- literal `split` and `replace` with the settled empty-pattern and non-overlapping-advance rules;
+- `text-range` with checked byte, scalar, and grapheme views over an immutable input.
+
+Exit criterion: the specified empty-pattern, position-child, and Unicode-property behaviors each have cases, including a right-to-left sample proving the position children act on logical order.
+
+### Milestone 13 — Iterator protocol
+
+Deliver:
+
+- `iteration-step of Item` with `item of Item` and `end` alternatives as the advancing result;
+- stateful linear iterators with sticky `end` that do not consult the source after exhaustion;
+- `for` desugared through the protocol without exposing or synthesising sentinel values;
+- iterator state and item typing settled before any collection depends on them.
+
+Exit criterion: a user-defined iterator drives `for` through the same path as the built-in string iteration, and an iterator yielding `none` as a legitimate item is distinguished from exhaustion.
+
+### Milestone 14 — Collections
+
+Deliver:
+
+- list, map, set, tuple, range, and entry types under `/core collections`, added vertically rather than as one batch;
+- lookup and indexing whose default child throws `missing-key` or `index-error` and whose `checked` child returns absence, with no operation returning absence by default;
+- insertion-ordered map and set as the observable contract, plus a separate unordered type that is deterministic under a fixed hash seed rather than merely unordered;
+- half-open ranges with an explicit inclusive constructor, non-zero step, and empty-range rules;
+- copy-on-write separation at the first mutation visible through a non-unique handle, with mutable and identity-bearing values rejected as hash keys.
+
+Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants.
+
+### Milestone 15 — Function values and closures
+
+Deliver:
+
+- first-class function values and closures over the callable protocol established in milestone 8;
+- storable bound method families, lifting the version-one restriction diagnosed since milestone 4.5;
+- caller-supplied conversion callbacks for pairs no descriptor declares;
+- capture semantics defined against the ownership rules, with no implicit boxing of statically known callables.
+
+Exit criterion: a selected method family can be stored, passed, and invoked; the previously rejected form is accepted with a case proving the receiver still evaluates once.
+
+### Milestone 16 — Classes, interfaces, and traits
+
+Deliver:
+
+- class declaration, fields, construction through `construct`, and deterministic drop;
+- single class inheritance preserving complete subclass state;
+- structural named interfaces and non-type traits with explicit conflict resolution;
+- dispatch and compatibility over the descriptor model rather than a parallel class table.
+
+Exit criterion: each of construction, inheritance, interface conformance, and trait reuse has an executable slice; dynamic-object state is preserved end to end.
+
+### Milestone 17 — Ownership, references, and resources
+
+Deliver:
+
+- semantic value assignment for ordinary values, linear resources, and explicit references;
+- `ref`, `move`, and weak references with lifetime and provenance analysis reported in source terms;
+- the deterministic drop pipeline;
+- identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
+
+Exit criterion: ownership analysis accompanies the first non-scalar mutable value type rather than being retrofitted, and borrow escape is diagnosed at the originating binding.
+
+### Milestone 18 — Capabilities, effects, and reflection
+
+Deliver:
+
+- the closed effect vocabulary `throws E`, `io`, `blocks`, `awaits`, `mutates`, `unsafe`, and `foreign`, with allocation tracked internally rather than declared publicly;
+- effect inference for private functions and declared public effect contracts for exported ones;
+- capability objects that authorize effects without being effects, as linear authority values never synthesised from descriptive profile metadata;
+- retained descriptor identity and public callable/type metadata in ordinary profiles, stripped private bodies and unrequested inventories, and a compile-time failure when code requests metadata a profile does not retain.
+
+Exit criterion: a pure caller cannot call an effectful callee, a capability cannot be forged from profile data, and a minimal profile rejects an unavailable reflection request at compile time.
+
+### Milestone 19 — Async core: tasks, scope, cancellation, and deadlines
+
+This milestone precedes the timer, stream, and network milestones because their contracts are defined against it.
+
+Deliver:
+
+- the async callable type, `await`, and task objects, with sync and async callables incompatible without an explicit adapter;
+- the structured-concurrency scope: creation, child spawn, join, and defined behavior for a child that throws while siblings run;
+- cooperative cancellation with defined cancellation points, reporting completed work rather than silently discarding partial progress;
+- deadlines as explicit values that additionally propagate down scope boundaries, where a child may shorten but never extend a parent's deadline;
+- the executor boundary the language fixes versus the profile selects, with no hard-coded executor;
+- borrow and linear-resource rules across suspension.
+
+Exit criterion: a cancelled scope joins its children and reports partial progress; a nested deadline cannot be extended; and no borrow crosses suspension without a proven lifetime.
+
+### Milestone 20 — Byte and text streams and process standard streams
+
+Deliver:
+
+- byte reader and writer protocols with partial-operation and EOF contracts;
+- text reader and writer adapters carrying explicit encodings and performing no implicit newline translation;
+- typed stdin, stdout, and stderr over the same protocols;
+- explicit idempotent close with observable close and flush failures, and `flush` distinguished from `sync-data` and `sync-all`;
+- async variants sharing the same contracts with cancellation.
+
+Exit criterion: partial reads and writes, EOF, and use-after-close each have cases; a cancelled stream operation reports what it completed.
+
+### Milestone 21 — Paths, filesystem, and process facilities
+
+Deliver:
+
+- lexical `path` values with platform-neutral components and normalization that resolves `..` lexically without crossing a root;
+- the capability-gated `filesystem` object with metadata, symlink metadata, canonicalization, and permissions as a portable subset plus profile detail;
+- race-resistant directory-handle-relative traversal with no-follow by default and explicit beneath and cross-filesystem policies;
+- file handles as linear resources, bounded whole-file operations, and atomic replacement that renames without following links;
+- environment and argument access over a lossless platform-string type, the schema-driven CLI parser, and `exit-status` with the `0..=255` code range.
+
+Exit criterion: lexical resolution and filesystem canonicalization are separately observable, a traversal escape attempt is refused, and the CLI parser returns structured diagnostics without calling process exit itself.
+
+### Milestone 22 — Document values, JSON, YAML, and URLs
+
+Deliver:
+
+- the shared document-value model with exact `document-integer` and `document-decimal`, never routed through `float`;
+- JSON parse, write, and canonical output per RFC 8785 ordering, with duplicate keys rejected by default;
+- YAML restricted to a safe core schema with no executable tags and enforced depth, size, and alias-expansion limits;
+- descriptor-driven `serializable` and `deserializable` mapping with field names, optional and default fields, unknown-field policy, and full data-path diagnostics;
+- parsed `url` values following the pinned WHATWG standard with UTS #46 processing, ordered query entries, and credentials never displayed by default.
+
+Exit criterion: a decode failure reports its document path and expected descriptor; canonical output is byte-identical across runs; a YAML alias bomb is refused by limit.
+
+### Milestone 23 — Randomness, codecs, digests, and compression
+
+Deliver:
+
+- incompatible `secure-random` and `pseudo-random of Algorithm` types, with rejection sampling for bounded generation;
+- SHA-256 and SHA-512 digests and HMAC, with secret buffers, best-effort zeroisation, and constant-time digest comparison;
+- strict hex and distinct standard and URL-safe base64 codecs with explicit padding policy;
+- UUID parsing plus v4 and v7 generation;
+- `gzip`, `zlib`, `deflate-raw`, and `zstd` codecs with no auto-detect default, deterministic mode, and mandatory output, ratio, nesting, and work limits on decompression.
+
+Exit criterion: a pseudo-random source cannot satisfy a secure-random parameter; a decompression bomb is refused with a distinct resource-limit error rather than truncated success.
+
+### Milestone 24 — Networking and TLS
+
+Deliver:
+
+- parsed `ip-address`, `socket-address`, and a distinct `host-name` type, serialising IPv6 per RFC 5952;
+- `tcp-listener`, `tcp-stream`, and `udp-socket` type objects owning their factories and returning distinct linear resource instances;
+- explicit `dns` lookup returning ordered candidates with TTL, leaving caching to an explicit resolver and connection racing to `connect`;
+- deadline and cancellation on every blocking operation, typed socket options, and explicit UDP truncation reporting;
+- TLS over the shared stream protocol, defaulting to TLS 1.3 with supported 1.2, performing chain and hostname validation, with any insecure connector requiring a separately imported unsafe capability and remaining visibly typed as insecure.
+
+Exit criterion: a loopback client and server exchange data under a deadline; certificate validation cannot be disabled through an ordinary option; a truncated datagram is reported rather than silently shortened.
+
+### Milestone 25 — Structured logging
+
+Deliver:
+
+- an imported, capability-gated `logging` package with named and default loggers and `debug`, `info`, `warning`, and `error` operations;
+- immutable field and context enrichment, with fields retaining keys, values, source context, and severity rather than being flattened to text;
+- an explicit `log-value` protocol, descriptor-driven redaction, and dot-separated logger hierarchies with filtering before expensive rendering;
+- host- or profile-supplied sinks, bounded buffers with an explicit backpressure policy, and a fallback diagnostic sink that does not recursively log;
+- an in-memory deterministic test sink with logical sequence numbers and controlled timestamps.
+
+Exit criterion: structured fields survive to the sink unflattened, a secret-typed field is redacted by policy, and captured test output is byte-identical across runs.
+
+### Milestone 26 — Rust dependencies, `reqwest`, and editor integration
+
+Deliver:
+
+- `use rust crate-name` adding a locked dependency directly to the generated Cargo graph, with exact version or lock-resolved requirement, feature set, default-feature policy, and target conditions declared in the manifest;
+- build scripts and proc macros executing only under an explicit build capability and sandbox policy, with their outputs part of cache identity;
+- Cargo errors source-mapped to the dependency declaration or native Rust span, without presenting Rust API errors as Terrane member errors;
+- the `reqwest` vertical slice with `default-features = false` and explicit `blocking` and `rustls-tls` features plus a chosen roots variant, calling `reqwest::blocking` from a native Rust body with no Terrane request or error bridge;
+- language-server integration reading Cargo metadata and lock data and delegating Rust semantic intelligence to rust-analyzer, with cache identity covering manifests, locks, features, target, toolchain, and source checksums.
+
+Exit criterion: accepted and rejected dependency fixtures, lock and feature mismatch diagnostics, deterministic generated Cargo and Rust goldens, and a warning-free local loopback `reqwest` build and run. External-network tests do not prove the contract.
+
+### Milestone 27 — Remaining concurrency and foreign adapters
+
+Deliver:
+
+- channels, mutexes, read/write locks, atomics, and thread-local objects as library objects over the milestone 19 core;
+- capability profiles for the system and embedded targets;
+- Rust and system adapters with explicit lifetime and error-translation contracts;
+- the first Python runtime contract if it remains in version-one scope.
+
+Exit criterion: each surface enters with a selected capability contract, typed objects and effects, deterministic lowering, and compiled and run evidence. No surface is represented as an empty compiler-owned name to make the map look complete.
+
+### Milestone 28 — First-version hardening and release gate
 
 Deliver:
 
@@ -566,27 +870,47 @@ The release pipeline must prove, from a clean checkout:
 - functions, required/optional parameters, positional/named arguments, calls, and return values;
 - basic expressions, descriptor-object identity and `.type`, type-membership predicates, assignment, shifts, bitwise operators, and specified evaluation order; ordinary values remain identity-less and `===` is rejected;
 - `if`/`else`, `while`, collection and three-clause `for`, `break`, `continue`, and `return`;
-- grapheme-defined default string length with capability diagnostics, explicit implemented string views, and a minimal collection/output surface sufficient for real CLI programs without violating deferred universal COW semantics;
-- deterministic Rust lowering, a compiler-bundled integer support component usable offline, Cargo build/run, source maps, and diagnostics.
+- grapheme-defined default string length with capability diagnostics, explicit string views, and the `trim`, `contains`, and `find` families;
+- deterministic Rust lowering, a compiler-bundled integer support component usable offline, Cargo build/run, source maps, and diagnostics;
+- abstract category descriptors and declared conformance, replacing enumerated category predicates;
+- the general callable-family model: member families, bound methods, callable signatures, and typed member availability on one call-checking path;
+- structured errors with `throw`/`try`/`catch`/`finally`, catchable core errors, and deterministic uncaught rendering;
+- the named bounded-arithmetic families with their policy children and named result types;
+- `bytes` as a real value type, explicit encoding objects, and typed decode failures;
+- the iterator protocol with `iteration-step of Item`, and list, map, set, tuple, range, and entry under `/core collections`;
+- function values, closures, and storable bound method families;
+- classes, single inheritance, structural interfaces, traits, `construct`, and deterministic drop;
+- ownership: semantic value assignment, linear resources, explicit `ref`/`move`/weak references, and the drop pipeline;
+- the closed effect vocabulary, capability authority objects, and profile-governed reflection retention;
+- async with `await`, task objects, the structured-concurrency scope, cooperative cancellation, and scope-propagated deadlines;
+- byte and text stream protocols, process standard streams, files, paths, and race-resistant filesystem traversal;
+- environment, arguments, the schema-driven CLI parser, and `exit-status`;
+- date/time with monotonic timers, deadlines, and tickers;
+- the document-value model with JSON, safe YAML, descriptor-driven mapping, and parsed URLs;
+- secure and pseudo-random sources, hex and base64 codecs, digests and MACs, UUIDs, and bounded compression;
+- networking addresses, DNS, TCP and UDP resources, and validated TLS;
+- structured logging over profile sinks;
+- direct Rust dependency declaration with a locked Cargo graph, the `reqwest::blocking` slice, and resolution-aware editor integration.
 
 ### Explicitly deferred
 
-- classes, inheritance, interfaces, traits, and constructors;
-- universal COW semantics and mutable collection aliasing;
-- `ref`, borrow families, `move`, linear values, and deterministic user-defined destruction;
-- `throw`/`try`/`catch`/`finally`;
-- floating-point and `string` coercion destinations, including numeric-to-float rounding and text parsing;
+- source-declared generics and general pattern matching;
+- multiple class inheritance and implicit signature overloading or multimethods;
+- generators and `yield`;
+- labels and `goto`;
+- user-replaceable core structural constructs, including `function`;
 - a truncating (C/Rust-style) signed integer division and remainder family alongside the specified default contract;
-- coercion policies gated across non-integer source and destination pairs, beyond the integer-only table version one implements;
-- variadics, generators, closures if they delay the core pipeline;
+- variadics, if they delay the core pipeline;
 - custom declaration modifiers and package-defined type constructors;
-- custom importers, registries, lockfiles, Rust/system/runtime dependencies;
-- inline/full-file Rust and C ABI export;
-- reflection, debugger integration, tracing, and profiling;
-- async/concurrency;
-- build-time selection, labels, and `goto` unless needed before systems profiles;
+- custom importers and registries beyond the locked Cargo graph version one requires;
+- C ABI export, and foreign runtimes beyond the first Python contract;
+- debugger integration, tracing, and profiling beyond the retained reflection metadata;
+- stateful hot-code replacement and time-travel or replay;
+- locale-policy-rich text APIs until deterministic policy objects are specified;
 - `no_std`, embedded, firmware, and kernel compilation;
 - parsing or compiling `demos/fork.trn` as an acceptance goal.
+
+Items moved out of this list by the settled decisions — classes, interfaces, traits, ownership and `ref`/`move`, `throw`/`try`/`catch`/`finally`, float and string coercion destinations, closures, inline Rust with locked Rust dependencies, reflection, and async — are now required above and scheduled in milestones 7 through 27.
 
 Deferral means “diagnose as unsupported,” not “leave behavior accidental.”
 
@@ -689,18 +1013,16 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-1. Create the Rust workspace, CLI crate, compiler crate, and diagnostic model.
-2. Define the conformance case manifest and test runner.
-3. Add a tiny authored `tests/conformance/run/hello/case.trn` fixture.
-4. Implement source files, spans, tokens, and indentation lexing for that fixture.
-5. Implement the minimal lossless tree and semantic AST.
-6. Parse namespace, import/binding, `function main`, string value, and invocation.
-7. Resolve a compiler-owned `.print` object and its explicit ordinary binding.
-8. Lower the program through a Rust IR into a generated Cargo binary.
-9. Make `terrane rust`, `build`, `run`, and `check` use that shared pipeline.
-10. Add malformed indentation, unterminated string, unresolved object, and wrong-call rejected cases.
-11. Expand lexer conformance around identifier/operator attachment before adding arithmetic.
-12. Proceed milestone by milestone, adding real programs only when every construct they contain is supported.
+Milestones 0 through 4.5 are delivered. The next work in order:
+
+1. Rename `/collections` to `/core collections` throughout the bootstrap table, registry, diagnostics, and fixtures.
+2. Implement the descriptor-construct rule: accept an alias in every construct position, reject it at its source span in every value position, and lower a descriptor binding to nothing.
+3. Update the specification text that requires explicit import for fixed-width descriptors, and add the construct-availability category alongside the seven prelude bindings.
+4. Sweep diagnostics for text written against superseded spellings.
+5. Refresh `docs/surface-today.md` and re-verify its status labels.
+6. Close milestone 4.6, then continue milestone by milestone, adding real programs only when every construct they contain is supported.
+
+Milestone 4.6 has no unresolved design question left; every item above is implementation. The `coerce` versus `parse` boundary that previously blocked milestone 7 is now settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
 ## 13. Definition of done
 
