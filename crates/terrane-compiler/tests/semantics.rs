@@ -223,6 +223,30 @@ fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
 }
 
 #[test]
+fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
+    let analyzed = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
+    let errors = &analyzed.namespaces["/core/errors"].objects;
+
+    assert_eq!(
+        errors.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "arithmetic-overflow",
+            "coercion-error",
+            "division-by-zero",
+            "error",
+            "integer-conversion-overflow",
+            "negative-shift-count",
+        ]
+    );
+    assert_eq!(errors["error"].kind, SymbolKind::Interface);
+    for (name, symbol) in errors {
+        if name != "error" {
+            assert_eq!(symbol.kind, SymbolKind::ErrorObject, "{name}");
+        }
+    }
+}
+
+#[test]
 fn ordinary_import_binding_cannot_change_structural_imports() {
     let analyzed = analyze(&package(
         false,

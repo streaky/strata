@@ -17,6 +17,8 @@ pub enum SymbolKind {
     Binding,
     Function,
     TypeDescriptor,
+    Interface,
+    ErrorObject,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2968,21 +2970,22 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             SymbolKind::TypeDescriptor,
         ),
     );
-    namespaces.insert(
-        "/core/errors".to_owned(),
-        namespace_with_objects(
-            "/core/errors",
-            [
-                "error",
-                "arithmetic-overflow",
-                "division-by-zero",
-                "integer-conversion-overflow",
-                "negative-shift-count",
-                "coercion-error",
-            ],
-            SymbolKind::Binding,
-        ),
+    let mut errors = namespace_with_objects(
+        "/core/errors",
+        [
+            "arithmetic-overflow",
+            "division-by-zero",
+            "integer-conversion-overflow",
+            "negative-shift-count",
+            "coercion-error",
+        ],
+        SymbolKind::ErrorObject,
     );
+    errors.objects.insert(
+        "error".to_owned(),
+        compiler_owned_object("/core/errors", "error", SymbolKind::Interface),
+    );
+    namespaces.insert("/core/errors".to_owned(), errors);
     namespaces.insert("/core/collections".to_owned(), Namespace::default());
     namespaces
 }
@@ -3043,25 +3046,24 @@ fn namespace_with_objects<'a>(
 ) -> Namespace {
     let objects = names
         .into_iter()
-        .map(|name| {
-            (
-                name.to_owned(),
-                Symbol {
-                    identity: format!("{path}::{name}"),
-                    name: name.to_owned(),
-                    namespace: path.to_owned(),
-                    object_form: true,
-                    visibility: Visibility::Public,
-                    global: false,
-                    kind,
-                    declaration_span: None,
-                },
-            )
-        })
+        .map(|name| (name.to_owned(), compiler_owned_object(path, name, kind)))
         .collect();
     Namespace {
         ordinary: BTreeMap::new(),
         objects,
+    }
+}
+
+fn compiler_owned_object(path: &str, name: &str, kind: SymbolKind) -> Symbol {
+    Symbol {
+        identity: format!("{path}::{name}"),
+        name: name.to_owned(),
+        namespace: path.to_owned(),
+        object_form: true,
+        visibility: Visibility::Public,
+        global: false,
+        kind,
+        declaration_span: None,
     }
 }
 
