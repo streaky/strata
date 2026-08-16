@@ -1,0 +1,8 @@
+namespace name-aliasing
+original = 'namespace'
+alias = original
+function main
+  local = 'function'
+  copy = local
+  print; alias
+  print; copy
