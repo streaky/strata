@@ -1251,6 +1251,7 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         package.units[index].functions = functions;
     }
     populate_namespace_function_contracts(package);
+    validate_descriptor_value_uses(package)?;
 
     for index in 0..package.units.len() {
         let unit = &package.units[index];
@@ -1266,6 +1267,76 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         package.units[index].typed_bindings = bindings;
     }
     Ok(())
+}
+fn validate_descriptor_value_uses(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    for unit in &package.units {
+        validate_descriptor_value_node(package, unit, &unit.tree.root, false)?;
+    }
+    Ok(())
+}
+
+fn validate_descriptor_value_node(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    descriptor_context: bool,
+) -> Result<(), SemanticFailure> {
+    if !descriptor_context
+        && matches!(node.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
+        && descriptor_expression_type(package, unit, node).is_some()
+    {
+        return Err(failure(
+            &unit.source,
+            "T0019",
+            format!(
+                "type descriptor `{}` is a compile-time construct and cannot be used as a runtime value",
+                node_text(&unit.source, node).trim_start_matches('.')
+            ),
+            node.span,
+        ));
+    }
+
+    for (index, child) in node.children.iter().enumerate() {
+        let child_is_descriptor_context = descriptor_context
+            || node.kind == SyntaxKind::TypeExpression
+            || node.kind == SyntaxKind::ImportDeclaration
+            || (node.kind == SyntaxKind::TypeMembershipExpression && index == 1)
+            || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) && index == 0)
+            || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                && index + 1 == node.children.len()
+                && descriptor_expression_type(package, unit, child).is_some())
+            || (node.kind == SyntaxKind::BinaryExpression
+                && node.children.len() == 2
+                && node_text(&unit.source, node)[node.children[0].span.end - node.span.start
+                    ..node.children[1].span.start - node.span.start]
+                    .trim()
+                    == "is")
+            || (node.kind == SyntaxKind::CallExpression
+                && index == 1
+                && node.children.first().is_some_and(|callee| {
+                    coercion_family_receiver(unit, callee)
+                        || obsolete_integer_coercion_member(unit, callee).is_some()
+                }));
+        validate_descriptor_value_node(package, unit, child, child_is_descriptor_context)?;
+    }
+    Ok(())
+}
+
+fn descriptor_expression_type(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<ScalarType> {
+    let name = node_text(&unit.source, node).trim().trim_start_matches('.');
+    match node.kind {
+        SyntaxKind::Name => unit
+            .descriptor_alias_at(name, node.span.start)
+            .or_else(|| package.descriptor_constructs.get(name)?.descriptor_type()),
+        SyntaxKind::ObjectName => package
+            .resolve_object_at(unit, node.span.start, name)
+            .and_then(Symbol::descriptor_type),
+        _ => None,
+    }
 }
 
 fn collect_type_declarations(

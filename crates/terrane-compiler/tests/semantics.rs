@@ -181,6 +181,24 @@ fn descriptor_construct_aliases_are_typed_without_the_prelude() {
         }));
     }
 }
+#[test]
+fn descriptor_constructs_are_rejected_as_runtime_values() {
+    for runtime_use in [
+        "print; target",
+        "result = target + 1",
+        "result = consume; target",
+    ] {
+        let source = format!(
+            "namespace app\nfrom /core output import .print\nprint = .print\ntarget = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
+        );
+        let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0019", "{runtime_use}");
+        assert_eq!(
+            failure.diagnostics[0].primary.unwrap().start,
+            source.rfind("target").unwrap()
+        );
+    }
+}
 
 #[test]
 fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
