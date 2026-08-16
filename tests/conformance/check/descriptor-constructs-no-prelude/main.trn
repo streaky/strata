@@ -1,0 +1,8 @@
+namespace descriptor-constructs-no-prelude
+target = int8
+same = target
+function accepts int8; value int8
+  return value
+function main
+  value int8 = accepts; 1
+  result bool = value is a same

@@ -1,10 +1,4 @@
-1
 true
 true
 true
-2
-3
 true
-4
-five
-false

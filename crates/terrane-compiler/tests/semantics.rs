@@ -151,6 +151,35 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
 
     let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
     assert!(disabled.prelude_bindings.is_empty());
+    assert_eq!(enabled.descriptor_constructs.len(), ScalarType::ALL.len());
+    assert_eq!(disabled.descriptor_constructs.len(), ScalarType::ALL.len());
+    for ty in ScalarType::ALL {
+        let construct = disabled
+            .descriptor_constructs
+            .get(ty.source_name())
+            .unwrap();
+        assert_eq!(construct.descriptor_type(), Some(ty));
+    }
+}
+
+#[test]
+fn descriptor_construct_aliases_are_typed_without_the_prelude() {
+    let analyzed = analyze(&package(
+        false,
+        &[(
+            "main.trn",
+            "namespace app\ntarget = int8\nsame = target\nfunction main\n  value int8 = 1\n  result bool = value is a same\n",
+        )],
+    ))
+    .unwrap();
+    let unit = &analyzed.units[0];
+    for name in ["target", "same"] {
+        assert!(unit.typed_bindings.iter().any(|binding| {
+            binding.name == name
+                && binding.value_type
+                    == terrane_compiler::semantics::ValueType::TypeDescriptor(ScalarType::Int8)
+        }));
+    }
 }
 
 #[test]

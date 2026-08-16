@@ -72,6 +72,9 @@ impl Emitter<'_> {
         else {
             return;
         };
+        if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
+            return;
+        }
         let Some(name) = node
             .children
             .iter()
@@ -247,6 +250,10 @@ impl Emitter<'_> {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == node.span);
+        if binding.is_some_and(|binding| matches!(binding.value_type, ValueType::TypeDescriptor(_)))
+        {
+            return;
+        }
         let ty = binding.map(|binding| match binding.value_type {
             ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
@@ -568,7 +575,11 @@ impl Emitter<'_> {
             (value_type, descriptor_type),
             (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
         );
-        let effect = Self::discarded_expression(self.expression(value));
+        let expression = match value_type {
+            Some(value_type) => self.expression_as(value, value_type),
+            None => self.expression(value),
+        };
+        let effect = Self::discarded_expression(expression);
         format!("{{ {effect} {result} }}")
     }
 
@@ -643,7 +654,9 @@ impl Emitter<'_> {
                             .map(|(_, value_type)| ValueType::Scalar(*value_type))
                     })
             }
-            SyntaxKind::GroupExpression | SyntaxKind::UnaryExpression => node
+            SyntaxKind::TypeExpression
+            | SyntaxKind::GroupExpression
+            | SyntaxKind::UnaryExpression => node
                 .children
                 .last()
                 .and_then(|child| self.value_type(child)),
@@ -794,48 +807,51 @@ impl Emitter<'_> {
                 });
         }
         let name = self.text(node).trim().trim_start_matches('.');
-        if let Some(binding) = self.unit.typed_bindings.iter().rev().find(|binding| {
-            binding.name == name
-                && binding.span.start <= node.span.start
-                && matches!(binding.value_type, ValueType::TypeDescriptor(_))
-        }) {
-            return Some(format!(
-                "{}:{}:{}",
-                binding.span.file, binding.span.start, binding.span.end
-            ));
-        }
-        self.package
-            .resolve_object_at(self.unit, node.span.start, name)
-            .filter(|symbol| symbol.descriptor_type().is_some())
-            .map(|symbol| symbol.identity.clone())
-            .or_else(|| ScalarType::from_source_name(name).map(|scalar| format!("type:{scalar}")))
-    }
-
-    fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
-        if node.kind == SyntaxKind::TypeExpression {
-            return node
-                .children
-                .first()
-                .and_then(|child| self.descriptor_type(child));
-        }
-        let name = self.text(node).trim().trim_start_matches('.');
-        if let Some(ty) = ScalarType::from_source_name(name) {
-            return Some(ty);
-        }
-        self.unit
+        if let Some(ValueType::TypeDescriptor(ty)) = self
+            .unit
             .typed_bindings
             .iter()
             .rev()
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-            .and_then(|binding| match binding.value_type {
-                ValueType::TypeDescriptor(ty) => Some(ty),
-                _ => None,
+            .map(|binding| binding.value_type)
+        {
+            return Some(format!("type:{ty}"));
+        }
+        self.package
+            .resolve_object_at(self.unit, node.span.start, name)
+            .and_then(crate::semantics::Symbol::descriptor_type)
+            .or_else(|| ScalarType::from_source_name(name))
+            .map(|scalar| format!("type:{scalar}"))
+    }
+
+    fn descriptor_type(&self, node: &SyntaxNode) -> Option<ScalarType> {
+        let name = self.text(node).trim().trim_start_matches('.');
+        let resolved = ScalarType::from_source_name(name)
+            .or_else(|| {
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .rev()
+                    .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+                    .and_then(|binding| match binding.value_type {
+                        ValueType::TypeDescriptor(ty) => Some(ty),
+                        _ => None,
+                    })
             })
             .or_else(|| {
                 self.package
                     .resolve_object_at(self.unit, node.span.start, name)
                     .and_then(crate::semantics::Symbol::descriptor_type)
-            })
+            });
+        resolved.or_else(|| {
+            (node.kind == SyntaxKind::TypeExpression)
+                .then(|| {
+                    node.children
+                        .first()
+                        .and_then(|child| self.descriptor_type(child))
+                })
+                .flatten()
+        })
     }
 
     fn contract_for_call(&self, callee: &SyntaxNode) -> Option<&FunctionContract> {

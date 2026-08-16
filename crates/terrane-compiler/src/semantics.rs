@@ -55,6 +55,7 @@ pub struct SemanticPackage {
     pub namespaces: BTreeMap<String, Namespace>,
     pub globals: BTreeMap<String, Symbol>,
     pub prelude_bindings: BTreeMap<String, Symbol>,
+    pub descriptor_constructs: BTreeMap<String, Symbol>,
     pub units: Vec<SemanticUnit>,
     pub bootstrap_version: &'static str,
 }
@@ -322,6 +323,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     } else {
         BTreeMap::new()
     };
+    let descriptor_constructs = bootstrap_descriptor_constructs();
 
     let mut semantic = SemanticPackage {
         identity: package.identity.clone(),
@@ -329,6 +331,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         namespaces,
         globals,
         prelude_bindings,
+        descriptor_constructs,
         units,
         bootstrap_version: BOOTSTRAP_VERSION,
     };
@@ -745,6 +748,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
                 if package
                     .resolve_ordinary_at(unit, node.span.start, name)
                     .is_none()
+                    && !package.descriptor_constructs.contains_key(name)
                 {
                     return Err(failure(
                         &unit.source,
@@ -1210,21 +1214,13 @@ fn call_site_bindings(
     bindings
 }
 
-fn prelude_descriptor_aliases(package: &SemanticPackage) -> BTreeMap<String, ScalarType> {
-    if !package.prelude {
-        return BTreeMap::new();
-    }
-    ScalarType::ALL
-        .into_iter()
-        .map(|ty| (ty.source_name().to_owned(), ty))
-        .collect()
-}
-
-fn prelude_descriptor_alias_history(
+fn descriptor_construct_alias_history(
     package: &SemanticPackage,
 ) -> BTreeMap<String, Vec<DescriptorAlias>> {
-    prelude_descriptor_aliases(package)
-        .into_iter()
+    package
+        .descriptor_constructs
+        .iter()
+        .filter_map(|(name, symbol)| Some((name.clone(), symbol.descriptor_type()?)))
         .map(|(name, value_type)| {
             (
                 name,
@@ -1241,7 +1237,7 @@ fn prelude_descriptor_alias_history(
 fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
     for index in 0..package.units.len() {
         let unit = &package.units[index];
-        let mut alias_history = prelude_descriptor_alias_history(package);
+        let mut alias_history = descriptor_construct_alias_history(package);
         let mut functions = Vec::new();
         collect_type_declarations(
             package,
@@ -1280,7 +1276,7 @@ fn collect_type_declarations(
     functions: &mut Vec<FunctionContract>,
     scope: Option<Span>,
 ) -> Result<(), SemanticFailure> {
-    if let Some((name, alias)) = descriptor_alias(package, unit, node, scope) {
+    if let Some((name, alias)) = descriptor_alias(package, unit, node, aliases, scope) {
         aliases.entry(name).or_default().push(alias);
     }
     if node.kind == SyntaxKind::FunctionDeclaration {
@@ -1300,6 +1296,7 @@ fn descriptor_alias(
     package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
+    aliases: &BTreeMap<String, Vec<DescriptorAlias>>,
     scope: Option<Span>,
 ) -> Option<(String, DescriptorAlias)> {
     if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
@@ -1310,13 +1307,20 @@ fn descriptor_alias(
         .iter()
         .find(|child| child.kind == SyntaxKind::Name)?;
     let initializer = node.children.last()?;
-    if initializer.kind != SyntaxKind::ObjectName {
-        return None;
-    }
-    let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
-    let value_type = package
-        .resolve_object_at(unit, initializer.span.start, object_name)
-        .and_then(Symbol::descriptor_type)?;
+    let descriptor_name = node_text(&unit.source, initializer)
+        .trim()
+        .trim_start_matches('.');
+    let value_type = match initializer.kind {
+        SyntaxKind::ObjectName => package
+            .resolve_object_at(unit, initializer.span.start, descriptor_name)
+            .and_then(Symbol::descriptor_type),
+        SyntaxKind::Name => {
+            visible_descriptor_aliases(aliases, unit.source.id(), initializer.span.start)
+                .get(descriptor_name)
+                .copied()
+        }
+        _ => None,
+    }?;
     Some((
         node_text(&unit.source, name).to_owned(),
         DescriptorAlias {
@@ -1506,20 +1510,27 @@ fn analyze_binding_node(
 
     if declared.is_none()
         && let Some(initializer) = initializer
-        && initializer.kind == SyntaxKind::ObjectName
+        && matches!(initializer.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
     {
-        let object_name = node_text(&unit.source, initializer).trim_start_matches('.');
-        if let Some(symbol) = package.resolve_object_at(unit, initializer.span.start, object_name)
-            && let Some(ty) = symbol.descriptor_type()
-        {
+        let descriptor_name = node_text(&unit.source, initializer)
+            .trim()
+            .trim_start_matches('.');
+        let descriptor_type = unit
+            .descriptor_alias_at(descriptor_name, initializer.span.start)
+            .or_else(|| {
+                package
+                    .resolve_object_at(unit, initializer.span.start, descriptor_name)
+                    .and_then(Symbol::descriptor_type)
+            });
+        if let Some(ty) = descriptor_type {
             bindings.push(TypedBinding {
                 name,
                 span: node.span,
                 value_type: ValueType::TypeDescriptor(ty),
                 mutable: false,
             });
+            return Ok(());
         }
-        return Ok(());
     }
 
     if node.kind == SyntaxKind::Assignment
@@ -2828,6 +2839,28 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     } else {
                         SymbolKind::TypeDescriptor
                     },
+                    declaration_span: None,
+                },
+            )
+        })
+        .collect()
+}
+
+fn bootstrap_descriptor_constructs() -> BTreeMap<String, Symbol> {
+    ScalarType::ALL
+        .into_iter()
+        .map(|ty| {
+            let name = ty.source_name().to_owned();
+            (
+                name.clone(),
+                Symbol {
+                    identity: format!("/core/types::{name}"),
+                    name,
+                    namespace: "/core/types".to_owned(),
+                    object_form: false,
+                    visibility: Visibility::Public,
+                    global: false,
+                    kind: SymbolKind::TypeDescriptor,
                     declaration_span: None,
                 },
             )

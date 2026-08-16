@@ -1,0 +1,11 @@
+namespace descriptor-constructs
+from /core output import .print
+print = .print
+target = int
+same = target
+function main
+  value int = 1
+  print; value is a target
+  print; target is int
+  print; target is same
+  print; value.type is target
