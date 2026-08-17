@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,7 @@ pub const IMPLICIT_PACKAGE_ID: &str = "single-file";
 pub struct SourceUnit {
     pub relative_path: PathBuf,
     pub source: SourceFile,
+    pub expected_namespace: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,12 +60,13 @@ impl Package {
             units: vec![SourceUnit {
                 relative_path,
                 source: SourceFile::new(0, path, text),
+                expected_namespace: None,
             }],
         }
     }
 
-    /// The manifest is TOML with required `package` and `sources` fields and
-    /// an optional `prelude` boolean. Source units are assembled in sorted path order.
+    /// The manifest is TOML with required `package` and `namespaces` fields and
+    /// an optional `prelude` boolean. Source units are discovered in sorted path order.
     ///
     /// # Errors
     ///
@@ -87,7 +89,7 @@ impl Package {
             )]
         })?;
         let manifest = parse_manifest(&manifest_path, &text)?;
-        let units = load_source_units(&root, manifest.paths)?;
+        let units = discover_source_units(&root, &manifest.namespace_roots)?;
         Ok(Self {
             identity: manifest.identity,
             root,
@@ -100,7 +102,13 @@ impl Package {
 struct ParsedManifest {
     identity: String,
     prelude: bool,
-    paths: BTreeSet<PathBuf>,
+    namespace_roots: Vec<NamespaceRoot>,
+}
+
+#[derive(Clone, Debug)]
+struct NamespaceRoot {
+    namespace: String,
+    directory: PathBuf,
 }
 
 fn parse_manifest(
@@ -120,7 +128,7 @@ fn parse_manifest(
     })?;
     let mut errors = Vec::new();
     for key in table.keys() {
-        if !matches!(key.as_str(), "package" | "prelude" | "sources") {
+        if !matches!(key.as_str(), "package" | "prelude" | "namespaces") {
             errors.push(manifest_error(
                 manifest_path,
                 text,
@@ -163,68 +171,107 @@ fn parse_manifest(
         }
         None => true,
     };
-    let paths = parse_source_paths(manifest_path, text, &table, &mut errors);
+    let namespace_roots = parse_namespace_roots(manifest_path, text, &table, &mut errors);
     if errors.is_empty() {
         Ok(ParsedManifest {
             identity: identity.expect("validated package identity"),
             prelude,
-            paths,
+            namespace_roots,
         })
     } else {
         Err(errors)
     }
 }
 
-fn parse_source_paths(
+fn parse_namespace_roots(
     manifest_path: &Path,
     text: &str,
     table: &toml::Table,
     errors: &mut Vec<PackageLoadError>,
-) -> BTreeSet<PathBuf> {
-    let mut paths = BTreeSet::new();
-    match table.get("sources") {
-        Some(toml::Value::Array(values)) if !values.is_empty() => {
-            for value in values {
-                let Some(value) = value.as_str() else {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        text,
-                        "every `sources` entry must be a string",
-                        Some("sources"),
-                    ));
-                    continue;
-                };
-                if !valid_relative_source(value) {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        text,
-                        format!("source `{value}` must be a relative `.trn` path"),
-                        Some(value),
-                    ));
-                } else if !paths.insert(PathBuf::from(value)) {
-                    errors.push(manifest_error(
-                        manifest_path,
-                        text,
-                        format!("duplicate source `{value}`"),
-                        Some(value),
-                    ));
-                }
-            }
-        }
-        Some(_) => errors.push(manifest_error(
+) -> Vec<NamespaceRoot> {
+    let Some(toml::Value::Table(mappings)) = table.get("namespaces") else {
+        errors.push(manifest_error(
             manifest_path,
             text,
-            "`sources` must be a non-empty array",
-            Some("sources"),
-        )),
-        None => errors.push(manifest_error(
+            "package must declare a non-empty `namespaces` mapping table",
+            Some("namespaces"),
+        ));
+        return Vec::new();
+    };
+    if mappings.is_empty() {
+        errors.push(manifest_error(
             manifest_path,
             text,
-            "package must enumerate at least one source",
-            None,
-        )),
+            "`namespaces` must be a non-empty mapping table",
+            Some("namespaces"),
+        ));
     }
-    paths
+    let mut directories = BTreeMap::<PathBuf, String>::new();
+    let mut roots = Vec::new();
+    for (namespace, value) in mappings {
+        if namespace == "/" {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                "namespace root `/` cannot be declared by a source file",
+                Some(namespace),
+            ));
+            continue;
+        }
+        let path = namespace.trim_start_matches('/');
+        if let Some(segment) = path
+            .split('/')
+            .find(|segment| !valid_namespace_segment(segment))
+        {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!("namespace segment `{segment}` must match `[a-z]([a-z0-9]|-[a-z0-9])*`"),
+                Some(namespace),
+            ));
+            continue;
+        }
+        if let Some(segment) = path
+            .split('/')
+            .find(|segment| reserved_namespace_segment(segment))
+        {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!("namespace segment `{segment}` is reserved"),
+                Some(namespace),
+            ));
+            continue;
+        }
+        let canonical = format!("/{path}");
+        let Some(directory) = value.as_str().and_then(normalized_relative_directory) else {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!("directory for namespace root `{namespace}` must be a relative path"),
+                Some(namespace),
+            ));
+            continue;
+        };
+        if let Some(existing) = directories.insert(directory.clone(), namespace.clone()) {
+            errors.push(manifest_error(
+                manifest_path,
+                text,
+                format!(
+                    "namespace roots `{existing}` and `{namespace}` map to the same directory `{}`",
+                    directory.display()
+                ),
+                Some(namespace),
+            ));
+            continue;
+        }
+        roots.push(NamespaceRoot {
+            namespace: canonical,
+            directory,
+        });
+    }
+    roots.sort_by(|left, right| left.namespace.cmp(&right.namespace));
+    roots
 }
 
 fn manifest_error(
@@ -240,13 +287,56 @@ fn manifest_error(
     PackageLoadError::new(path.to_path_buf(), text.to_owned(), message, span)
 }
 
-fn load_source_units(
+fn discover_source_units(
     root: &Path,
-    paths: BTreeSet<PathBuf>,
+    namespace_roots: &[NamespaceRoot],
 ) -> Result<Vec<SourceUnit>, Vec<PackageLoadError>> {
-    let mut units = Vec::with_capacity(paths.len());
+    let mut discovered = BTreeMap::<PathBuf, (usize, String)>::new();
     let mut errors = Vec::new();
-    for (id, relative_path) in paths.into_iter().enumerate() {
+    for mapping in namespace_roots {
+        let directory = root.join(&mapping.directory);
+        let mut paths = BTreeSet::new();
+        let errors_before_discovery = errors.len();
+        discover_trn_files(&directory, root, &mut paths, &mut errors);
+        if paths.is_empty() && errors.len() == errors_before_discovery {
+            errors.push(PackageLoadError::unreadable(
+                directory,
+                format!(
+                    "namespace root `{}` contains no `.trn` source files",
+                    mapping.namespace
+                ),
+            ));
+        }
+        let depth = mapping.directory.components().count();
+        for relative_path in paths {
+            let suffix = relative_path
+                .parent()
+                .expect("discovered source has a parent")
+                .strip_prefix(&mapping.directory)
+                .expect("discovered source is beneath its normalized namespace root");
+            let expected = match expected_namespace(&mapping.namespace, suffix) {
+                Ok(expected) => expected,
+                Err(message) => {
+                    errors.push(PackageLoadError::unreadable(
+                        root.join(&relative_path),
+                        message,
+                    ));
+                    continue;
+                }
+            };
+            match discovered.get(&relative_path) {
+                Some((existing_depth, _)) if *existing_depth >= depth => {}
+                _ => {
+                    discovered.insert(relative_path, (depth, expected));
+                }
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let mut units = Vec::with_capacity(discovered.len());
+    for (id, (relative_path, (_, expected_namespace))) in discovered.into_iter().enumerate() {
         let source_path = root.join(&relative_path);
         let Ok(source_id) = u32::try_from(id) else {
             errors.push(PackageLoadError::unreadable(
@@ -259,6 +349,7 @@ fn load_source_units(
             Ok(source_text) => units.push(SourceUnit {
                 relative_path,
                 source: SourceFile::new(source_id, source_path, source_text),
+                expected_namespace: Some(expected_namespace),
             }),
             Err(error) => errors.push(PackageLoadError::unreadable(
                 source_path,
@@ -273,12 +364,134 @@ fn load_source_units(
     }
 }
 
-fn valid_relative_source(value: &str) -> bool {
+fn discover_trn_files(
+    directory: &Path,
+    root: &Path,
+    paths: &mut BTreeSet<PathBuf>,
+    errors: &mut Vec<PackageLoadError>,
+) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            errors.push(PackageLoadError::unreadable(
+                directory.to_path_buf(),
+                format!("cannot read namespace directory: {error}"),
+            ));
+            return;
+        }
+    };
+    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) if file_type.is_symlink() => match fs::metadata(&path) {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    errors.push(PackageLoadError::unreadable(
+                        path,
+                        format!("cannot inspect symlinked namespace source entry: {error}"),
+                    ));
+                    continue;
+                }
+            },
+            Ok(file_type) => file_type,
+            Err(_) => {
+                errors.push(PackageLoadError::unreadable(
+                    path,
+                    "cannot inspect namespace source entry",
+                ));
+                continue;
+            }
+        };
+        if file_type.is_dir() {
+            discover_trn_files(&path, root, paths, errors);
+        } else if file_type.is_file()
+            && path.extension().is_some_and(|extension| extension == "trn")
+        {
+            match path.strip_prefix(root) {
+                Ok(relative) => {
+                    paths.insert(relative.to_path_buf());
+                }
+                Err(_) => errors.push(PackageLoadError::unreadable(
+                    path,
+                    "discovered source escapes the package root",
+                )),
+            }
+        }
+    }
+}
+
+fn expected_namespace(root: &str, suffix: &Path) -> Result<String, String> {
+    let mut segments = Vec::new();
+    for component in suffix.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err("source directory is not a normalized relative path".to_owned());
+        };
+        let Some(segment) = value.to_str() else {
+            return Err("source directory contains a non-UTF-8 namespace segment".to_owned());
+        };
+        if !valid_namespace_segment(segment) {
+            return Err(format!(
+                "source directory segment `{segment}` must match `[a-z]([a-z0-9]|-[a-z0-9])*`"
+            ));
+        }
+        if reserved_namespace_segment(segment) {
+            return Err(format!("source directory segment `{segment}` is reserved"));
+        }
+        segments.push(segment);
+    }
+    if segments.is_empty() {
+        Ok(root.to_owned())
+    } else {
+        Ok(format!("{root}/{}", segments.join("/")))
+    }
+}
+
+fn valid_namespace_segment(segment: &str) -> bool {
+    let mut bytes = segment.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    let mut previous_hyphen = false;
+    for byte in bytes {
+        if byte == b'-' {
+            if previous_hyphen {
+                return false;
+            }
+            previous_hyphen = true;
+        } else if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+            previous_hyphen = false;
+        } else {
+            return false;
+        }
+    }
+    !previous_hyphen
+}
+
+fn reserved_namespace_segment(segment: &str) -> bool {
+    matches!(segment, "con" | "prn" | "aux" | "nul")
+        || segment
+            .strip_prefix("com")
+            .or_else(|| segment.strip_prefix("lpt"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+}
+
+fn normalized_relative_directory(value: &str) -> Option<PathBuf> {
     let path = Path::new(value);
-    !value.is_empty()
-        && path.extension().is_some_and(|extension| extension == "trn")
-        && !path.is_absolute()
-        && !path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
+    if value.is_empty() || path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => normalized.push(component),
+            _ => return None,
+        }
+    }
+    Some(normalized)
 }

@@ -1,7 +1,5 @@
 namespace integer-coercions
-from /core output import .print
-from /core types import .int8, .uint8
-print = .print
+from /core/types import .int8, .uint8
 int8 = .int8
 uint8 = .uint8
 

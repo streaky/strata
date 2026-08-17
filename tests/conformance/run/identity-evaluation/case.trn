@@ -1,6 +1,4 @@
 namespace identity-evaluation
-from /core output import .print
-print = .print
 function observed int; item int
   print; item
   return item

@@ -1,6 +1,4 @@
 namespace build-report
-from /core output import .print
-print = .print
 title string = 'Terrane'
 
 function report; name string, passed bool, attempts int = 1

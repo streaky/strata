@@ -1,8 +1,8 @@
-namespace linux kernel fork
+namespace linux/kernel/fork
 
 use system linux-kernel
-from /linux kernel import .per-cpu, .cacheline-aligned, .cacheline-aligned-in-smp, .weak, .inline, .always-inline, .noinline, .syscall, .latent-entropy, .init
-from /collections import .range
+from /linux/kernel import .per-cpu, .cacheline-aligned, .cacheline-aligned-in-smp, .weak, .inline, .always-inline, .noinline, .syscall, .latent-entropy, .init
+from /core/collections import .range
 
 /*
  * Native Terrane stress-test translation of Linux kernel/fork.c.

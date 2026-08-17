@@ -1,9 +1,15 @@
 namespace for-loops
-from /core output import .print
-print = .print
+function show; value string
+  print; value
+  value = 'parameter'
+  print; value
+
 function main
+  show; 'original'
   text string = 'éx'
   for character in text
+    print; character
+    character = 'loop'
     print; character
   print; text.length
   for index = 0; index < 3; index++

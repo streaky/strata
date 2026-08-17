@@ -1,7 +1,5 @@
 namespace descriptor-semantics
-from /core output import .print
-from /core types import .int8
-print = .print
+from /core/types import .int8
 function accepts bool; item int
   print; item
   return item is a int

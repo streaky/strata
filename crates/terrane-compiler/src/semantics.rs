@@ -145,6 +145,7 @@ pub struct ParameterContract {
     pub span: Span,
     pub value_type: Option<ScalarType>,
     pub optional: bool,
+    pub mutable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,15 +245,7 @@ struct Import {
     span: Span,
 }
 
-/// Builds the complete namespace tree, then resolves declarations and imports.
-///
-/// Semantic phases fail at the first diagnostic in deterministic package and source
-/// order. Unlike independently discoverable manifest errors, later semantic errors can
-/// depend on declarations or imports that an earlier error prevented from assembling.
-///
-/// # Errors
-/// Returns the first source-oriented lexer, parser, namespace, scope, or import failure.
-pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
+fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> {
     let mut units = Vec::with_capacity(package.units.len());
     for unit in &package.units {
         let source = &unit.source;
@@ -267,11 +260,40 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 diagnostics: parsed.diagnostics,
             });
         }
+        validate_declared_names(source, &parsed.tree).map_err(|diagnostic| SemanticFailure {
+            source: source.clone(),
+            diagnostics: vec![diagnostic],
+        })?;
         let namespace =
             declared_namespace(source, &parsed.tree).map_err(|diagnostic| SemanticFailure {
                 source: source.clone(),
                 diagnostics: vec![diagnostic],
             })?;
+        if let Some(expected) = &unit.expected_namespace
+            && &namespace != expected
+        {
+            let span = parsed
+                .tree
+                .root
+                .children
+                .iter()
+                .find(|node| node.kind == SyntaxKind::NamespaceDeclaration)
+                .map_or(Span::new(source.id(), 0, source.text().len()), |node| {
+                    node.span
+                });
+            let diagnostic = Diagnostic::error(
+                "S2020",
+                format!(
+                    "declared namespace `{namespace}` does not match `{expected}` required by its source directory"
+                ),
+                span,
+            )
+            .with_help(format!("declare `namespace {}`", expected.trim_start_matches('/')));
+            return Err(SemanticFailure {
+                source: source.clone(),
+                diagnostics: vec![diagnostic],
+            });
+        }
         units.push(SemanticUnit {
             source: source.clone(),
             tree: parsed.tree,
@@ -284,6 +306,19 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
             evaluation_steps: Vec::new(),
         });
     }
+    Ok(units)
+}
+
+/// Builds the complete namespace tree, then resolves declarations and imports.
+///
+/// Semantic phases fail at the first diagnostic in deterministic package and source
+/// order. Unlike independently discoverable manifest errors, later semantic errors can
+/// depend on declarations or imports that an earlier error prevented from assembling.
+///
+/// # Errors
+/// Returns the first source-oriented lexer, parser, namespace, scope, or import failure.
+pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
+    let mut units = parse_units(package)?;
 
     let mut namespaces = bootstrap_namespaces();
     for unit in &units {
@@ -303,7 +338,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
                 "S2017",
                 format!(
                     "cannot declare into compiler-owned namespace `{}`",
-                    source_namespace(&unit.namespace)
+                    unit.namespace
                 ),
                 span,
             ));
@@ -318,7 +353,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     }
     resolve_imports(imports, &mut namespaces)?;
     for unit in &mut units {
-        unit.scopes = collect_lexical_scopes(unit, &namespaces)?;
+        unit.scopes = collect_lexical_scopes(unit, &namespaces, &globals)?;
     }
     let prelude_bindings = if package.prelude {
         bootstrap_prelude()
@@ -338,7 +373,10 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_references(&semantic)?;
+    validate_initializer_dependencies(&semantic)?;
     analyze_types(&mut semantic)?;
+    validate_constant_reassignment(&semantic)?;
+    validate_global_definite_assignment(&semantic)?;
     record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
@@ -455,8 +493,12 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
         .children
         .iter()
         .filter(|child| child.kind == SyntaxKind::Name)
-        .map(|child| node_text(source, child))
-        .collect::<Vec<_>>();
+        .map(|child| {
+            let component = node_text(source, child);
+            validate_namespace_segment(component, child.span)?;
+            Ok(component)
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
     normalize_declared_path(&components).ok_or_else(|| {
         Diagnostic::error(
             "S2003",
@@ -464,6 +506,101 @@ fn declared_namespace(source: &SourceFile, tree: &SyntaxTree) -> Result<String, 
             declarations[0].span,
         )
     })
+}
+
+fn validate_namespace_segment(component: &str, span: Span) -> Result<(), Diagnostic> {
+    fn valid(component: &str) -> bool {
+        let mut bytes = component.bytes();
+        let Some(first) = bytes.next() else {
+            return false;
+        };
+        if !first.is_ascii_lowercase() {
+            return false;
+        }
+        let mut previous_hyphen = false;
+        for byte in bytes {
+            if byte == b'-' {
+                if previous_hyphen {
+                    return false;
+                }
+                previous_hyphen = true;
+            } else if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+                previous_hyphen = false;
+            } else {
+                return false;
+            }
+        }
+        !previous_hyphen
+    }
+
+    if !valid(component) {
+        let lowercase = component.to_ascii_lowercase();
+        let mut diagnostic = Diagnostic::error(
+            "S2018",
+            format!(
+                "invalid namespace segment `{component}`; segments must match `[a-z]([a-z0-9]|-[a-z0-9])*`"
+            ),
+            span,
+        );
+        if lowercase != component && valid(&lowercase) {
+            diagnostic = diagnostic.with_help(format!("use `{lowercase}`"));
+        }
+        return Err(diagnostic);
+    }
+    if is_reserved_namespace_segment(component) {
+        return Err(Diagnostic::error(
+            "S2019",
+            format!("namespace segment `{component}` is reserved"),
+            span,
+        )
+        .with_help(format!(
+            "choose a different name, such as `{component}-app`"
+        )));
+    }
+    Ok(())
+}
+
+fn is_reserved_namespace_segment(component: &str) -> bool {
+    matches!(component, "con" | "prn" | "aux" | "nul")
+        || component
+            .strip_prefix("com")
+            .or_else(|| component.strip_prefix("lpt"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+}
+
+fn validate_declared_names(source: &SourceFile, tree: &SyntaxTree) -> Result<(), Diagnostic> {
+    fn visit(source: &SourceFile, node: &SyntaxNode) -> Result<(), Diagnostic> {
+        let declared_children = matches!(
+            node.kind,
+            SyntaxKind::Binding
+                | SyntaxKind::FunctionDeclaration
+                | SyntaxKind::Parameter
+                | SyntaxKind::ForTarget
+                | SyntaxKind::ImportAlias
+        );
+        if declared_children {
+            for child in &node.children {
+                if matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName) {
+                    let authored = node_text(source, child);
+                    let name = authored.trim_start_matches('.');
+                    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                        let replacement = authored.to_ascii_lowercase();
+                        return Err(Diagnostic::error(
+                            "S2018",
+                            format!("declared name `{authored}` must be lowercase"),
+                            child.span,
+                        )
+                        .with_help(format!("use `{replacement}`")));
+                    }
+                }
+            }
+        }
+        for child in &node.children {
+            visit(source, child)?;
+        }
+        Ok(())
+    }
+    visit(source, &tree.root)
 }
 
 fn collect_unit(
@@ -600,6 +737,15 @@ fn collect_declaration(
     } else {
         &mut namespace.ordinary
     };
+    if node.kind == SyntaxKind::Assignment
+        && table.get(&declaration.name).is_some_and(|existing| {
+            existing
+                .declaration_span
+                .is_some_and(|span| span.file == node.span.file)
+        })
+    {
+        return Ok(());
+    }
     if table.contains_key(&declaration.name) {
         return Err(failure(
             &unit.source,
@@ -693,8 +839,7 @@ fn imported_object(
                 "S2009",
                 format!(
                     "unresolved object `.{}` in `{}`",
-                    import.object,
-                    source_namespace(&import.target)
+                    import.object, import.target
                 ),
                 import.span,
             )
@@ -826,6 +971,256 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
     Ok(())
 }
 
+fn binding_initializer(node: &SyntaxNode) -> Option<&SyntaxNode> {
+    let name_index = node
+        .children
+        .iter()
+        .position(|child| child.kind == SyntaxKind::Name)?;
+    node.children
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(index, child)| {
+            *index != name_index
+                && !matches!(
+                    child.kind,
+                    SyntaxKind::TypeExpression
+                        | SyntaxKind::DeclarationModifier
+                        | SyntaxKind::Visibility
+                        | SyntaxKind::DeclarationQualifier
+                )
+        })
+        .map(|(_, child)| child)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the dependency graph construction and its diagnostics are one ordered validation pass"
+)]
+fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    type Key = (u32, usize, usize);
+
+    fn key(span: Span) -> Key {
+        (span.file, span.start, span.end)
+    }
+
+    fn collect_reads(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        reads: &mut Vec<(Key, Span)>,
+        functions: &mut BTreeSet<Key>,
+    ) {
+        if node.kind == SyntaxKind::Name {
+            if let Some(symbol) =
+                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+                && let Some(span) = symbol.declaration_span
+            {
+                if symbol.kind == SymbolKind::Binding && !symbol.global {
+                    reads.push((key(span), node.span));
+                } else if symbol.kind == SymbolKind::Function && functions.insert(key(span)) {
+                    for owner in &package.units {
+                        if let Some(function) = find_node_by_span(&owner.tree.root, span) {
+                            collect_reads(package, owner, function, reads, functions);
+                            break;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        if matches!(
+            node.kind,
+            SyntaxKind::NamespaceDeclaration
+                | SyntaxKind::ImportDeclaration
+                | SyntaxKind::Parameter
+                | SyntaxKind::ForTarget
+                | SyntaxKind::TypeExpression
+                | SyntaxKind::UnionType
+                | SyntaxKind::PrefixType
+                | SyntaxKind::AppliedType
+                | SyntaxKind::FunctionType
+        ) {
+            return;
+        }
+        for child in &node.children {
+            collect_reads(package, unit, child, reads, functions);
+        }
+    }
+    fn validate_self_references(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        if node.kind == SyntaxKind::Binding
+            && let Some(initializer) = binding_initializer(node)
+        {
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            if let Some((_, span)) = reads
+                .iter()
+                .find(|(dependency, _)| *dependency == key(node.span))
+            {
+                let declaration =
+                    declaration_from_syntax(unit, node).expect("ordinary binding has a name");
+                return Err(failure(
+                    &unit.source,
+                    "S2023",
+                    format!(
+                        "binding `{}` cannot reference itself in its initializer",
+                        declaration.name
+                    ),
+                    *span,
+                ));
+            }
+        }
+        for child in &node.children {
+            validate_self_references(package, unit, child)?;
+        }
+        Ok(())
+    }
+
+    fn find_cycle(
+        current: Key,
+        edges: &BTreeMap<Key, Vec<(Key, Span)>>,
+        path: &mut BTreeSet<Key>,
+    ) -> Option<Span> {
+        if !path.insert(current) {
+            return None;
+        }
+        for &(dependency, span) in edges.get(&current).into_iter().flatten() {
+            if path.contains(&dependency) {
+                return Some(span);
+            }
+            if let Some(span) = find_cycle(dependency, edges, path) {
+                return Some(span);
+            }
+        }
+        path.remove(&current);
+        None
+    }
+    for unit in &package.units {
+        validate_self_references(package, unit, &unit.tree.root)?;
+    }
+
+    let mut edges = BTreeMap::<Key, Vec<(Key, Span)>>::new();
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if node.kind != SyntaxKind::Binding {
+                continue;
+            }
+            let Some(declaration) = declaration_from_syntax(unit, node) else {
+                continue;
+            };
+            let Some(initializer) = binding_initializer(node) else {
+                continue;
+            };
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            if reads
+                .iter()
+                .any(|(dependency, _)| *dependency == key(node.span))
+            {
+                let span = reads
+                    .iter()
+                    .find(|(dependency, _)| *dependency == key(node.span))
+                    .expect("checked self-reference")
+                    .1;
+                return Err(failure(
+                    &unit.source,
+                    "S2023",
+                    format!(
+                        "binding `{}` cannot reference itself in its initializer",
+                        declaration.name
+                    ),
+                    span,
+                ));
+            }
+            if !declaration.global && !declaration.object_form {
+                edges.entry(key(node.span)).or_default().extend(reads);
+            }
+        }
+    }
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if node.kind != SyntaxKind::Assignment {
+                continue;
+            }
+            let Some(declaration) = declaration_from_syntax(unit, node) else {
+                continue;
+            };
+            if declaration.object_form {
+                continue;
+            }
+            let name = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+                .expect("ordinary assignment has a name");
+            if package
+                .globals
+                .get(&declaration.name)
+                .is_some_and(|global| global.namespace == unit.namespace)
+                && !declaration.global
+            {
+                return Err(SemanticFailure {
+                    source: unit.source.clone(),
+                    diagnostics: vec![
+                        Diagnostic::error(
+                            "S2021",
+                            format!(
+                                "plain namespace assignment cannot replace program-global binding `{}`",
+                                declaration.name
+                            ),
+                            name.span,
+                        )
+                        .with_help(format!("use `global {} = ...`", declaration.name)),
+                    ],
+                });
+            }
+            let Some(target) =
+                package.resolve_ordinary_at(unit, name.span.start, &declaration.name)
+            else {
+                continue;
+            };
+            let Some(initializer) = binding_initializer(node) else {
+                continue;
+            };
+            let Some(owner) = target.declaration_span else {
+                continue;
+            };
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            reads.retain(|(dependency, _)| *dependency != key(owner));
+            edges.entry(key(owner)).or_default().extend(reads);
+        }
+    }
+    for &start in edges.keys() {
+        if let Some(span) = find_cycle(start, &edges, &mut BTreeSet::new()) {
+            let source = package
+                .units
+                .iter()
+                .find(|unit| unit.source.id() == span.file)
+                .expect("dependency span belongs to a semantic unit");
+            return Err(failure(
+                &source.source,
+                "S2024",
+                "namespace binding initialization has a dependency cycle",
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn find_node_by_span(node: &SyntaxNode, span: Span) -> Option<&SyntaxNode> {
+    (node.span == span).then_some(node).or_else(|| {
+        node.children
+            .iter()
+            .find_map(|child| find_node_by_span(child, span))
+    })
+}
+
 fn collect_evaluation_steps(source: &SourceFile, root: &SyntaxNode) -> Vec<EvaluationStep> {
     fn visit(
         source: &SourceFile,
@@ -886,6 +1281,27 @@ fn validate_calls(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     for unit in &package.units {
         let bindings = call_site_bindings(unit, None);
         validate_call_nodes(package, unit, &unit.tree.root, &contracts, None, &bindings)?;
+    }
+    Ok(())
+}
+
+fn validate_string_member_expression(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    let member = (node.kind == SyntaxKind::MemberExpression)
+        .then(|| node.children.get(1))
+        .flatten()
+        .map(|member| node_text(&unit.source, member));
+    let call_member = (node.kind == SyntaxKind::CallExpression)
+        .then(|| node.children.first())
+        .flatten()
+        .filter(|callee| callee.kind == SyntaxKind::MemberExpression)
+        .and_then(|callee| callee.children.get(1))
+        .map(|member| node_text(&unit.source, member));
+    if member == Some("length") || matches!(call_member, Some("concat" | "join")) {
+        infer_value_type(unit, node, bindings)?;
     }
     Ok(())
 }
@@ -956,14 +1372,7 @@ fn validate_call_nodes<'a>(
         )?;
         return Ok(());
     }
-    if node.kind == SyntaxKind::MemberExpression
-        && node
-            .children
-            .get(1)
-            .is_some_and(|member| node_text(&unit.source, member) == "length")
-    {
-        infer_value_type(unit, node, scoped_bindings)?;
-    }
+    validate_string_member_expression(unit, node, scoped_bindings)?;
     validate_coercion_family_expression(unit, node)?;
     for (index, child) in node.children.iter().enumerate() {
         if node.kind == SyntaxKind::CallExpression
@@ -1431,6 +1840,23 @@ fn collect_typed_bindings(
         }
         return Ok(());
     }
+    if let [target, collection, block] = node.children.as_slice()
+        && node.kind == SyntaxKind::ForStatement
+        && target.kind == SyntaxKind::ForTarget
+        && let Some(name) = target.children.first()
+    {
+        collect_typed_bindings(package, unit, collection, visible_bindings, bindings)?;
+        let loop_binding = TypedBinding {
+            name: node_text(&unit.source, name).to_owned(),
+            span: name.span,
+            value_type: ValueType::Scalar(ScalarType::String),
+            mutable: false,
+        };
+        let mut loop_bindings = visible_bindings.clone();
+        loop_bindings.push(loop_binding);
+        collect_typed_bindings(package, unit, block, &mut loop_bindings, bindings)?;
+        return Ok(());
+    }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         let prior_len = visible_bindings.len();
         analyze_binding_node(package, unit, node, visible_bindings)?;
@@ -1520,6 +1946,7 @@ fn analyze_function_contract(
                 span: parameter.span,
                 value_type,
                 optional,
+                mutable: false,
             });
         }
     }
@@ -1667,6 +2094,12 @@ fn validate_value_assignment(
         {
             return check_integer_range(source, expected, &integer, value.span);
         }
+        if actual == ScalarType::Float
+            && matches!(expected, ScalarType::Float32 | ScalarType::Float64)
+            && infer_literal_type_from_source(source, value) == Some(ScalarType::Float)
+        {
+            return Ok(());
+        }
     }
     Err(failure(
         source,
@@ -1677,18 +2110,7 @@ fn validate_value_assignment(
 }
 
 fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
-    if node.kind == SyntaxKind::UnaryExpression {
-        let value = node.children.last()?;
-        let magnitude = constant_integer_from_source(source, value)?;
-        return match &source.text()[node.span.start..value.span.start] {
-            prefix if prefix.trim() == "-" => Some(-magnitude),
-            prefix if prefix.trim() == "+" => Some(magnitude),
-            _ => None,
-        };
-    }
-    (node.kind == SyntaxKind::Literal)
-        .then(|| source.text()[node.span.start..node.span.end].replace('_', ""))
-        .and_then(|text| BigInt::parse_bytes(text.as_bytes(), 10))
+    parse_integer_source_text(source, node)
 }
 fn infer_value_type(
     unit: &SemanticUnit,
@@ -1729,28 +2151,33 @@ fn infer_value_type(
             node.span,
         ));
     }
-    if node.kind == SyntaxKind::MemberExpression
-        && let [receiver, member] = node.children.as_slice()
-        && node_text(&unit.source, member) == "length"
-    {
-        let receiver_type = infer_value_type(unit, receiver, bindings)?;
-        if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
-            return Ok(Some(ValueType::Scalar(ScalarType::Int)));
-        }
-        return Err(failure(
-            &unit.source,
-            "T0013",
-            format!(
-                "`.length` requires `string`, found `{}`",
-                receiver_type
-                    .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
-            ),
-            receiver.span,
-        ));
+    if node.kind == SyntaxKind::MemberExpression {
+        return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
         if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
             return Ok(Some(value_type));
+        }
+        if let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = callee.children.as_slice()
+            && matches!(node_text(&unit.source, member), "concat" | "join")
+        {
+            let receiver_type = infer_value_type(unit, receiver, bindings)?;
+            if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+                return Ok(Some(ValueType::Scalar(ScalarType::String)));
+            }
+            return Err(failure(
+                &unit.source,
+                "T0013",
+                format!(
+                    "`.{}` requires a `string` receiver, found `{}`",
+                    node_text(&unit.source, member),
+                    receiver_type
+                        .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string())
+                ),
+                receiver.span,
+            ));
         }
         if let Some(callee) = node.children.first()
             && callee.kind == SyntaxKind::Name
@@ -1769,6 +2196,41 @@ fn infer_value_type(
         return Ok(None);
     }
     Ok(None)
+}
+
+fn infer_member_value_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let [receiver, member] = node.children.as_slice() else {
+        return Ok(None);
+    };
+    if matches!(node_text(&unit.source, member), "concat" | "join") {
+        return Err(failure(
+            &unit.source,
+            "T0018",
+            "string methods are not storable values before bound methods exist",
+            node.span,
+        ));
+    }
+    if node_text(&unit.source, member) != "length" {
+        return Ok(None);
+    }
+    let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    Err(failure(
+        &unit.source,
+        "T0013",
+        format!(
+            "`.length` requires `string`, found `{}`",
+            receiver_type
+                .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
+        ),
+        receiver.span,
+    ))
 }
 
 fn infer_unary_type(
@@ -2062,36 +2524,55 @@ fn operator_failure(
 }
 
 fn infer_literal_type(unit: &SemanticUnit, node: &SyntaxNode) -> Option<ScalarType> {
+    infer_literal_type_from_source(&unit.source, node)
+}
+
+fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<ScalarType> {
     if node.kind == SyntaxKind::UnaryExpression {
         return node
             .children
             .last()
-            .and_then(|child| infer_literal_type(unit, child));
+            .and_then(|child| infer_literal_type_from_source(source, child));
     }
     if node.kind != SyntaxKind::Literal {
         return None;
     }
-    let text = node_text(&unit.source, node);
+    let text = node_text(source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
         value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
+        value if value.contains('.') => Some(ScalarType::Float),
         _ => Some(ScalarType::Int),
     }
 }
 
 fn constant_integer(unit: &SemanticUnit, node: &SyntaxNode) -> Option<BigInt> {
-    let compact = node_text(&unit.source, node)
+    parse_integer_source_text(&unit.source, node)
+}
+
+fn parse_integer_source_text(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
+    let compact = source.text()[node.span.start..node.span.end]
         .chars()
         .filter(|character| !character.is_whitespace() && *character != '_')
         .collect::<String>();
     let (negative, digits) = compact
         .strip_prefix('-')
         .map_or((false, compact.as_str()), |digits| (true, digits));
-    let (radix, digits) = if let Some(digits) = digits.strip_prefix("0x") {
+    let digits = digits.strip_prefix('+').unwrap_or(digits);
+    let (radix, digits) = if let Some(digits) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         (16, digits)
-    } else if let Some(digits) = digits.strip_prefix("0o") {
+    } else if let Some(digits) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
         (8, digits)
-    } else if let Some(digits) = digits.strip_prefix("0b") {
+    } else if let Some(digits) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
         (2, digits)
     } else {
         (10, digits)
@@ -2142,15 +2623,16 @@ fn integer_bounds(bits: usize, signed: bool) -> (BigInt, BigInt) {
 fn collect_lexical_scopes(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
 ) -> Result<Vec<LexicalScope>, SemanticFailure> {
     let mut scopes = Vec::new();
     for node in &unit.tree.root.children {
         match node.kind {
             SyntaxKind::FunctionDeclaration => {
-                add_lexical_scope(unit, namespaces, &mut scopes, node, None, true)?;
+                add_lexical_scope(unit, namespaces, globals, &mut scopes, node, None, true)?;
             }
             SyntaxKind::Block => {
-                add_lexical_scope(unit, namespaces, &mut scopes, node, None, false)?;
+                add_lexical_scope(unit, namespaces, globals, &mut scopes, node, None, false)?;
             }
             _ => {}
         }
@@ -2161,6 +2643,7 @@ fn collect_lexical_scopes(
 fn add_lexical_scope(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     node: &SyntaxNode,
     parent: Option<usize>,
@@ -2173,6 +2656,10 @@ fn add_lexical_scope(
         ordinary: BTreeMap::new(),
         objects: BTreeMap::new(),
     });
+    if node.kind == SyntaxKind::Block {
+        populate_scope(unit, namespaces, globals, scopes, index, node)?;
+        return Ok(index);
+    }
     if node.kind == SyntaxKind::FunctionDeclaration
         && let Some(parameters) = node
             .children
@@ -2189,13 +2676,13 @@ fn add_lexical_scope(
         match child.kind {
             SyntaxKind::ParameterList => {}
             SyntaxKind::Block if node.kind == SyntaxKind::FunctionDeclaration => {
-                populate_scope(unit, namespaces, scopes, index, child)?;
+                populate_scope(unit, namespaces, globals, scopes, index, child)?;
             }
             SyntaxKind::Block => {
-                add_lexical_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                add_lexical_scope(unit, namespaces, globals, scopes, child, Some(index), false)?;
             }
             _ if function_body => {
-                populate_node(unit, namespaces, scopes, index, child)?;
+                populate_node(unit, namespaces, globals, scopes, index, child)?;
             }
             _ => {}
         }
@@ -2206,12 +2693,13 @@ fn add_lexical_scope(
 fn populate_scope(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     index: usize,
     block: &SyntaxNode,
 ) -> Result<(), SemanticFailure> {
     for node in &block.children {
-        populate_node(unit, namespaces, scopes, index, node)?;
+        populate_node(unit, namespaces, globals, scopes, index, node)?;
     }
     Ok(())
 }
@@ -2219,6 +2707,7 @@ fn populate_scope(
 fn populate_node(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     index: usize,
     node: &SyntaxNode,
@@ -2233,19 +2722,7 @@ fn populate_node(
             }
         }
         SyntaxKind::Assignment => {
-            if let Some(declaration) = declaration_from_syntax(unit, node)
-                && !declaration.object_form
-                && !declaration.global
-                && !local_or_namespace_binding_exists(
-                    scopes,
-                    index,
-                    namespaces,
-                    &unit.namespace,
-                    &declaration.name,
-                )
-            {
-                insert_local(unit, scopes, index, declaration.name, node.span)?;
-            }
+            populate_assignment(unit, namespaces, globals, scopes, index, node)?;
         }
 
         SyntaxKind::ImportDeclaration => {
@@ -2255,10 +2732,10 @@ fn populate_node(
             if let Some(name) = declaration_name(node, &unit.source) {
                 insert_local(unit, scopes, index, name, node.span)?;
             }
-            add_lexical_scope(unit, namespaces, scopes, node, Some(index), true)?;
+            add_lexical_scope(unit, namespaces, globals, scopes, node, Some(index), true)?;
         }
         SyntaxKind::Block => {
-            add_lexical_scope(unit, namespaces, scopes, node, Some(index), false)?;
+            add_lexical_scope(unit, namespaces, globals, scopes, node, Some(index), false)?;
         }
         SyntaxKind::ForStatement => {
             let loop_index = scopes.len();
@@ -2280,24 +2757,126 @@ fn populate_node(
                         )?;
                     }
                 } else {
-                    populate_node(unit, namespaces, scopes, loop_index, first)?;
+                    populate_node(unit, namespaces, globals, scopes, loop_index, first)?;
                 }
             }
             if let Some(block) = node.children.last()
                 && block.kind == SyntaxKind::Block
             {
-                add_lexical_scope(unit, namespaces, scopes, block, Some(loop_index), false)?;
+                add_lexical_scope(
+                    unit,
+                    namespaces,
+                    globals,
+                    scopes,
+                    block,
+                    Some(loop_index),
+                    false,
+                )?;
+            }
+        }
+        SyntaxKind::ElseClause => {
+            for child in &node.children {
+                if child.kind == SyntaxKind::Block {
+                    add_lexical_scope(
+                        unit,
+                        namespaces,
+                        globals,
+                        scopes,
+                        child,
+                        Some(index),
+                        false,
+                    )?;
+                }
             }
         }
         _ => {
             for child in &node.children {
                 if child.kind == SyntaxKind::Block {
-                    add_lexical_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                    add_lexical_scope(
+                        unit,
+                        namespaces,
+                        globals,
+                        scopes,
+                        child,
+                        Some(index),
+                        false,
+                    )?;
+                } else if child.kind == SyntaxKind::ElseClause {
+                    populate_node(unit, namespaces, globals, scopes, index, child)?;
                 }
             }
         }
     }
     Ok(())
+}
+
+fn populate_assignment(
+    unit: &SemanticUnit,
+    namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
+    scopes: &mut [LexicalScope],
+    index: usize,
+    node: &SyntaxNode,
+) -> Result<(), SemanticFailure> {
+    let Some(declaration) = declaration_from_syntax(unit, node) else {
+        return Ok(());
+    };
+    if declaration.object_form
+        || declaration.global
+        || local_binding_exists(scopes, index, &declaration.name)
+    {
+        return Ok(());
+    }
+    let namespace_binding = globals
+        .get(&declaration.name)
+        .filter(|symbol| symbol.kind == SymbolKind::Binding)
+        .or_else(|| {
+            namespace_chain(&unit.namespace).find_map(|path| {
+                namespaces
+                    .get(&path)
+                    .and_then(|scope| scope.ordinary.get(&declaration.name))
+                    .filter(|symbol| symbol.kind == SymbolKind::Binding)
+            })
+        });
+    if let Some(symbol) = namespace_binding {
+        let name = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+            .expect("ordinary assignment has a name");
+        if symbol
+            .declaration_span
+            .is_some_and(|span| declaration_is_constant_in_unit(unit, span))
+        {
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!(
+                    "constant binding `{}` cannot be reassigned",
+                    declaration.name
+                ),
+                name.span,
+            ));
+        }
+        return Err(SemanticFailure {
+            source: unit.source.clone(),
+            diagnostics: vec![
+                Diagnostic::error(
+                    "S2021",
+                    format!(
+                        "plain assignment cannot replace namespace binding `{}`",
+                        declaration.name
+                    ),
+                    name.span,
+                )
+                .with_help(format!(
+                    "declare `global {} ...` or assign it at namespace level",
+                    declaration.name
+                )),
+            ],
+        });
+    }
+    insert_local(unit, scopes, index, declaration.name, node.span)
 }
 fn validate_definite_assignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     for unit in &package.units {
@@ -2766,28 +3345,17 @@ fn populate_imports(
     Ok(())
 }
 
-fn local_or_namespace_binding_exists(
-    scopes: &[LexicalScope],
-    mut index: usize,
-    namespaces: &BTreeMap<String, Namespace>,
-    namespace: &str,
-    name: &str,
-) -> bool {
+fn local_binding_exists(scopes: &[LexicalScope], mut index: usize, name: &str) -> bool {
     loop {
         let scope = &scopes[index];
         if scope.ordinary.contains_key(name) {
             return true;
         }
         let Some(parent) = scope.parent else {
-            break;
+            return false;
         };
         index = parent;
     }
-    namespace_chain(namespace).any(|path| {
-        namespaces
-            .get(&path)
-            .is_some_and(|scope| scope.ordinary.contains_key(name))
-    })
 }
 
 fn insert_local(
@@ -2836,19 +3404,6 @@ fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item
         current = scope.parent;
         Some(scope)
     })
-}
-
-fn source_namespace(namespace: &str) -> String {
-    namespace.strip_prefix('/').map_or_else(
-        || namespace.replace('/', " "),
-        |components| {
-            if components.is_empty() {
-                "/".to_owned()
-            } else {
-                format!("/{}", components.replace('/', " "))
-            }
-        },
-    )
 }
 
 fn namespace_chain(namespace: &str) -> impl Iterator<Item = String> {
@@ -2985,53 +3540,415 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     namespaces
 }
 
+fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn visit_declarations(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(&unit.source, child) == "constant"
+            })
+            && let Some(target) = first_write_to(package, unit, node.span, &unit.tree.root)
+        {
+            let name = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+                .map_or("constant", |child| node_text(&unit.source, child));
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!("constant binding `{name}` cannot be reassigned"),
+                target.span,
+            ));
+        }
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(&unit.source, child) == "global"
+            })
+            && let Some(target) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            && let Some(symbol) = package.resolve_ordinary_at(
+                unit,
+                target.span.start,
+                node_text(&unit.source, target),
+            )
+            && symbol
+                .declaration_span
+                .is_some_and(|span| declaration_is_constant(package, span))
+        {
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!(
+                    "constant binding `{}` cannot be reassigned",
+                    node_text(&unit.source, target)
+                ),
+                target.span,
+            ));
+        }
+        for child in &node.children {
+            visit_declarations(package, unit, child)?;
+        }
+        Ok(())
+    }
+
+    for unit in &package.units {
+        visit_declarations(package, unit, &unit.tree.root)?;
+    }
+    Ok(())
+}
+
+fn declaration_is_constant_in_unit(unit: &SemanticUnit, span: Span) -> bool {
+    fn find(node: &SyntaxNode, span: Span, source: &SourceFile) -> Option<bool> {
+        if node.span == span {
+            return Some(node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(source, child) == "constant"
+            }));
+        }
+        node.children
+            .iter()
+            .find_map(|child| find(child, span, source))
+    }
+
+    span.file == unit.source.id() && find(&unit.tree.root, span, &unit.source).unwrap_or(false)
+}
+
+fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
+    package
+        .units
+        .iter()
+        .find(|unit| unit.source.id() == span.file)
+        .is_some_and(|unit| declaration_is_constant_in_unit(unit, span))
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the global assignment transfer rules remain visible as one analysis"
+)]
+fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn has_qualifier(unit: &SemanticUnit, node: &SyntaxNode, qualifier: &str) -> bool {
+        node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier
+                && node_text(&unit.source, child) == qualifier
+        })
+    }
+
+    fn has_initializer(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+        unit.source.text()[node.span.start..node.span.end].contains('=')
+    }
+
+    fn global_name<'a>(unit: &'a SemanticUnit, node: &'a SyntaxNode) -> Option<&'a str> {
+        node.children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+            .map(|child| node_text(&unit.source, child))
+    }
+
+    fn collect_writes(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        writes: &mut BTreeSet<String>,
+    ) {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && has_qualifier(unit, node, "global")
+            && has_initializer(unit, node)
+            && let Some(name) = global_name(unit, node)
+        {
+            writes.insert(name.to_owned());
+        } else if node.kind == SyntaxKind::PostfixExpression
+            && let Some(target) = node.children.first()
+            && package
+                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+                .is_some_and(|symbol| symbol.global)
+        {
+            writes.insert(node_text(&unit.source, target).to_owned());
+        }
+        for child in &node.children {
+            collect_writes(package, unit, child, writes);
+        }
+    }
+
+    fn validate_node(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        relevant: &BTreeSet<String>,
+        assigned: &mut BTreeSet<String>,
+    ) -> Result<(), SemanticFailure> {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && has_qualifier(unit, node, "global")
+        {
+            let name_node = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name);
+            for child in &node.children {
+                if Some(child.span) != name_node.map(|name| name.span) {
+                    validate_node(package, unit, child, relevant, assigned)?;
+                }
+            }
+            if has_initializer(unit, node)
+                && let Some(name) = name_node.map(|name| node_text(&unit.source, name))
+            {
+                assigned.insert(name.to_owned());
+            }
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::PostfixExpression
+            && let Some(target) = node.children.first()
+            && let Some(symbol) = package.resolve_ordinary_at(
+                unit,
+                target.span.start,
+                node_text(&unit.source, target),
+            )
+            && symbol.global
+        {
+            let name = node_text(&unit.source, target);
+            if relevant.contains(name) && !assigned.contains(name) {
+                return Err(failure(
+                    &unit.source,
+                    "T0007",
+                    format!("`{name}` may be read before it is assigned"),
+                    target.span,
+                ));
+            }
+            assigned.insert(name.to_owned());
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::Name
+            && let Some(symbol) =
+                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+            && symbol.global
+        {
+            let name = node_text(&unit.source, node);
+            if relevant.contains(name) && !assigned.contains(name) {
+                return Err(failure(
+                    &unit.source,
+                    "T0007",
+                    format!("`{name}` may be read before it is assigned"),
+                    node.span,
+                ));
+            }
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::IfStatement {
+            if let Some(condition) = node.children.first() {
+                validate_node(package, unit, condition, relevant, assigned)?;
+            }
+            let incoming = assigned.clone();
+            let mut branch_results = Vec::new();
+            for branch in node.children.iter().skip(1) {
+                let branch_block = if branch.kind == SyntaxKind::Block {
+                    Some(branch)
+                } else {
+                    branch
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Block)
+                };
+                if let Some(branch_block) = branch_block {
+                    let mut branch_assigned = incoming.clone();
+                    validate_node(package, unit, branch_block, relevant, &mut branch_assigned)?;
+                    branch_results.push(branch_assigned);
+                }
+            }
+            if !node
+                .children
+                .iter()
+                .any(|child| child.kind == SyntaxKind::ElseClause)
+            {
+                branch_results.push(incoming);
+            }
+            if let Some(first) = branch_results.first() {
+                *assigned = branch_results
+                    .iter()
+                    .skip(1)
+                    .fold(first.clone(), |common, branch| {
+                        common.intersection(branch).cloned().collect()
+                    });
+            }
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::WhileStatement {
+            let before = assigned.clone();
+            for child in &node.children {
+                let mut branch = before.clone();
+                validate_node(package, unit, child, relevant, &mut branch)?;
+            }
+            return Ok(());
+        }
+        for child in &node.children {
+            validate_node(package, unit, child, relevant, assigned)?;
+        }
+        Ok(())
+    }
+
+    let mut uninitialized = package
+        .globals
+        .values()
+        .filter(|symbol| symbol.kind == SymbolKind::Binding)
+        .map(|symbol| symbol.name.clone())
+        .collect::<BTreeSet<_>>();
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                && has_qualifier(unit, node, "global")
+                && has_initializer(unit, node)
+                && let Some(name) = global_name(unit, node)
+            {
+                uninitialized.remove(name);
+            }
+        }
+    }
+    if uninitialized.is_empty() {
+        return Ok(());
+    }
+
+    let mut writes = BTreeSet::new();
+    for unit in &package.units {
+        collect_writes(package, unit, &unit.tree.root, &mut writes);
+    }
+    for unit in &package.units {
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let mut function_writes = BTreeSet::new();
+            collect_writes(package, unit, function, &mut function_writes);
+            let relevant = uninitialized
+                .iter()
+                .filter(|name| function_writes.contains(*name) || !writes.contains(*name))
+                .cloned()
+                .collect();
+            validate_node(package, unit, function, &relevant, &mut BTreeSet::new())?;
+        }
+    }
+    Ok(())
+}
+
+fn first_write_to<'a>(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    declaration_span: Span,
+    node: &'a SyntaxNode,
+) -> Option<&'a SyntaxNode> {
+    if matches!(
+        node.kind,
+        SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+    ) && node.span != declaration_span
+        && let Some(target) = node.children.first()
+        && target.kind == SyntaxKind::Name
+        && package
+            .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+            .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
+    {
+        return Some(target);
+    }
+    node.children
+        .iter()
+        .find_map(|child| first_write_to(package, unit, declaration_span, child))
+}
+
 fn record_binding_mutability(package: &mut SemanticPackage) {
-    let mutable_units = package
+    let mutable_bindings = package
         .units
         .iter()
         .map(|unit| {
             unit.typed_bindings
                 .iter()
-                .map(|binding| binding_is_mutated(package, unit, binding))
+                .map(|binding| {
+                    let initially_assigned =
+                        unit.source.text()[binding.span.start..binding.span.end].contains('=');
+                    binding_span_is_mutated(package, unit, binding.span, initially_assigned)
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    for (unit, mutable_bindings) in package.units.iter_mut().zip(mutable_units) {
-        for (binding, mutable) in unit.typed_bindings.iter_mut().zip(mutable_bindings) {
+    let mutable_parameters = package
+        .units
+        .iter()
+        .map(|unit| {
+            unit.functions
+                .iter()
+                .map(|function| {
+                    function
+                        .parameters
+                        .iter()
+                        .map(|parameter| {
+                            binding_span_is_mutated(package, unit, parameter.span, true)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for ((unit, binding_mutability), parameter_mutability) in package
+        .units
+        .iter_mut()
+        .zip(mutable_bindings)
+        .zip(mutable_parameters)
+    {
+        for (binding, mutable) in unit.typed_bindings.iter_mut().zip(binding_mutability) {
             binding.mutable = mutable;
+        }
+        for (function, mutability) in unit.functions.iter_mut().zip(parameter_mutability) {
+            for (parameter, mutable) in function.parameters.iter_mut().zip(mutability) {
+                parameter.mutable = mutable;
+            }
         }
     }
 }
 
-fn binding_is_mutated(
+pub(crate) fn binding_span_is_mutated(
     package: &SemanticPackage,
     unit: &SemanticUnit,
-    binding: &TypedBinding,
+    declaration_span: Span,
+    initially_assigned: bool,
 ) -> bool {
-    fn visit(
+    fn writes(
         package: &SemanticPackage,
         unit: &SemanticUnit,
-        binding: &TypedBinding,
+        declaration_span: Span,
         node: &SyntaxNode,
-    ) -> bool {
-        if matches!(
-            node.kind,
-            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-        ) && node.span != binding.span
-            && let Some(target) = node.children.first()
-            && target.kind == SyntaxKind::Name
-            && package
-                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
-                .is_some_and(|symbol| symbol.declaration_span == Some(binding.span))
-        {
-            return true;
-        }
-        node.children
-            .iter()
-            .any(|child| visit(package, unit, binding, child))
+    ) -> usize {
+        let writes_here = usize::from(
+            matches!(
+                node.kind,
+                SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+            ) && node.span != declaration_span
+                && node.children.first().is_some_and(|target| {
+                    target.kind == SyntaxKind::Name
+                        && package
+                            .resolve_ordinary_at(
+                                unit,
+                                target.span.start,
+                                node_text(&unit.source, target),
+                            )
+                            .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
+                }),
+        );
+        writes_here
+            + node
+                .children
+                .iter()
+                .map(|child| writes(package, unit, declaration_span, child))
+                .sum::<usize>()
     }
 
-    visit(package, unit, binding, &unit.tree.root)
+    writes(package, unit, declaration_span, &unit.tree.root) > usize::from(!initially_assigned)
 }
 
 fn namespace_with_objects<'a>(

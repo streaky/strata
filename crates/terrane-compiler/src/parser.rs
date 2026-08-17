@@ -66,6 +66,15 @@ impl Parser<'_> {
             "global" | "constant" if self.peek_text(1) == Some("function") => {
                 self.parse_invalid_function_qualifier()
             }
+            "global"
+                if self.peek_kind(1) == Some(TokenKind::Identifier)
+                    && matches!(
+                        self.peek_kind(2),
+                        Some(TokenKind::Increment | TokenKind::Decrement)
+                    ) =>
+            {
+                self.parse_global_postfix()
+            }
             _ if self.looks_like_function_declaration() => self.parse_function(),
             "if" => self.parse_if(),
             "while" => self.parse_while(),
@@ -89,6 +98,19 @@ impl Parser<'_> {
         }
     }
 
+    fn parse_global_postfix(&mut self) -> SyntaxNode {
+        let start = self.position;
+        let qualifier = self.leaf(SyntaxKind::DeclarationQualifier);
+        let value = self.leaf(SyntaxKind::Name);
+        self.bump();
+        self.node(
+            SyntaxKind::PostfixExpression,
+            start,
+            self.position,
+            vec![value, qualifier],
+        )
+    }
+
     fn parse_invalid_function_qualifier(&mut self) -> SyntaxNode {
         let start = self.position;
         self.error_here(
@@ -104,16 +126,22 @@ impl Parser<'_> {
         let start = self.position;
         self.bump();
         let mut children = Vec::new();
-        while !self.at_line_end() {
-            if self.at(TokenKind::Identifier) {
-                children.push(self.leaf(SyntaxKind::Name));
-            } else {
-                self.error_here("S1002", "expected a namespace component");
-                self.bump();
+        if self.at(TokenKind::Identifier) {
+            children.push(self.leaf(SyntaxKind::Name));
+            while self.eat_text("/") {
+                if self.at(TokenKind::Identifier) {
+                    children.push(self.leaf(SyntaxKind::Name));
+                } else {
+                    self.error_here("S1002", "expected a namespace component after `/`");
+                    break;
+                }
             }
+        } else {
+            self.error_here("S1002", "namespace declaration requires an unanchored path");
         }
-        if children.is_empty() {
-            self.error_at(start, "S1002", "namespace declaration requires a path");
+        if !self.at_line_end() {
+            self.error_here("S1002", "namespace components must be separated by `/`");
+            self.recover_line();
         }
         self.node(
             SyntaxKind::NamespaceDeclaration,
@@ -153,8 +181,10 @@ impl Parser<'_> {
     fn parse_namespace_path(&mut self) -> SyntaxNode {
         let start = self.position;
         let mut children = Vec::new();
+        let mut needs_component = false;
         if self.at_text("/") {
             children.push(self.leaf(SyntaxKind::NamespaceAnchor));
+            needs_component = true;
         } else {
             while self.at(TokenKind::Dot) && self.peek_kind(1) == Some(TokenKind::Dot) {
                 let anchor_start = self.position;
@@ -166,18 +196,39 @@ impl Parser<'_> {
                     self.position,
                     Vec::new(),
                 ));
+                if !self.eat_text("/") {
+                    self.error_here(
+                        "S1026",
+                        "parent namespace components must be followed by `/`",
+                    );
+                    break;
+                }
+                needs_component = true;
             }
         }
-        while !self.at_text("import") && !self.at_line_end() {
-            if self.at(TokenKind::Identifier) {
-                children.push(self.leaf(SyntaxKind::Name));
-            } else {
-                self.error_here("S1026", "expected a namespace path component");
+        if self.at(TokenKind::Identifier) {
+            children.push(self.leaf(SyntaxKind::Name));
+            needs_component = false;
+            while self.eat_text("/") {
+                needs_component = true;
+                if self.at(TokenKind::Identifier) {
+                    children.push(self.leaf(SyntaxKind::Name));
+                    needs_component = false;
+                } else {
+                    break;
+                }
+            }
+        }
+        if needs_component {
+            self.error_here("S1026", "expected a namespace path component after `/`");
+        } else if children.is_empty() {
+            self.error_at(start, "S1026", "expected a namespace path after `from`");
+        }
+        if !self.at_text("import") && !self.at_line_end() {
+            self.error_here("S1026", "namespace components must be separated by `/`");
+            while !self.at_text("import") && !self.at_line_end() {
                 self.bump();
             }
-        }
-        if children.is_empty() {
-            self.error_at(start, "S1026", "expected a namespace path after `from`");
         }
         self.node(SyntaxKind::NamespacePath, start, self.position, children)
     }

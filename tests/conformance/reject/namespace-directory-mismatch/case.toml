@@ -1,0 +1,4 @@
+phase = "check"
+status = "reject"
+entrypoint = "package.toml"
+code = "S2020"

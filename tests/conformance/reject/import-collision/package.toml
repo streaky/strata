@@ -1,3 +1,6 @@
 package = "import-collision"
 prelude = false
-sources = ["one.trn", "two.trn", "main.trn"]
+[namespaces]
+app = "app"
+one = "one"
+two = "two"

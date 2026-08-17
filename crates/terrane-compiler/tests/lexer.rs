@@ -18,14 +18,22 @@ fn significant(text: &str) -> Vec<(TokenKind, String, Attachment)> {
 }
 
 #[test]
-fn identifiers_and_spaced_operators_have_stable_boundaries() {
+fn slash_is_a_namespace_separator_or_a_spaced_operator() {
+    let source = SourceFile::new(0, "case.trn".into(), "ipv4/ipv6".to_owned());
+    let diagnostic = lex(&source).unwrap_err();
+    assert_eq!(diagnostic[0].code, "L0006");
     assert_eq!(
-        significant("ipv4/ipv6"),
-        vec![(
-            TokenKind::Identifier,
-            "ipv4/ipv6".into(),
-            Attachment::Detached
-        )]
+        significant("namespace ipv4/ipv6"),
+        vec![
+            (
+                TokenKind::Identifier,
+                "namespace".into(),
+                Attachment::Detached
+            ),
+            (TokenKind::Identifier, "ipv4".into(), Attachment::Right),
+            (TokenKind::Operator, "/".into(), Attachment::Both),
+            (TokenKind::Identifier, "ipv6".into(), Attachment::Left),
+        ]
     );
     assert_eq!(
         significant("ipv4 / ipv6"),
@@ -46,6 +54,29 @@ fn identifiers_and_spaced_operators_have_stable_boundaries() {
             (TokenKind::Operator, "+".into(), Attachment::Right),
             (TokenKind::Identifier, "b".into(), Attachment::Left),
         ]
+    );
+}
+
+#[test]
+fn namespace_path_lexical_failures_have_distinct_codes() {
+    let whitespace = SourceFile::new(0, "case.trn".into(), "namespace app /http".to_owned());
+    assert!(
+        lex(&whitespace)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0011")
+    );
+
+    let comment = SourceFile::new(
+        0,
+        "case.trn".into(),
+        "from /app//http import .thing".to_owned(),
+    );
+    assert!(
+        lex(&comment)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0010")
     );
 }
 

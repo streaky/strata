@@ -1,6 +1,4 @@
 namespace fizz-buzz
-from /core output import .print
-print = .print
 
 function main
   number int = 1

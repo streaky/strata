@@ -47,6 +47,7 @@ Version one still does not need universal dynamic values, source-declared generi
 6. **Deterministic output.** The same source, compiler version, target, and declared inputs produce byte-identical generated source and manifests.
 7. **Readable lowering.** Generated Rust is a public debugging surface, not opaque compiler debris.
 8. **Narrow runtime.** Statically known fixed-width scalars and functions lower directly to Rust types and calls where Rust preserves the complete Terrane contract; core `int` uses the narrowest exact representation required by its adaptive semantics. The first compiler must not introduce a universal boxed `Value` as a shortcut.
+9. **Standard facilities are written in Terrane.** The Rust core stays deliberately minimal. Document formats, networking protocols, compression framing, date and time arithmetic, paths, CLI parsing, and logging are Terrane packages over that core, not Rust support crates. A Rust support crate is permanently opaque to the compiler, so implementing a facility in Rust forecloses inlining, specialisation, and whole-program analysis for it forever; it also loses the readable Terrane frames the diagnostics contract requires. The boundary runs per layer rather than per facility: Rust owns the layer that is a syscall or ABI boundary, carries a guarantee the optimiser would destroy, is a large audited security-critical implementation, or is generated data — and a layer claiming to be Rust states which of the four applies. Everything above it is Terrane. Core libraries reach Rust through the ordinary dependency mechanism, so they carry no privileged path and double as worked examples. Two consequences are load-bearing rather than incidental: package-level artifact caching, because a source-form standard library would otherwise be recompiled by every build, and capability profiles expressed as which packages are present rather than which crates were compiled in.
 
 ## 4. Proposed repository layout
 
@@ -270,12 +271,17 @@ Implementation status (completed on the `indentation-lexer` capability branch):
 
 Lexical diagnostics own the `L` code range and are the sole reporter of every condition listed here; the bootstrap parser keeps the `S` range for the value-level rules it still owns:
 
-```text
-L0001 invalid source character        L0006 illegal left-attached operator
-L0002 unterminated block comment      L0007 unterminated string literal
-L0003 indentation style               L0008 block string marker not final
-L0004 inconsistent dedent             L0009 invalid numeric literal
+L0001 invalid source character
+L0002 unterminated block comment
+L0003 indentation style
+L0004 inconsistent dedent
 L0005 joiner-introduced digit unit
+L0006 invalid attached operator
+L0007 malformed string literal
+L0008 block string marker not final
+L0009 invalid numeric literal
+L0010 comment delimiter inside namespace path
+L0011 whitespace around namespace separator
 ```
 
 The parser now owns grammar-defined continuation and recovery decisions. Blank and comment-only lines continue to emit terminators as part of the lossless lexical contract.
@@ -367,7 +373,7 @@ Deliver:
 - explicit `global` handling for program-global creation/replacement and rejection of plain top-level assignment where a global operation is required;
 - duplicate, shadowing, visibility/inaccessibility, unresolved-name, and same-scope object-form collision diagnostics;
 - idempotent reimport of the same object-form export, with aliases required for distinct colliding exports;
-- fixed bootstrap importer whose milestone-3 module table registers versioned `/core/output`, `/core/types`, `/core/errors`, and `/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core/types`, while milestone 4 populates `/collections` with its selected collection subset;
+- fixed bootstrap importer whose milestone-3 module table registers versioned `/core/output`, `/core/types`, `/core/errors`, and `/core/collections` namespaces as structural compiler-owned modules rather than runtime calls; milestone 3 populates the first three, including all fixed-width numeric descriptor objects under `/core/types`, while `/core/collections` remains an empty reserved namespace until the iterator protocol and collections ship in milestones 13 and 14;
 - the exact default prelude bindings `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none`, requiring no import at any use site;
 - import resolution that does not create an ordinary binding automatically, and proof that an ordinary binding named `import` cannot alter structural import syntax or importer selection.
 
@@ -434,11 +440,13 @@ descriptors, infers and checks typed bindings, parameters, defaults, returns, ca
 operators, assignments, branches, loops, updates, and finite descriptor alternatives.
 Native fixed-width values lower directly to Rust with checked default arithmetic and
 shift operations; adaptive `int` operations use the dedicated exact-integer support
-crate, and deterministic source-oriented failures cover unsupported or invalid arithmetic
-and coercion paths. Canonical scalar display, grapheme-counted string length, descriptor
-and value-type identity, and the supported collection iteration slice are checked before
-lowering. Manifest-driven accepted cases and focused rejected cases exercise these semantic
-boundaries, while semantic unit tests cover the broader diagnostic set. The conformance
+crate. Deterministic source-oriented failures cover unsupported or invalid arithmetic and
+coercion paths. Canonical scalar display, grapheme-counted string length, descriptor identity,
+and value-type identity are checked before lowering. Collection values remain deferred until
+the iterator protocol and collections ship in milestones 13 and 14; the only iterable
+implemented today is `string`, whose `for` loop visits grapheme clusters. Manifest-driven
+accepted cases and focused rejected cases exercise these semantic boundaries, while semantic
+unit tests cover the broader diagnostic set. The conformance
 corpus includes adaptive logical comparisons, destination-aware returns, assignments, and
 lengths, fixed-width overflow, invalid member receivers, compound membership and identity,
 and identity operand evaluation order. The `fizz-buzz`, `build-report`,
@@ -545,6 +553,13 @@ Note on scope: the arithmetic families, abstract category descriptors, structure
 and float/string coercion destinations are **not** part of this milestone. They are new
 surface rather than corrections, and they arrive with milestones 7 onward.
 
+Implemented evidence: the collection namespace is registered as `/core/collections`. Type
+descriptors behave as constructs — a descriptor in value position fails with a Terrane
+diagnostic rather than reaching rustc, while construct positions including a coercion
+destination accept a descriptor bound under another name. Binding a `.concat` result emits a
+correct Rust binding. `/core/errors` exposes `error` as an interface symbol. `surface-today.md`
+was refreshed with the rest of the corpus.
+
 ### Milestone 4.7 — Namespace path syntax, name casing, and directory correspondence
 
 Milestone 3 shipped whitespace-separated namespace paths with no relationship between a
@@ -562,7 +577,7 @@ Deliver:
   two, and context-sensitive lexing would contradict the rule that a compact joiner sequence
   is always an identifier. `ipv4/ipv6` becomes `ipv4-ipv6`; update the Rust-name encoding,
   which currently escapes the slash;
-- the segment grammar `[a-z][a-z0-9-]*`, enforced as an allowlist so that every
+- the segment grammar `[a-z]([a-z0-9]|-[a-z0-9])*`, enforced as an allowlist so that every
   filesystem-hazardous character is unformable rather than blocklisted, plus the reserved
   whole-name set `con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, which is made of
   legal characters and therefore invisible to the allowlist. Reserve them now even though
@@ -573,8 +588,7 @@ Deliver:
 - namespace-to-directory correspondence, with a declaration that disagrees with its location
   rejected unless the manifest declares that mapping; manifest namespace-root to
   directory-root mappings resolved by longest prefix; two roots mapped to one directory
-  rejected at manifest load; a source file under a declared root but outside every mapping
-  rejected rather than silently ignored;
+  rejected at manifest load;
 - bounded discovery over declared roots with sorted expansion, a dependency's namespaces read
   from its own manifest rather than by scanning its tree, and the resolved source set recorded
   in build metadata so a build stays auditable once the manifest no longer enumerates files;
@@ -602,12 +616,118 @@ Also in scope, because it is the same migration:
   need, and every reader copies it. Keep explicit imports only in cases that are specifically
   about importing, aliasing, or shadowing.
 
+Scope warning: the specification and both surface maps already describe the settled version-one
+design, which includes the single-lookup-view model that milestone 4.8 delivers. Every import
+example in those documents is therefore written without the dot-prefixed form. That form is
+still valid until 4.8 lands, so an implementer of this milestone migrates namespace *paths* and
+leaves name *forms* alone:
+
+```text
+from /core output import .print     ->  from /core/output import .print
+```
+
+The path gains its separator; the dot-prefixed name and the `print = .print` binding that
+follows it both stay until 4.8. Reading the specification alone will suggest more change than
+this milestone authorises.
+
 Exit criterion: no document, fixture, golden, or example uses a whitespace-separated namespace
 path; a slash in an identifier is a lexical error; an uppercase or reserved segment fails with
 a source-span diagnostic naming the correction; a misplaced source file fails the correspondence
 check unless the manifest maps it; the conformance corpus contains no redundant prelude import;
 and the specification's representative program compiles and runs, producing its documented
 output exactly.
+
+Implemented evidence: namespace declarations and imports now use `/` between every segment,
+and declared names are checked for canonical lowercase spelling and reserved namespace
+segments. Authored manifests map namespace roots to distinct relative directories; package
+loading recursively discovers `.trn` files within those bounded roots in sorted path order,
+assigns each declaration its longest-prefix expected namespace, and rejects duplicate,
+missing, or mismatched roots before semantic resolution. `string.join` validates and lowers
+through the shared call pipeline with empty, singleton, and multi-part conformance coverage.
+The migrated corpus has no redundant default-prelude imports, and the representative
+program runs with the documented output.
+
+### Milestone 4.8 — Collapse the two-namespace lookup model
+
+Milestone 3 shipped separate ordinary and object-form symbol tables, so an import made
+`.print` available and the program then wrote `print = .print` to bind the ordinary name.
+That second view is removed. There is one lookup view, and `.` appears only between a
+receiver and its member.
+
+Deliver:
+
+- one symbol table and one lookup chain. The `object_form` discriminator on symbols and
+  declarations, and the paired table selection it drives, are removed rather than left
+  defaulted;
+- `from path import name` binding an ordinary name directly in the scope containing the
+  import, with `as` renaming it. The declare-then-bind step disappears, and with it every
+  `print = .print` line in the corpus;
+- a leading `.` in expression position rejected at its source span. This is the diagnostic
+  that replaces object-form lookup, so it must name the receiver form rather than reporting an
+  unresolved name;
+- collision, shadowing, visibility, and idempotent-reimport rules restated over the single
+  view. The two-view versions of those rules go away, not merely one of their branches;
+- `import with selector` resolving its operand through ordinary lexical scope;
+- migration of the reject fixtures that currently encode the two-view model:
+  `import-collision` and `private-import` import `.item` and `.secret` and must keep failing
+  for the same reasons under the new spelling, while `unresolved-object` currently binds
+  `print = .missing` and needs a form that still exercises an unresolved import;
+- collapse `float` and `float64` to one descriptor. They are separate `ScalarType` variants
+  today, so a value declared `float` answers `false` to `is a float64`. Point float-literal
+  inference and the `float` name at `Float64` and drop the variant; the value contract is
+  identical, so diagnostics name `float64` for either spelling and nothing downstream changes.
+  `float32` is untouched;
+- restrict the namespace tiers of the lookup chain to what may cross a function boundary. A body
+  resolves constants, descriptor constructs, imported names, functions, and types from the
+  namespace tiers, and never a namespace variable. A variable's value depends on when it is read,
+  so a body that can name one takes execution order as an implicit input, which is what parameters
+  and returns exist to express. The namespace tier is where a variable composes a value; `constant`,
+  `global`, a parameter, or a return is how one leaves. Today the tier is unrestricted and
+  `run/declarations` reads a namespace variable inside `main`, so this inverts a shipped behaviour
+  and the fixture becomes the test of the new rule;
+- confine a namespace variable to its own namespace: not a descendant namespace, not an importer.
+  `public` on one is meaningless rather than redundant and is rejected, unlike every other
+  declaration where the marker is permitted as documentation;
+- reject renaming by ordinary binding. A construct is renamed where it enters the scope, so
+  `from /core/types import int8 as byte` stands and `byte = int8` does not — milestone 4.6 accepted
+  the binding form, and `checked-coercion` (`tiny = .int8`) and `numeric-literals`
+  (`signed`, `unsigned`) use it. One spelling per name in a scope is worth more than a second
+  aliasing mechanism, and holding a type in a value to dispatch or instantiate through it is a
+  distinct capability that arrives with reflection in milestone 18 rather than borrowing assignment
+  syntax now;
+- allow a declaration to replace an earlier binding of the same name in the same lexical scope, with
+  the initializer reading the earlier binding: `a int8 = 12` followed by `a int = a.coerce; int`.
+  `S2012` rejects this today, and `S2023` rejects the initializer's read, so both change. An
+  identical type is an assignment with a redundant annotation; a changed type changes the binding's
+  type and releases the replaced value at that point, after its initializer is evaluated. The rule is
+  lexical: `S2005` continues to reject a replacement at namespace top level, where initialization is
+  ordered by dependency rather than source position. The version-one exclusion for a binding observed
+  by a reference needs no check yet — `ref` is milestone 17 — but the diagnostic belongs with `ref`
+  when it lands, not here;
+- rewrite the assignment and visibility diagnostics so none of them advertises `global`. A fixit is
+  read when the author is most willing to be told what to do, so it should teach the value path —
+  a parameter, a return, or `constant` where the value never varies. `S2021` currently says
+  `use 'global counter = ...'`, which routes an author from a caught error toward program-wide
+  mutable state as the shortcut rather than the exception. `global` stays documented in the
+  specification for the cases that need it;
+- migration of every remaining fixture, golden, example, and document.
+
+Exit criterion: no source anywhere in the repository contains a leading `.` outside member
+position; a program that writes one fails with a diagnostic naming the receiver form; the
+collision, visibility, and shadowing cases fail for their original reasons under single-view
+lookup; no compiler type carries an object-form discriminator; a value declared `float`
+answers `true` to `is a float64`, with one descriptor reported by `.type` and by diagnostics; a
+function body that names a namespace variable fails at its source span, while a `constant`, a
+construct, an imported name, and a `global` all resolve there; `public` on a namespace variable
+fails; `byte = int8` fails while `from /core/types import int8 as byte` succeeds; `a int8 = 12` followed by
+`a int = a.coerce; int` compiles and runs in a function body while the same pair at namespace top
+level still fails; and no diagnostic in the compiler names `global` as a suggested fix.
+
+Sequencing note: milestone 4.7 changes namespace *paths* and this milestone changes *name
+forms*. Both migrate the whole corpus, so running them back to back keeps the fixture churn
+to two passes rather than interleaving it through later work. They are separate milestones
+because they are separate language changes with separate exit criteria, not because the
+migrations are independent.
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -618,10 +738,11 @@ Deliver:
 - injective source-name-to-Rust-name encoding;
 - direct fixed-width scalar and function lowering where Rust preserves the source contract;
 - integration of the adaptive core-`int` support component into the explicit Rust IR, preserving checked tier promotion, exact wide operations, result normalization, normative runtime failures, and target capability diagnostics;
-- structured expression/block emission with a pinned formatter policy;
+- structured expression/block emission with a pinned formatter policy, including the nesting threshold at which the formatter reports a call better bound to a named intermediate;
 - generated `Cargo.toml`, source tree, compiler metadata, and entrypoint;
 - deterministic inclusion of the integer support crate by copying compiler-bundled, content-addressed source into the generated build directory and referring to it by a generated-project-relative Cargo path, without registry, network, or install-location paths; the bundled source content identity enters the build key, and the same vendoring mechanism applies to any authored third-party dependency admitted later;
 - content-addressed build directory keyed by compiler version, source inputs, target, and relevant options;
+- package-level artifact caching, keyed the same way, so a package compiles once per identity rather than once per dependent build. Delivery principle 9 makes this load-bearing rather than an optimisation: a Terrane-source standard library is recompiled by every build without it;
 - `cargo check`, build, and run process wrappers with captured structured output;
 - `terrane rust` output or path display suitable for inspection, clearly distinguishing authored generated modules from vendored support source.
 
@@ -736,7 +857,7 @@ Exit criterion: a user-defined iterator drives `for` through the same path as th
 
 Deliver:
 
-- list, map, set, tuple, range, and entry types under `/core/collections`, added vertically rather than as one batch;
+- list, map, set, tuple, range, and entry types under `/core/collections`, populating the empty compiler-owned namespace reserved since milestone 3 and adding each collection vertically rather than as one batch;
 - lookup and indexing whose default child throws `missing-key` or `index-error` and whose `checked` child returns absence, with no operation returning absence by default;
 - insertion-ordered map and set as the observable contract, plus a separate unordered type that is deterministic under a fixed hash seed rather than merely unordered;
 - half-open ranges with an explicit inclusive constructor, non-zero step, and empty-range rules;
@@ -772,6 +893,10 @@ Deliver:
 
 - semantic value assignment for ordinary values, linear resources, and explicit references;
 - `ref`, `move`, and weak references with lifetime and provenance analysis reported in source terms;
+- the diagnostic that milestone 4.8 defers to this one: a type-changing replacement of a binding is
+  rejected while an outstanding reference observes it, since retyping a value another scope holds
+  must not happen without something explicit appearing there. Same-type replacement stays legal and
+  the reference observes the new value;
 - the deterministic drop pipeline;
 - identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
 
@@ -806,6 +931,9 @@ Exit criterion: a cancelled scope joins its children and reports partial progres
 
 ### Milestone 20 — Byte and text streams and process standard streams
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - byte reader and writer protocols with partial-operation and EOF contracts;
@@ -817,6 +945,9 @@ Deliver:
 Exit criterion: partial reads and writes, EOF, and use-after-close each have cases; a cancelled stream operation reports what it completed.
 
 ### Milestone 21 — Paths, filesystem, and process facilities
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
@@ -830,6 +961,9 @@ Exit criterion: lexical resolution and filesystem canonicalization are separatel
 
 ### Milestone 22 — Document values, JSON, YAML, and URLs
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - the shared document-value model with exact `document-integer` and `document-decimal`, never routed through `float`;
@@ -841,6 +975,9 @@ Deliver:
 Exit criterion: a decode failure reports its document path and expected descriptor; canonical output is byte-identical across runs; a YAML alias bomb is refused by limit.
 
 ### Milestone 23 — Randomness, codecs, digests, and compression
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
@@ -854,6 +991,9 @@ Exit criterion: a pseudo-random source cannot satisfy a secure-random parameter;
 
 ### Milestone 24 — Networking and TLS
 
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
+
 Deliver:
 
 - parsed `ip-address`, `socket-address`, and a distinct `host-name` type, serialising IPv6 per RFC 5952;
@@ -865,6 +1005,9 @@ Deliver:
 Exit criterion: a loopback client and server exchange data under a deadline; certificate validation cannot be disabled through an ordinary option; a truncated datagram is reported rather than silently shortened.
 
 ### Milestone 25 — Structured logging
+
+Written in Terrane over the minimal Rust core, per delivery principle 9. Each layer implemented in Rust states which of the four justifications applies; everything above it is Terrane.
+
 
 Deliver:
 
@@ -1098,16 +1241,28 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.5 are delivered. The next work in order:
+Milestones 0 through 4.7 are delivered. The 4.7 completeness audit corrections are also
+closed: numeric literal lowering, bare-name initializers, normalized and validated namespace
+discovery, empty-join receiver evaluation, manifest root validation, strict segment grammar,
+canonical demo paths, package-root build placement, auditable resolved-source metadata,
+bound-string-method rejection, path diagnostics, and conformance coverage all have focused
+regressions. The previously ambiguous minimal collection subset is explicitly deferred:
+`/core/collections` remains an empty reserved namespace until the iterator protocol and
+collections arrive in milestones 13 and 14.
 
-1. Rename `/collections` to `/core/collections` throughout the bootstrap table, registry, diagnostics, and fixtures.
-2. Implement the descriptor-construct rule: accept an alias in every construct position, reject it at its source span in every value position, and lower a descriptor binding to nothing.
-3. Update the specification text that requires explicit import for fixed-width descriptors, and add the construct-availability category alongside the seven prelude bindings.
-4. Sweep diagnostics for text written against superseded spellings.
-5. Refresh `docs/surface-today.md` and re-verify its status labels.
-6. Close milestone 4.6, then continue milestone by milestone, adding real programs only when every construct they contain is supported.
+Three defects remain open, none of them namespace-path or lookup-model work. A program-global read
+anywhere other than a bare `print` argument emits the namespace-local storage name and fails to
+compile. `global x = x + 1` takes the same lock twice and deadlocks the compiled program, which
+`terrane check` does not catch. A binding declared inside a nested `if`, `for`, or `while` body is
+never added to the scope table, so no later statement resolves it; that one reproduces on `main` and
+predates this branch.
 
-Milestone 4.6 has no unresolved design question left; every item above is implementation. The `coerce` versus `parse` boundary that previously blocked milestone 7 is now settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
+The next work in order is milestone 4.8, followed by milestone 5. The two program-global defects are
+effectively prerequisites for 4.8 rather than parallel work: that milestone removes namespace
+variables from function-body resolution, which makes `global` the only way to share mutable state
+between functions, and today that path cannot be read in an expression or safely incremented.
+
+Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
 ## 13. Definition of done
 

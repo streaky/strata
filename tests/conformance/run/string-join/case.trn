@@ -1,0 +1,13 @@
+namespace string-join
+
+function separator string
+  print; 'side effect'
+  return '--'
+
+function main
+  empty = (separator;).join;
+  single = '--'.join; 'one'
+  many = '--'.join; 'one', 2, true
+  print; empty
+  print; single
+  print; many

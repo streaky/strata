@@ -1,0 +1,3 @@
+phase = "run"
+status = "accept"
+entrypoint = "case.trn"

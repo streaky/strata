@@ -1,6 +1,4 @@
 namespace logical-comparisons
-from /core output import .print
-print = .print
 function main
   x int = 5
   y int = 9

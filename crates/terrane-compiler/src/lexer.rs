@@ -255,6 +255,19 @@ fn lex_line(
                 break;
             }
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                if namespace_path_line(tokens)
+                    && start > 0
+                    && !line[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace)
+                {
+                    diagnostics.push(Diagnostic::error(
+                        "L0010",
+                        "`//` cannot begin a comment inside a namespace path",
+                        Span::new(source.id(), base + start, base + start + 2),
+                    ));
+                }
                 trivia.push(Trivia {
                     kind: TriviaKind::LineComment,
                     span: Span::new(source.id(), base + start, base + bytes.len()),
@@ -546,7 +559,7 @@ fn lex_line(
                 break;
             }
             byte if is_joiner(byte)
-                || matches!(byte, b'!' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') =>
+                || matches!(byte, b'!' | b'/' | b'<' | b'>' | b'%' | b'&' | b'^' | b'~') =>
             {
                 index += 1;
                 if index < bytes.len()
@@ -562,9 +575,27 @@ fn lex_line(
                     _ => TokenKind::Operator,
                 };
                 let attached = attachment(line, start, index);
+                if text == "/" && namespace_path_line(tokens) {
+                    let leading_anchor = tokens.last().is_some_and(|token| token.text == "from");
+                    let compact = if leading_anchor {
+                        matches!(attached, Attachment::Right)
+                    } else {
+                        matches!(attached, Attachment::Both)
+                    };
+                    if !compact {
+                        diagnostics.push(Diagnostic::error(
+                            "L0011",
+                            "namespace path separators must not have surrounding whitespace",
+                            Span::new(source.id(), base + start, base + index),
+                        ));
+                    }
+                }
+                let allowed_left_attachment =
+                    matches!(kind, TokenKind::Increment | TokenKind::Decrement)
+                        || matches!(text, ">" | ">=")
+                        || (text == "/" && namespace_path_line(tokens));
                 if matches!(attached, Attachment::Left | Attachment::Both)
-                    && !matches!(kind, TokenKind::Increment | TokenKind::Decrement)
-                    && !matches!(text, ">" | ">=")
+                    && !allowed_left_attachment
                 {
                     diagnostics.push(Diagnostic::error(
                         "L0006",
@@ -723,7 +754,7 @@ fn is_digit_run(text: &str, admitted: fn(&u8) -> bool) -> bool {
 }
 
 fn is_joiner(byte: u8) -> bool {
-    matches!(byte, b'+' | b'-' | b'*' | b'/' | b'%' | b'<' | b'>')
+    matches!(byte, b'+' | b'-' | b'*' | b'%' | b'<' | b'>')
 }
 
 fn indentation_len(line: &str) -> usize {
@@ -748,6 +779,16 @@ fn expression_start(tokens: &[Token]) -> bool {
                 | TokenKind::Operator
         )
     })
+}
+
+fn namespace_path_line(tokens: &[Token]) -> bool {
+    tokens
+        .iter()
+        .rev()
+        .take_while(|token| token.kind != TokenKind::Newline)
+        .filter(|token| !matches!(token.kind, TokenKind::Indent | TokenKind::Dedent))
+        .last()
+        .is_some_and(|token| matches!(token.text.as_str(), "namespace" | "from"))
 }
 
 fn push_token(

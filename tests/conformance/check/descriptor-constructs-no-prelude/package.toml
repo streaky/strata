@@ -1,3 +1,4 @@
 package = "descriptor-constructs-no-prelude"
 prelude = false
-sources = ["main.trn"]
+[namespaces]
+descriptor-constructs-no-prelude = "src"

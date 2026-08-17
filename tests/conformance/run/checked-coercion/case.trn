@@ -1,7 +1,5 @@
 namespace checked-coercion
-from /core output import .print
-from /core types import .int8, .uint8, .none
-print = .print
+from /core/types import .int8, .uint8, .none
 int8 = .int8
 tiny = .int8
 none = .none
@@ -15,7 +13,7 @@ function convert int8; item int
   return result
 
 function helper
-  tiny = .uint8
+  helper-tiny = .uint8
   print; 'helper'
 
 function main

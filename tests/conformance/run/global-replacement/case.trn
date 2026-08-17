@@ -1,0 +1,13 @@
+namespace global-replacement
+global counter int = 0
+function setup
+  global counter = 11
+function bump
+  global counter = counter + 1
+function current int
+  return counter
+function main
+  setup;
+  bump;
+  if counter == 12
+    print; (current;) + 1

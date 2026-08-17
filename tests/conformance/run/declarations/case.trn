@@ -1,0 +1,18 @@
+namespace declarations
+from /core/types import .int8
+namespace-value int = 0
+namespace-value = 11
+namespace-value = namespace-value + 1
+function main
+  local-value int8
+  local-value = 16
+  print; namespace-value
+  print; local-value
+  if true
+    block-value int = 300
+    print; block-value
+  if false
+    print; >no
+  else
+    else-value int = 400
+    print; else-value

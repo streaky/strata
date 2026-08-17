@@ -1,0 +1,4 @@
+namespace constant-reassignment
+function main
+  constant limit int = 10
+  limit = 11

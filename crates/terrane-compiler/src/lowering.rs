@@ -1,10 +1,12 @@
 use std::fmt::Write as _;
 
+use num_bigint::BigInt;
+
 use crate::{
     ScalarType, SourceFile,
     semantics::{
         CoercionPolicy, FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType,
-        integer_coercion_call,
+        binding_span_is_mutated, integer_coercion_call,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -14,6 +16,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
         "// Generated deterministically by Terrane {}.\n",
         crate::VERSION
     );
+    emit_global_storage(package, &mut output);
     for unit in &package.units {
         let mut emitter = Emitter {
             package,
@@ -25,6 +28,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             loop_counter: 0,
             return_type: None,
             parameter_types: Vec::new(),
+            namespace_initializer: None,
         };
         for node in &unit.tree.root.children {
             match node.kind {
@@ -38,7 +42,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
                 output,
                 "// Source: {}\n// Namespace: {}",
                 display_path(unit.source.path()),
-                unit.namespace.trim_start_matches('/').replace('/', " ")
+                unit.namespace.trim_start_matches('/')
             )
             .unwrap();
             output.push_str(&emitter.output);
@@ -57,56 +61,290 @@ struct Emitter<'a> {
     loop_counter: usize,
     return_type: Option<ScalarType>,
     parameter_types: Vec<(String, ScalarType)>,
+    namespace_initializer: Option<(String, String)>,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "program-global declarations and their initialization policy remain auditable together"
+)]
+fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
+    for (name, symbol) in &package.globals {
+        if symbol.kind != SymbolKind::Binding {
+            continue;
+        }
+        let Some(span) = symbol.declaration_span else {
+            continue;
+        };
+        let Some(unit) = package
+            .units
+            .iter()
+            .find(|unit| unit.source.id() == span.file)
+        else {
+            continue;
+        };
+        let Some(node) = find_node_by_span(&unit.tree.root, span) else {
+            continue;
+        };
+        let Some(name_node) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        else {
+            continue;
+        };
+        let emitter = Emitter {
+            package,
+            unit,
+            source: &unit.source,
+            output: String::new(),
+            indent: 0,
+            continue_label: None,
+            loop_counter: 0,
+            return_type: None,
+            parameter_types: Vec::new(),
+            namespace_initializer: None,
+        };
+        let value_type = unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == span)
+            .map(|binding| binding.value_type)
+            .or_else(|| emitter.value_type(name_node));
+        let Some(ValueType::Scalar(scalar)) = value_type else {
+            continue;
+        };
+        let initial = package.units.iter().rev().find_map(|candidate_unit| {
+            candidate_unit
+                .tree
+                .root
+                .children
+                .iter()
+                .rev()
+                .find_map(|candidate| {
+                    let global = candidate.children.iter().any(|child| {
+                        child.kind == SyntaxKind::DeclarationQualifier
+                            && candidate_unit.source.text()[child.span.start..child.span.end].trim()
+                                == "global"
+                    });
+                    let candidate_name = candidate
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Name)?;
+                    (global
+                        && &candidate_unit.source.text()
+                            [candidate_name.span.start..candidate_name.span.end]
+                            == name.as_str())
+                    .then_some((candidate_unit, candidate, candidate_name))
+                })
+        });
+        let initial = initial.and_then(|(initial_unit, initial_node, initial_name)| {
+            let name_index = initial_node
+                .children
+                .iter()
+                .position(|child| child.span == initial_name.span)?;
+            let initializer = binding_initializer(initial_node, name_index)?;
+            let mut initial_emitter = Emitter {
+                package,
+                unit: initial_unit,
+                source: &initial_unit.source,
+                output: String::new(),
+                indent: 0,
+                continue_label: None,
+                loop_counter: 0,
+                return_type: None,
+                parameter_types: Vec::new(),
+                namespace_initializer: None,
+            };
+            Some(initial_emitter.expression_as(initializer, ValueType::Scalar(scalar)))
+        });
+        let initial = initial.map_or_else(|| "None".to_owned(), |value| format!("Some({value})"));
+        writeln!(
+            output,
+            "static {}: std::sync::LazyLock<std::sync::Mutex<Option<{}>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new({initial}));",
+            global_binding_name(name),
+            rust_type(scalar)
+        )
+        .unwrap();
+    }
+    if package
+        .globals
+        .values()
+        .any(|symbol| symbol.kind == SymbolKind::Binding)
+    {
+        output.push_str(
+            "fn __terrane_uninitialized_global(name: &str, path: &str, line: usize, column: usize) -> ! {\n    eprintln!(\"{path}:{line}:{column}: error[T0007]: `{name}` may be read before it is assigned\");\n    std::process::exit(1);\n}\n",
+        );
+    }
 }
 
 impl Emitter<'_> {
-    fn namespace_binding(&mut self, node: &SyntaxNode) {
-        if Self::is_compiler_object_binding(node) {
-            return;
-        }
-        let Some(binding) = self
-            .unit
-            .typed_bindings
-            .iter()
-            .find(|binding| binding.span == node.span)
-        else {
-            return;
-        };
-        if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
-            return;
-        }
+    fn global_storage(&self, node: &SyntaxNode) -> Option<String> {
+        (node.kind == SyntaxKind::Name)
+            .then(|| {
+                self.package
+                    .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+            })
+            .flatten()
+            .filter(|symbol| symbol.global && symbol.kind == SymbolKind::Binding)
+            .map(|symbol| global_binding_name(&symbol.name))
+    }
+
+    fn global_assignment(&mut self, node: &SyntaxNode) -> bool {
         let Some(name) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        else {
+            return false;
+        };
+        let declared_global = node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
+        });
+        let storage = if declared_global {
+            Some(global_binding_name(self.text(name)))
+        } else {
+            self.global_storage(name)
+        };
+        let Some(storage) = storage else {
+            return false;
+        };
+        let Some((name_index, _)) = node
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| child.kind == SyntaxKind::Name)
+        else {
+            return false;
+        };
+        let Some(initializer) = binding_initializer(node, name_index) else {
+            return false;
+        };
+        let value = if let Some(ty) = self.value_type(name) {
+            self.expression_as(initializer, ty)
+        } else {
+            self.expression(initializer)
+        };
+        let value = Self::unwrapped_expression(value);
+        self.line("{");
+        self.indent += 1;
+        self.line(&format!("let value = {value};"));
+        self.line(&format!(
+            "*{storage}.lock().expect(\"program-global lock poisoned\") = Some(value);"
+        ));
+        self.indent -= 1;
+        self.line("}");
+        true
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "namespace initialization sequencing remains auditable as one lowering operation"
+    )]
+    fn namespace_binding(&mut self, node: &SyntaxNode) {
+        if Self::is_compiler_object_binding(node)
+            || node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
+            })
+        {
+            return;
+        }
+        let Some(name_node) = node
             .children
             .iter()
             .find(|child| child.kind == SyntaxKind::Name)
         else {
             return;
         };
-        let Some(initializer) = node.children.iter().rev().find(|child| {
-            !matches!(
-                child.kind,
-                SyntaxKind::Name
-                    | SyntaxKind::TypeExpression
-                    | SyntaxKind::DeclarationModifier
-                    | SyntaxKind::Visibility
-                    | SyntaxKind::DeclarationQualifier
-            )
-        }) else {
+        let source_name = self.text(name_node);
+        let Some(symbol) =
+            self.package
+                .resolve_ordinary_at(self.unit, name_node.span.start, source_name)
+        else {
+            return;
+        };
+        let Some(declaration_span) = symbol.declaration_span else {
+            return;
+        };
+        if symbol.global || !self.is_namespace_binding_span(declaration_span) {
+            return;
+        }
+        let Some(binding) = self
+            .unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == declaration_span)
+        else {
             return;
         };
         let ValueType::Scalar(scalar) = binding.value_type else {
             return;
         };
-        let ty = rust_type(scalar);
-        let value = self.expression_as(initializer, binding.value_type);
-        let name = namespace_binding_name(self.source.id(), self.text(name));
-        if matches!(scalar, ScalarType::Int | ScalarType::String) {
-            self.line(&format!(
-                "static {name}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {value});"
-            ));
-        } else {
-            self.line(&format!("static {name}: {ty} = {value};"));
+        let initializers = self
+            .unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|candidate| {
+                matches!(candidate.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                    && !candidate.children.iter().any(|child| {
+                        child.kind == SyntaxKind::DeclarationQualifier
+                            && self.text(child) == "global"
+                    })
+            })
+            .filter_map(|candidate| {
+                let (name_index, candidate_name) = candidate
+                    .children
+                    .iter()
+                    .enumerate()
+                    .find(|(_, child)| child.kind == SyntaxKind::Name)?;
+                (self.text(candidate_name) == source_name)
+                    .then_some(binding_initializer(candidate, name_index))
+                    .flatten()
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let Some(first) = initializers.first() else {
+            assert!(
+                !self.text(node).contains('='),
+                "analyzed initialized value binding must have a selected initializer"
+            );
+            return;
+        };
+        if !node.children.iter().any(|child| child.span == first.span) {
+            return;
         }
+
+        let ty = rust_type(scalar);
+        let storage = namespace_binding_name(declaration_span.file, source_name);
+        let local = format!("__terrane_{}_value", rust_name(source_name));
+        self.namespace_initializer = Some((source_name.to_owned(), local.clone()));
+        let values = initializers
+            .iter()
+            .map(|initializer| self.expression_as(initializer, binding.value_type))
+            .collect::<Vec<_>>();
+        self.namespace_initializer = None;
+        if values.len() == 1 {
+            self.line(&format!(
+                "static {storage}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {});",
+                values[0]
+            ));
+            return;
+        }
+        self.line(&format!(
+            "static {storage}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {{"
+        ));
+        self.indent += 1;
+        self.line(&format!("let mut {local} = {};", values[0]));
+        for value in &values[1..] {
+            self.line(&format!(
+                "{local} = {};",
+                Self::unwrapped_expression(value.clone())
+            ));
+        }
+        self.line(&local);
+        self.indent -= 1;
+        self.line("});");
     }
     fn function(&mut self, node: &SyntaxNode) {
         let contract = self
@@ -123,7 +361,8 @@ impl Emitter<'_> {
                 self.output.push_str(", ");
             }
             let ty = parameter.value_type.map_or("i128", rust_type);
-            write!(self.output, "{}: {ty}", rust_name(&parameter.name)).unwrap();
+            let mutable = if parameter.mutable { "mut " } else { "" };
+            write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
         }
         self.output.push(')');
         if let Some(return_type) = contract.return_type
@@ -167,8 +406,15 @@ impl Emitter<'_> {
 
     fn statement(&mut self, node: &SyntaxNode) {
         match node.kind {
-            SyntaxKind::Binding => self.binding(node),
+            SyntaxKind::Binding => {
+                if !self.global_assignment(node) {
+                    self.binding(node);
+                }
+            }
             SyntaxKind::Assignment => {
+                if self.global_assignment(node) {
+                    return;
+                }
                 if self
                     .unit
                     .typed_bindings
@@ -232,10 +478,11 @@ impl Emitter<'_> {
     }
 
     fn binding(&mut self, node: &SyntaxNode) {
-        let Some(name_node) = node
+        let Some((name_index, name_node)) = node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::Name)
+            .enumerate()
+            .find(|(_, child)| child.kind == SyntaxKind::Name)
         else {
             return;
         };
@@ -257,16 +504,11 @@ impl Emitter<'_> {
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
             ValueType::TypeDescriptor(_) => "()".to_owned(),
         });
-        let initializer = node.children.iter().rev().find(|child| {
-            !matches!(
-                child.kind,
-                SyntaxKind::Name
-                    | SyntaxKind::TypeExpression
-                    | SyntaxKind::DeclarationModifier
-                    | SyntaxKind::Visibility
-                    | SyntaxKind::DeclarationQualifier
-            )
-        });
+        let initializer = binding_initializer(node, name_index);
+        assert!(
+            initializer.is_some() || !self.text(node).contains('='),
+            "analyzed initialized value binding must have a selected initializer"
+        );
         let mutable = binding.is_some_and(|binding| binding.mutable);
         self.line_start();
         self.output.push_str("let ");
@@ -300,6 +542,25 @@ impl Emitter<'_> {
         };
         let operator = &self.source.text()[value.span.end..node.span.end];
         let operation = if operator.trim() == "++" { "+" } else { "-" };
+        if let Some(storage) = self.global_storage(value) {
+            let one = if self.is_adaptive_expression(value) {
+                "terrane_int_support::Int::from(1_i128)"
+            } else {
+                "1"
+            };
+            self.line("{");
+            self.indent += 1;
+            self.line(&format!(
+                "let mut value = {storage}.lock().expect(\"program-global lock poisoned\");"
+            ));
+            let failure = self.uninitialized_global_failure(value);
+            self.line(&format!(
+                "*value = Some(value.clone().unwrap_or_else(|| {failure}) {operation} {one});"
+            ));
+            self.indent -= 1;
+            self.line("}");
+            return;
+        }
         let target = self.expression(value);
         if self.is_adaptive_expression(value) {
             self.line(&format!(
@@ -360,10 +621,15 @@ impl Emitter<'_> {
                 let Some(name) = target.children.first() else {
                     return;
                 };
+                let mutable = if binding_span_is_mutated(self.package, self.unit, name.span, true) {
+                    "mut "
+                } else {
+                    ""
+                };
                 let name = rust_name(self.text(name));
                 let collection = self.expression(collection);
                 self.line(&format!(
-                    "for {name} in terrane_string_support::graphemes(&{collection}) {{"
+                    "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
                 ));
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();
@@ -429,8 +695,22 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if let ValueType::Scalar(scalar) = value_type
+            && scalar != ScalarType::Int
+            && scalar.is_integer()
+            && node.kind == SyntaxKind::UnaryExpression
+            && let Some(operand) = node.children.last()
+        {
+            let operator = self.source.text()[node.span.start..operand.span.start].trim();
+            return format!("{operator}{}", self.expression(operand));
+        }
         match value_type {
             ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
+            ValueType::Scalar(ScalarType::Float32)
+                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float)) =>
+            {
+                format!("({}) as f32", self.expression(node))
+            }
             ValueType::Scalar(ScalarType::String)
                 if node.kind == SyntaxKind::Name
                     && self.lazy_namespace_binding_type(node).is_some() =>
@@ -596,7 +876,7 @@ impl Emitter<'_> {
             .then(|| Self::discarded_expression(self.expression(effect)))
     }
 
-    fn discarded_expression(mut expression: String) -> String {
+    fn unwrapped_expression(mut expression: String) -> String {
         loop {
             let bytes = expression.as_bytes();
             if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
@@ -616,7 +896,11 @@ impl Emitter<'_> {
             }
             expression = expression[1..expression.len() - 1].to_owned();
         }
-        format!("let _ = {expression};")
+        expression
+    }
+
+    fn discarded_expression(expression: String) -> String {
+        format!("let _ = {};", Self::unwrapped_expression(expression))
     }
 
     fn value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
@@ -629,9 +913,10 @@ impl Emitter<'_> {
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
-                text if text
-                    .chars()
-                    .all(|character| character.is_ascii_digit() || character == '_') =>
+                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float)),
+                text if text.chars().all(|character| {
+                    character.is_ascii_hexdigit() || matches!(character, '_' | 'x' | 'o' | 'b')
+                }) =>
                 {
                     Some(ValueType::Scalar(ScalarType::Int))
                 }
@@ -697,6 +982,22 @@ impl Emitter<'_> {
                 .collect::<Vec<_>>();
             let format = "{}".repeat(values.len());
             return format!("println!(\"{format}\", {})", values.join(", "));
+        }
+        if callee.kind == SyntaxKind::MemberExpression
+            && callee
+                .children
+                .get(1)
+                .is_some_and(|member| self.text(member) == "join")
+        {
+            let separator = self.expression(&callee.children[0]);
+            let values = values
+                .into_iter()
+                .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                return format!("{{ let _ = {separator}; String::new() }}");
+            }
+            return format!("vec![{}].join(&({separator}))", values.join(", "));
         }
         if callee.kind == SyntaxKind::MemberExpression
             && callee
@@ -838,6 +1139,13 @@ impl Emitter<'_> {
 
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
+        if let Some((_, local)) = self
+            .namespace_initializer
+            .as_ref()
+            .filter(|(name, _)| name == source_name)
+        {
+            return local.clone();
+        }
         let Some(symbol) =
             self.package
                 .resolve_ordinary_at(self.unit, node.span.start, source_name)
@@ -846,6 +1154,13 @@ impl Emitter<'_> {
         };
         if symbol.kind != SymbolKind::Binding {
             return rust_name(source_name);
+        }
+        if symbol.global {
+            let storage = global_binding_name(&symbol.name);
+            let failure = self.uninitialized_global_failure(node);
+            return format!(
+                "{storage}.lock().expect(\"program-global lock poisoned\").clone().unwrap_or_else(|| {failure})"
+            );
         }
         let Some(span) = symbol.declaration_span else {
             return rust_name(source_name);
@@ -860,6 +1175,15 @@ impl Emitter<'_> {
         }
     }
 
+    fn uninitialized_global_failure(&self, node: &SyntaxNode) -> String {
+        let (line, column) = self.source.line_column(node.span.start);
+        format!(
+            "__terrane_uninitialized_global({:?}, {:?}, {line}, {column})",
+            self.text(node),
+            display_path(self.source.path())
+        )
+    }
+
     fn namespace_name(&self, node: &SyntaxNode) -> String {
         self.package
             .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
@@ -872,9 +1196,19 @@ impl Emitter<'_> {
     }
 
     fn lazy_namespace_binding_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        if self
+            .namespace_initializer
+            .as_ref()
+            .is_some_and(|(name, _)| name == self.text(node))
+        {
+            return None;
+        }
         let symbol =
             self.package
                 .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
+        if symbol.global {
+            return None;
+        }
         let span = symbol.declaration_span?;
         if !self.is_namespace_binding_span(span) {
             return None;
@@ -889,12 +1223,6 @@ impl Emitter<'_> {
             .iter()
             .find(|binding| binding.span == span)
             .map(|binding| binding.value_type)
-            .filter(|value_type| {
-                matches!(
-                    value_type,
-                    ValueType::Scalar(ScalarType::Int | ScalarType::String)
-                )
-            })
     }
 
     fn is_namespace_binding_span(&self, span: crate::Span) -> bool {
@@ -1052,8 +1380,15 @@ fn literal_or_text(source: &SourceFile, node: &SyntaxNode) -> String {
 
 fn literal(text: &str) -> String {
     let trimmed = text.trim();
-    if trimmed == "true" || trimmed == "false" || trimmed.parse::<i128>().is_ok() {
+    if trimmed == "true" || trimmed == "false" {
         return trimmed.to_owned();
+    }
+    let compact = trimmed.replace('_', "");
+    if let Some(value) = integer_literal(&compact) {
+        return value.to_string();
+    }
+    if compact.parse::<f64>().is_ok() {
+        return compact;
     }
     let value = if let Some(value) = trimmed.strip_prefix('>') {
         if let Some(block) = value.strip_prefix('>') {
@@ -1073,12 +1408,29 @@ fn literal(text: &str) -> String {
 }
 
 fn adaptive_literal(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.parse::<i128>().is_ok() {
-        format!("terrane_int_support::Int::from({trimmed}_i128)")
+    let compact = text.trim().replace('_', "");
+    let value = integer_literal(&compact)
+        .expect("semantic analysis accepted a non-integer adaptive literal");
+    let decimal = value.to_string();
+    if decimal.parse::<i128>().is_ok() {
+        format!("terrane_int_support::Int::from({decimal}_i128)")
     } else {
-        format!("terrane_int_support::Int::from_decimal({trimmed:?})")
+        format!("terrane_int_support::Int::from_decimal({decimal:?})")
     }
+}
+
+fn integer_literal(text: &str) -> Option<BigInt> {
+    let (radix, digits) =
+        if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (16, digits)
+        } else if let Some(digits) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+            (8, digits)
+        } else if let Some(digits) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (2, digits)
+        } else {
+            (10, text)
+        };
+    BigInt::parse_bytes(digits.as_bytes(), radix)
 }
 
 fn block_string(text: &str) -> String {
@@ -1122,6 +1474,32 @@ fn unescape(value: &str) -> String {
     output
 }
 
+fn find_node_by_span(node: &SyntaxNode, span: crate::Span) -> Option<&SyntaxNode> {
+    (node.span == span).then_some(node).or_else(|| {
+        node.children
+            .iter()
+            .find_map(|child| find_node_by_span(child, span))
+    })
+}
+
+fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNode> {
+    node.children
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(index, child)| {
+            *index != name_index
+                && !matches!(
+                    child.kind,
+                    SyntaxKind::TypeExpression
+                        | SyntaxKind::DeclarationModifier
+                        | SyntaxKind::Visibility
+                        | SyntaxKind::DeclarationQualifier
+                )
+        })
+        .map(|(_, child)| child)
+}
+
 fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
@@ -1132,6 +1510,10 @@ fn function_name(contract: &FunctionContract) -> String {
 
 fn namespace_binding_name(file: u32, name: &str) -> String {
     format!("__TERRANE_F{file}_{}", rust_name(name).to_uppercase())
+}
+
+fn global_binding_name(name: &str) -> String {
+    format!("__TERRANE_GLOBAL_{}", rust_name(name).to_uppercase())
 }
 
 fn rust_name(name: &str) -> String {

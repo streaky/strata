@@ -176,6 +176,8 @@ fixed-width integer value T
 
 All integer descriptors, including `.int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `.int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked. Overflow, division by zero, invalid shift counts, and failing exact coercions terminate with deterministic Terrane runtime failures.
 
+Whole-number constant expressions may initialize a typed fixed-width binding directly when their mathematical value is in range; this includes signed minima such as `minimum int8 = -128`. This contextual treatment applies only to binding initializers. Whole-number literals passed to fixed-width parameters or returned through fixed-width contracts remain `int` and require explicit coercion.
+
 ### Floating-point values
 
 Implemented types are `float`, `float32`, and `float64`. `float` currently lowers as binary64, as does `float64`; they remain distinct canonical Terrane descriptors.
@@ -212,8 +214,9 @@ string value
 ├── properties
 │   ├── .length -> int        Unicode extended grapheme-cluster count
 │   └── .type -> .string
-├── method
-│   └── .concat; values... -> string
+├── methods
+│   ├── .concat; values... -> string
+│   └── .join; values... -> string
 ├── iteration
 │   └── for item in string    item is one owned grapheme string
 ├── comparisons
@@ -227,7 +230,7 @@ string value
     └── value is a .string -> bool
 ```
 
-`.concat` accepts zero or more values. Every value is converted through Terrane's canonical scalar display and appended without a separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
+`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
 
 ### `none`
 
@@ -359,7 +362,11 @@ Implemented ordinary entities are:
 - imported ordinary names;
 - `.print` after object-form resolution.
 
-Namespaces form a package-wide tree assembled before reference resolution. Root `/` and parent `..` anchoring, selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
+Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
+
+`constant` declarations are non-rebindable at every supported identity tier. Parameters and
+`for` targets may be reassigned as lexical value bindings; generated Rust marks them mutable only
+when semantic write analysis finds a reassignment.
 
 ## Properties and methods index
 
@@ -368,6 +375,7 @@ Namespaces form a package-wide tree assembled before reference resolution. Root 
 | any implemented scalar value | `.type` | property | canonical scalar descriptor |
 | `string` | `.length` | property | adaptive `int` grapheme count |
 | `string` | `.concat; values...` | method | concatenated `string` using canonical display |
+| `string` | `.join; values...` | method | canonical displays interleaved with receiver separator |
 | any integer | `.coerce; D` | family default | exact coercion or runtime failure |
 | any integer | `.coerce.checked; D` | family child | destination value or `none` |
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |

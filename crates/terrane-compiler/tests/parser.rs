@@ -46,7 +46,7 @@ fn contains(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bo
 
 #[test]
 fn parses_lossless_declarations_and_legal_empty_blocks() {
-    let text = "namespace example app\n.cache public constant count int = 1\n.trace public async throws function empty; value int\nfunction main\n  count = count + 1\n";
+    let text = "namespace example/app\n.cache public constant count int = 1\n.trace public async throws function empty; value int\nfunction main\n  count = count + 1\n";
     let tree = parse_source(text);
     assert!(contains(&tree.root, SyntaxKind::NamespaceDeclaration));
     assert!(contains(&tree.root, SyntaxKind::Binding));
@@ -298,7 +298,7 @@ fn normalized_tree_retains_tokens_and_trivia() {
 #[test]
 fn normalized_import_tree_retains_anchors_and_aliases() {
     assert_eq!(
-        parse_source("from /core output import .debug as .trace\n").normalized(),
+        parse_source("from /core/output import .debug as .trace\n").normalized(),
         concat!(
             "CompilationUnit 0..42\n",
             "  ImportDeclaration 0..41\n",
@@ -316,6 +316,7 @@ fn normalized_import_tree_retains_anchors_and_aliases() {
             "  Identifier 0..4 \"from\"\n",
             "  Operator 5..6 \"/\"\n",
             "  Identifier 6..10 \"core\"\n",
+            "  Operator 10..11 \"/\"\n",
             "  Identifier 11..17 \"output\"\n",
             "  Identifier 18..24 \"import\"\n",
             "  Dot 25..26 \".\"\n",
@@ -327,7 +328,6 @@ fn normalized_import_tree_retains_anchors_and_aliases() {
             "  Eof 42..42 \"\"\n",
             "trivia\n",
             "  Whitespace 4..5 \" \"\n",
-            "  Whitespace 10..11 \" \"\n",
             "  Whitespace 17..18 \" \"\n",
             "  Whitespace 24..25 \" \"\n",
             "  Whitespace 31..32 \" \"\n",
@@ -339,7 +339,7 @@ fn normalized_import_tree_retains_anchors_and_aliases() {
 #[test]
 fn parses_structural_import_forms_and_named_arguments() {
     let tree = parse_source(
-        "from /core output import .print, .debug as .trace\nfrom .. sibling import .item\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
+        "from /core/output import .print, .debug as .trace\nfrom ../sibling import .item\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
     );
     let import = &tree.root.children[0];
     assert_eq!(import.kind, SyntaxKind::ImportDeclaration);
@@ -371,10 +371,28 @@ fn parses_structural_import_forms_and_named_arguments() {
 
 #[test]
 fn two_token_import_binding_does_not_consume_structural_imports() {
-    let tree = parse_source("import value = 1\nfrom /core output import .print\n");
+    let tree = parse_source("import value = 1\nfrom /core/output import .print\n");
 
     assert_eq!(tree.root.children[0].kind, SyntaxKind::Binding);
     assert_eq!(tree.root.children[1].kind, SyntaxKind::ImportDeclaration);
+}
+
+#[test]
+fn parses_slash_namespace_paths_and_rejects_whitespace_separators() {
+    let tree = parse_source(
+        "namespace example/app\nfrom /core/output import .print\nfrom ../shared/config import .settings\n",
+    );
+    assert_eq!(tree.root.children.len(), 3);
+    assert!(tree.root.children.iter().all(|node| {
+        matches!(
+            node.kind,
+            SyntaxKind::NamespaceDeclaration | SyntaxKind::ImportDeclaration
+        )
+    }));
+
+    rejected("namespace example app\n", "S1002");
+    rejected("from /core output import .print\n", "S1026");
+    rejected("from .. shared import .item\n", "S1026");
 }
 
 #[test]
@@ -414,8 +432,8 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("case value\n", "S1090");
     rejected("from import .thing\n", "S1026");
     rejected("import .thing\n", "S1027");
-    rejected("from /core output import print\n", "S1026");
-    rejected("from /core output import .print, , ]\n", "S1026");
+    rejected("from /core/output import print\n", "S1026");
+    rejected("from /core/output import .print, , ]\n", "S1026");
     rejected("import with anything at all\n", "S1027");
     rejected("class thing\n", "S1090");
 }

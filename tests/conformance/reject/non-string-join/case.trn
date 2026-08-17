@@ -1,0 +1,4 @@
+namespace non-string-join
+
+function main
+  value = 1.join; 'part'
