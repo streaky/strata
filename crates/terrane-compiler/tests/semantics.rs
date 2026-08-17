@@ -390,6 +390,30 @@ fn constants_cannot_be_reassigned() {
 }
 
 #[test]
+fn uninitialized_globals_require_assignment_before_same_function_reads() {
+    for source in [
+        "namespace app\nglobal counter int\nfunction main\n  print; counter\n",
+        "namespace app\nglobal counter int\nfunction main\n  if true\n    global counter = 1\n  print; counter\n",
+        "namespace app\nglobal counter int\nfunction main\n  global counter ++\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0007", "{source}");
+    }
+}
+
+#[test]
+fn unconditional_global_assignment_precedes_same_function_reads() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nglobal counter int\nfunction main\n  global counter = 1\n  print; counter\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
 fn inner_binding_may_shadow_a_constant() {
     analyze(&package(
         true,

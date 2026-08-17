@@ -375,6 +375,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     validate_references(&semantic)?;
     analyze_types(&mut semantic)?;
     validate_constant_reassignment(&semantic)?;
+    validate_global_definite_assignment(&semantic)?;
     record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
@@ -3290,8 +3291,11 @@ fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), Seman
                 .children
                 .iter()
                 .find(|child| child.kind == SyntaxKind::Name)
-            && let Some(symbol) =
-                package.resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+            && let Some(symbol) = package.resolve_ordinary_at(
+                unit,
+                target.span.start,
+                node_text(&unit.source, target),
+            )
             && symbol
                 .declaration_span
                 .is_some_and(|span| declaration_is_constant(package, span))
@@ -3337,6 +3341,180 @@ fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
         .find(|unit| unit.source.id() == span.file)
         .and_then(|unit| find(&unit.tree.root, span, &unit.source))
         .unwrap_or(false)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the global assignment transfer rules remain visible as one analysis"
+)]
+fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn has_qualifier(unit: &SemanticUnit, node: &SyntaxNode, qualifier: &str) -> bool {
+        node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier
+                && node_text(&unit.source, child) == qualifier
+        })
+    }
+
+    fn has_initializer(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+        unit.source.text()[node.span.start..node.span.end].contains('=')
+    }
+
+    fn global_name<'a>(unit: &'a SemanticUnit, node: &'a SyntaxNode) -> Option<&'a str> {
+        node.children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+            .map(|child| node_text(&unit.source, child))
+    }
+
+    fn collect_writes(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        writes: &mut BTreeSet<String>,
+    ) {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && has_qualifier(unit, node, "global")
+            && has_initializer(unit, node)
+            && let Some(name) = global_name(unit, node)
+        {
+            writes.insert(name.to_owned());
+        } else if node.kind == SyntaxKind::PostfixExpression
+            && let Some(target) = node.children.first()
+            && package
+                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+                .is_some_and(|symbol| symbol.global)
+        {
+            writes.insert(node_text(&unit.source, target).to_owned());
+        }
+        for child in &node.children {
+            collect_writes(package, unit, child, writes);
+        }
+    }
+
+    fn validate_node(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        relevant: &BTreeSet<String>,
+        assigned: &mut BTreeSet<String>,
+    ) -> Result<(), SemanticFailure> {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && has_qualifier(unit, node, "global")
+        {
+            let name_node = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name);
+            for child in &node.children {
+                if Some(child.span) != name_node.map(|name| name.span) {
+                    validate_node(package, unit, child, relevant, assigned)?;
+                }
+            }
+            if has_initializer(unit, node)
+                && let Some(name) = name_node.map(|name| node_text(&unit.source, name))
+            {
+                assigned.insert(name.to_owned());
+            }
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::PostfixExpression
+            && let Some(target) = node.children.first()
+            && let Some(symbol) = package.resolve_ordinary_at(
+                unit,
+                target.span.start,
+                node_text(&unit.source, target),
+            )
+            && symbol.global
+        {
+            let name = node_text(&unit.source, target);
+            if relevant.contains(name) && !assigned.contains(name) {
+                return Err(failure(
+                    &unit.source,
+                    "T0007",
+                    format!("`{name}` may be read before it is assigned"),
+                    target.span,
+                ));
+            }
+            assigned.insert(name.to_owned());
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::Name
+            && let Some(symbol) =
+                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+            && symbol.global
+        {
+            let name = node_text(&unit.source, node);
+            if relevant.contains(name) && !assigned.contains(name) {
+                return Err(failure(
+                    &unit.source,
+                    "T0007",
+                    format!("`{name}` may be read before it is assigned"),
+                    node.span,
+                ));
+            }
+            return Ok(());
+        }
+        if matches!(
+            node.kind,
+            SyntaxKind::IfStatement | SyntaxKind::WhileStatement
+        ) {
+            let before = assigned.clone();
+            for child in &node.children {
+                let mut branch = before.clone();
+                validate_node(package, unit, child, relevant, &mut branch)?;
+            }
+            return Ok(());
+        }
+        for child in &node.children {
+            validate_node(package, unit, child, relevant, assigned)?;
+        }
+        Ok(())
+    }
+
+    let mut uninitialized = package
+        .globals
+        .values()
+        .filter(|symbol| symbol.kind == SymbolKind::Binding)
+        .map(|symbol| symbol.name.clone())
+        .collect::<BTreeSet<_>>();
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                && has_qualifier(unit, node, "global")
+                && has_initializer(unit, node)
+                && let Some(name) = global_name(unit, node)
+            {
+                uninitialized.remove(name);
+            }
+        }
+    }
+    if uninitialized.is_empty() {
+        return Ok(());
+    }
+
+    let mut writes = BTreeSet::new();
+    for unit in &package.units {
+        collect_writes(package, unit, &unit.tree.root, &mut writes);
+    }
+    for unit in &package.units {
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let mut function_writes = BTreeSet::new();
+            collect_writes(package, unit, function, &mut function_writes);
+            let relevant = uninitialized
+                .iter()
+                .filter(|name| function_writes.contains(*name) || !writes.contains(*name))
+                .cloned()
+                .collect();
+            validate_node(package, unit, function, &relevant, &mut BTreeSet::new())?;
+        }
+    }
+    Ok(())
 }
 
 fn first_write_to<'a>(

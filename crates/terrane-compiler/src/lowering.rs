@@ -62,6 +62,10 @@ struct Emitter<'a> {
     parameter_types: Vec<(String, ScalarType)>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "program-global declarations and their initialization policy remain auditable together"
+)]
 fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
     for (name, symbol) in &package.globals {
         if symbol.kind != SymbolKind::Binding {
@@ -158,6 +162,15 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             rust_type(scalar)
         )
         .unwrap();
+    }
+    if package
+        .globals
+        .values()
+        .any(|symbol| symbol.kind == SymbolKind::Binding)
+    {
+        output.push_str(
+            "fn __terrane_uninitialized_global(name: &str, path: &str, line: usize, column: usize) -> ! {\n    eprintln!(\"{path}:{line}:{column}: error[T0007]: `{name}` may be read before it is assigned\");\n    std::process::exit(1);\n}\n",
+        );
     }
 }
 
@@ -475,8 +488,9 @@ impl Emitter<'_> {
             self.line(&format!(
                 "let mut value = {storage}.lock().expect(\"program-global lock poisoned\");"
             ));
+            let failure = self.uninitialized_global_failure(value);
             self.line(&format!(
-                "*value = Some(value.clone().expect(\"program-global binding initialized before use\") {operation} {one});"
+                "*value = Some(value.clone().unwrap_or_else(|| {failure}) {operation} {one});"
             ));
             self.indent -= 1;
             self.line("}");
@@ -1067,8 +1081,9 @@ impl Emitter<'_> {
         }
         if symbol.global {
             let storage = global_binding_name(&symbol.name);
+            let failure = self.uninitialized_global_failure(node);
             return format!(
-                "{storage}.lock().expect(\"program-global lock poisoned\").clone().expect(\"program-global binding initialized before use\")"
+                "{storage}.lock().expect(\"program-global lock poisoned\").clone().unwrap_or_else(|| {failure})"
             );
         }
         let Some(span) = symbol.declaration_span else {
@@ -1082,6 +1097,15 @@ impl Emitter<'_> {
         } else {
             rust_name(source_name)
         }
+    }
+
+    fn uninitialized_global_failure(&self, node: &SyntaxNode) -> String {
+        let (line, column) = self.source.line_column(node.span.start);
+        format!(
+            "__terrane_uninitialized_global({:?}, {:?}, {line}, {column})",
+            self.text(node),
+            display_path(self.source.path())
+        )
     }
 
     fn namespace_name(&self, node: &SyntaxNode) -> String {
