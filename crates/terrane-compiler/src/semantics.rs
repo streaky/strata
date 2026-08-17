@@ -733,6 +733,9 @@ fn collect_declaration(
     } else {
         &mut namespace.ordinary
     };
+    if node.kind == SyntaxKind::Assignment && table.contains_key(&declaration.name) {
+        return Ok(());
+    }
     if table.contains_key(&declaration.name) {
         return Err(failure(
             &unit.source,
@@ -3195,30 +3198,39 @@ fn binding_is_mutated(
     unit: &SemanticUnit,
     binding: &TypedBinding,
 ) -> bool {
-    fn visit(
+    fn writes(
         package: &SemanticPackage,
         unit: &SemanticUnit,
         binding: &TypedBinding,
         node: &SyntaxNode,
-    ) -> bool {
-        if matches!(
-            node.kind,
-            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-        ) && node.span != binding.span
-            && let Some(target) = node.children.first()
-            && target.kind == SyntaxKind::Name
-            && package
-                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
-                .is_some_and(|symbol| symbol.declaration_span == Some(binding.span))
-        {
-            return true;
-        }
-        node.children
-            .iter()
-            .any(|child| visit(package, unit, binding, child))
+    ) -> usize {
+        let writes_here = usize::from(
+            matches!(
+                node.kind,
+                SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+            ) && node.span != binding.span
+                && node.children.first().is_some_and(|target| {
+                    target.kind == SyntaxKind::Name
+                        && package
+                            .resolve_ordinary_at(
+                                unit,
+                                target.span.start,
+                                node_text(&unit.source, target),
+                            )
+                            .is_some_and(|symbol| symbol.declaration_span == Some(binding.span))
+                }),
+        );
+        writes_here
+            + node
+                .children
+                .iter()
+                .map(|child| writes(package, unit, binding, child))
+                .sum::<usize>()
     }
 
-    visit(package, unit, binding, &unit.tree.root)
+    let initially_unassigned =
+        !unit.source.text()[binding.span.start..binding.span.end].contains('=');
+    writes(package, unit, binding, &unit.tree.root) > usize::from(initially_unassigned)
 }
 
 fn namespace_with_objects<'a>(

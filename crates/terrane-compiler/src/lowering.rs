@@ -66,17 +66,6 @@ impl Emitter<'_> {
         if Self::is_compiler_object_binding(node) {
             return;
         }
-        let Some(binding) = self
-            .unit
-            .typed_bindings
-            .iter()
-            .find(|binding| binding.span == node.span)
-        else {
-            return;
-        };
-        if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
-            return;
-        }
         let Some((name_index, name)) = node
             .children
             .iter()
@@ -85,8 +74,31 @@ impl Emitter<'_> {
         else {
             return;
         };
-        let initializer = binding_initializer(node, name_index)
-            .expect("analyzed value binding must have an initializer");
+        let Some(binding) = self
+            .unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == node.span)
+            .or_else(|| {
+                (node.kind == SyntaxKind::Assignment).then(|| {
+                    self.unit.typed_bindings.iter().rev().find(|binding| {
+                        binding.name == self.text(name) && binding.span.start <= node.span.start
+                    })
+                })?
+            })
+        else {
+            return;
+        };
+        if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
+            return;
+        }
+        let Some(initializer) = binding_initializer(node, name_index) else {
+            assert!(
+                !self.text(node).contains('='),
+                "analyzed initialized value binding must have a selected initializer"
+            );
+            return;
+        };
         let ValueType::Scalar(scalar) = binding.value_type else {
             return;
         };
@@ -251,8 +263,11 @@ impl Emitter<'_> {
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
             ValueType::TypeDescriptor(_) => "()".to_owned(),
         });
-        let initializer = binding_initializer(node, name_index)
-            .expect("analyzed value binding must have an initializer");
+        let initializer = binding_initializer(node, name_index);
+        assert!(
+            initializer.is_some() || !self.text(node).contains('='),
+            "analyzed initialized value binding must have a selected initializer"
+        );
         let mutable = binding.is_some_and(|binding| binding.mutable);
         self.line_start();
         self.output.push_str("let ");
@@ -263,12 +278,14 @@ impl Emitter<'_> {
         if let Some(ty) = ty {
             write!(self.output, ": {ty}").unwrap();
         }
-        let initializer = if let Some(binding) = binding {
-            self.expression_as(initializer, binding.value_type)
-        } else {
-            self.expression(initializer)
-        };
-        write!(self.output, " = {initializer}").unwrap();
+        if let Some(initializer) = initializer {
+            let initializer = if let Some(binding) = binding {
+                self.expression_as(initializer, binding.value_type)
+            } else {
+                self.expression(initializer)
+            };
+            write!(self.output, " = {initializer}").unwrap();
+        }
         self.output.push_str(";\n");
     }
 
