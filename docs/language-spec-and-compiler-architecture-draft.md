@@ -1520,6 +1520,8 @@ result task-struct|none
 
 An initialized typed binding is immediately available. A typed declaration without `=` creates a binding with no value; it does not construct a default value, contain `none`, zero storage, or invoke the type. Every control-flow path must definitely assign a compatible value before any read, reference creation, move, member access, argument passing, or capture of that binding. Failure is a compile-time error.
 
+A binding is not visible to its own declaration initializer: directly or indirectly reading the binding being declared is a compile-time error, rather than a read of an uninitialized or enclosing value. Namespace binding initialization dependencies, including dependencies reached through called functions and later namespace-level assignments folded into initialization, must be acyclic. The compiler rejects a statically provable cycle before lowering; it must not defer the cycle to backend initialization machinery.
+
 ```terrane
 cpu int
 

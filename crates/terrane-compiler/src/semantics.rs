@@ -373,6 +373,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_references(&semantic)?;
+    validate_initializer_dependencies(&semantic)?;
     analyze_types(&mut semantic)?;
     validate_constant_reassignment(&semantic)?;
     validate_global_definite_assignment(&semantic)?;
@@ -968,6 +969,256 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
         }
     }
     Ok(())
+}
+
+fn binding_initializer(node: &SyntaxNode) -> Option<&SyntaxNode> {
+    let name_index = node
+        .children
+        .iter()
+        .position(|child| child.kind == SyntaxKind::Name)?;
+    node.children
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(index, child)| {
+            *index != name_index
+                && !matches!(
+                    child.kind,
+                    SyntaxKind::TypeExpression
+                        | SyntaxKind::DeclarationModifier
+                        | SyntaxKind::Visibility
+                        | SyntaxKind::DeclarationQualifier
+                )
+        })
+        .map(|(_, child)| child)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the dependency graph construction and its diagnostics are one ordered validation pass"
+)]
+fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    type Key = (u32, usize, usize);
+
+    fn key(span: Span) -> Key {
+        (span.file, span.start, span.end)
+    }
+
+    fn collect_reads(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        reads: &mut Vec<(Key, Span)>,
+        functions: &mut BTreeSet<Key>,
+    ) {
+        if node.kind == SyntaxKind::Name {
+            if let Some(symbol) =
+                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+                && let Some(span) = symbol.declaration_span
+            {
+                if symbol.kind == SymbolKind::Binding && !symbol.global {
+                    reads.push((key(span), node.span));
+                } else if symbol.kind == SymbolKind::Function && functions.insert(key(span)) {
+                    for owner in &package.units {
+                        if let Some(function) = find_node_by_span(&owner.tree.root, span) {
+                            collect_reads(package, owner, function, reads, functions);
+                            break;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        if matches!(
+            node.kind,
+            SyntaxKind::NamespaceDeclaration
+                | SyntaxKind::ImportDeclaration
+                | SyntaxKind::Parameter
+                | SyntaxKind::ForTarget
+                | SyntaxKind::TypeExpression
+                | SyntaxKind::UnionType
+                | SyntaxKind::PrefixType
+                | SyntaxKind::AppliedType
+                | SyntaxKind::FunctionType
+        ) {
+            return;
+        }
+        for child in &node.children {
+            collect_reads(package, unit, child, reads, functions);
+        }
+    }
+    fn validate_self_references(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        if node.kind == SyntaxKind::Binding
+            && let Some(initializer) = binding_initializer(node)
+        {
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            if let Some((_, span)) = reads
+                .iter()
+                .find(|(dependency, _)| *dependency == key(node.span))
+            {
+                let declaration =
+                    declaration_from_syntax(unit, node).expect("ordinary binding has a name");
+                return Err(failure(
+                    &unit.source,
+                    "S2023",
+                    format!(
+                        "binding `{}` cannot reference itself in its initializer",
+                        declaration.name
+                    ),
+                    *span,
+                ));
+            }
+        }
+        for child in &node.children {
+            validate_self_references(package, unit, child)?;
+        }
+        Ok(())
+    }
+
+    fn find_cycle(
+        current: Key,
+        edges: &BTreeMap<Key, Vec<(Key, Span)>>,
+        path: &mut BTreeSet<Key>,
+    ) -> Option<Span> {
+        if !path.insert(current) {
+            return None;
+        }
+        for &(dependency, span) in edges.get(&current).into_iter().flatten() {
+            if path.contains(&dependency) {
+                return Some(span);
+            }
+            if let Some(span) = find_cycle(dependency, edges, path) {
+                return Some(span);
+            }
+        }
+        path.remove(&current);
+        None
+    }
+    for unit in &package.units {
+        validate_self_references(package, unit, &unit.tree.root)?;
+    }
+
+    let mut edges = BTreeMap::<Key, Vec<(Key, Span)>>::new();
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if node.kind != SyntaxKind::Binding {
+                continue;
+            }
+            let Some(declaration) = declaration_from_syntax(unit, node) else {
+                continue;
+            };
+            let Some(initializer) = binding_initializer(node) else {
+                continue;
+            };
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            if reads
+                .iter()
+                .any(|(dependency, _)| *dependency == key(node.span))
+            {
+                let span = reads
+                    .iter()
+                    .find(|(dependency, _)| *dependency == key(node.span))
+                    .expect("checked self-reference")
+                    .1;
+                return Err(failure(
+                    &unit.source,
+                    "S2023",
+                    format!(
+                        "binding `{}` cannot reference itself in its initializer",
+                        declaration.name
+                    ),
+                    span,
+                ));
+            }
+            if !declaration.global && !declaration.object_form {
+                edges.entry(key(node.span)).or_default().extend(reads);
+            }
+        }
+    }
+    for unit in &package.units {
+        for node in &unit.tree.root.children {
+            if node.kind != SyntaxKind::Assignment {
+                continue;
+            }
+            let Some(declaration) = declaration_from_syntax(unit, node) else {
+                continue;
+            };
+            if declaration.object_form {
+                continue;
+            }
+            let name = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+                .expect("ordinary assignment has a name");
+            if package
+                .globals
+                .get(&declaration.name)
+                .is_some_and(|global| global.namespace == unit.namespace)
+                && !declaration.global
+            {
+                return Err(SemanticFailure {
+                    source: unit.source.clone(),
+                    diagnostics: vec![
+                        Diagnostic::error(
+                            "S2021",
+                            format!(
+                                "plain namespace assignment cannot replace program-global binding `{}`",
+                                declaration.name
+                            ),
+                            name.span,
+                        )
+                        .with_help(format!("use `global {} = ...`", declaration.name)),
+                    ],
+                });
+            }
+            let Some(target) =
+                package.resolve_ordinary_at(unit, name.span.start, &declaration.name)
+            else {
+                continue;
+            };
+            let Some(initializer) = binding_initializer(node) else {
+                continue;
+            };
+            let Some(owner) = target.declaration_span else {
+                continue;
+            };
+            let mut reads = Vec::new();
+            collect_reads(package, unit, initializer, &mut reads, &mut BTreeSet::new());
+            reads.retain(|(dependency, _)| *dependency != key(owner));
+            edges.entry(key(owner)).or_default().extend(reads);
+        }
+    }
+    for &start in edges.keys() {
+        if let Some(span) = find_cycle(start, &edges, &mut BTreeSet::new()) {
+            let source = package
+                .units
+                .iter()
+                .find(|unit| unit.source.id() == span.file)
+                .expect("dependency span belongs to a semantic unit");
+            return Err(failure(
+                &source.source,
+                "S2024",
+                "namespace binding initialization has a dependency cycle",
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn find_node_by_span(node: &SyntaxNode, span: Span) -> Option<&SyntaxNode> {
+    (node.span == span).then_some(node).or_else(|| {
+        node.children
+            .iter()
+            .find_map(|child| find_node_by_span(child, span))
+    })
 }
 
 fn collect_evaluation_steps(source: &SourceFile, root: &SyntaxNode) -> Vec<EvaluationStep> {

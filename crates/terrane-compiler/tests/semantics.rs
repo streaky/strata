@@ -392,6 +392,58 @@ fn constants_cannot_be_reassigned() {
 }
 
 #[test]
+fn binding_initializers_cannot_reference_the_binding_being_declared() {
+    for source in [
+        "namespace app\nvalue int8 = value\nfunction main\n  print; value\n",
+        "namespace app\nfunction main\n  value int8 = value\n  print; value\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2023", "{source}");
+        assert!(
+            diagnostic
+                .message
+                .contains("cannot reference itself in its initializer"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn namespace_binding_initialization_cycles_are_rejected() {
+    for source in [
+        "namespace app\na int = b\nb int = a\nfunction main\n  print; b\n",
+        "namespace app\na int = 0\nb int = 0\na = b + 1\nb = a + 1\nfunction main\n  print; b\n",
+        "namespace app\na int = read-b;\nb int = a\nfunction read-b int\n  return b\nfunction main\n  print; a\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2024", "{source}");
+        assert_eq!(
+            diagnostic.message, "namespace binding initialization has a dependency cycle",
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn plain_namespace_assignment_cannot_target_a_program_global() {
+    let source =
+        "namespace app\nglobal counter int = 0\ncounter = 11\nfunction main\n  print; counter\n";
+    let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+    let diagnostic = &failure.diagnostics[0];
+    assert_eq!(diagnostic.code, "S2021");
+    assert_eq!(
+        diagnostic.message,
+        "plain namespace assignment cannot replace program-global binding `counter`"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("use `global counter = ...`")
+    );
+}
+
+#[test]
 fn uninitialized_globals_require_assignment_before_same_function_reads() {
     for source in [
         "namespace app\nglobal counter int\nfunction main\n  print; counter\n",

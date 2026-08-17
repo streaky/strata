@@ -272,6 +272,7 @@ function connect; host string, port int, timeout int = 10; connection
 
 - Type expression follows binding/parameter name.
 - A typed binding may omit its initializer (`name string`); flow-sensitive definite assignment must prove a value before any read, reference, member access, argument pass, or capture.
+- [binding-initialization-dependencies] A binding is not visible to its own declaration initializer. Direct or function-mediated self-reference is a compile-time error. Namespace initializer dependencies, including later namespace-level assignments folded into initialization, must be statically acyclic and rejected before lowering when they form a cycle.
 - Function return type follows parameter section.
 - Default value makes parameter optional; required parameters precede optional ones; variadic captures remaining values.
 - Named arguments require stable exposed parameter names.
