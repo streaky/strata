@@ -733,7 +733,13 @@ fn collect_declaration(
     } else {
         &mut namespace.ordinary
     };
-    if node.kind == SyntaxKind::Assignment && table.contains_key(&declaration.name) {
+    if node.kind == SyntaxKind::Assignment
+        && table.get(&declaration.name).is_some_and(|existing| {
+            existing
+                .declaration_span
+                .is_some_and(|span| span.file == node.span.file)
+        })
+    {
         return Ok(());
     }
     if table.contains_key(&declaration.name) {
