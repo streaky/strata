@@ -8,3 +8,6 @@ function main
   local-value = 16
   print; namespace-value
   print; local-value
+  if true
+    block-value int = 300
+    print; block-value

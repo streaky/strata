@@ -12,4 +12,8 @@ fn main() {
     local_value = 16;
     println!("{}", terrane_scalar_support::scalar_text(&(&*__TERRANE_F0_NAMESPACE_VALUE)));
     println!("{}", terrane_scalar_support::scalar_text(&(local_value)));
+    if true {
+        let block_value: terrane_int_support::Int = terrane_int_support::Int::from(300_i128);
+        println!("{}", terrane_scalar_support::scalar_text(&(block_value)));
+    }
 }

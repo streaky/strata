@@ -2656,6 +2656,10 @@ fn add_lexical_scope(
         ordinary: BTreeMap::new(),
         objects: BTreeMap::new(),
     });
+    if node.kind == SyntaxKind::Block {
+        populate_scope(unit, namespaces, globals, scopes, index, node)?;
+        return Ok(index);
+    }
     if node.kind == SyntaxKind::FunctionDeclaration
         && let Some(parameters) = node
             .children

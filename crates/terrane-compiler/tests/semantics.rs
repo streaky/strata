@@ -535,6 +535,7 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
         "  value = argument\n",
         "  if true\n",
         "    inner = value\n",
+        "    .local-print; inner\n",
     );
     let analyzed = analyze(&package(true, &[("main.trn", source)])).unwrap();
     let unit = &analyzed.units[0];
@@ -561,6 +562,27 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
             .resolve_object_at(unit, inner_offset, "local-print")
             .is_some()
     );
+    let inner_read = source.find(".local-print; inner").unwrap() + ".local-print; ".len();
+    assert!(
+        analyzed
+            .resolve_ordinary_at(unit, inner_read, "inner")
+            .is_some()
+    );
+}
+
+#[test]
+fn nested_blocks_record_and_confine_their_own_bindings() {
+    for source in [
+        "namespace app\nfunction main\n  if true\n    nested int = 1\n    print; nested\n",
+        "namespace app\nfunction main\n  while false\n    nested int = 1\n    print; nested\n",
+        "namespace app\nfunction main\n  text string = 'a'\n  for character in text\n    nested int = 1\n    print; nested\n",
+    ] {
+        analyze(&package(true, &[("main.trn", source)])).unwrap();
+    }
+
+    let source = "namespace app\nfunction main\n  if true\n    nested int = 1\n  print; nested\n";
+    let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "S2013");
 }
 
 #[test]
