@@ -145,6 +145,7 @@ pub struct ParameterContract {
     pub span: Span,
     pub value_type: Option<ScalarType>,
     pub optional: bool,
+    pub mutable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1587,6 +1588,23 @@ fn collect_typed_bindings(
         }
         return Ok(());
     }
+    if let [target, collection, block] = node.children.as_slice()
+        && node.kind == SyntaxKind::ForStatement
+        && target.kind == SyntaxKind::ForTarget
+        && let Some(name) = target.children.first()
+    {
+        collect_typed_bindings(package, unit, collection, visible_bindings, bindings)?;
+        let loop_binding = TypedBinding {
+            name: node_text(&unit.source, name).to_owned(),
+            span: name.span,
+            value_type: ValueType::Scalar(ScalarType::String),
+            mutable: false,
+        };
+        let mut loop_bindings = visible_bindings.clone();
+        loop_bindings.push(loop_binding);
+        collect_typed_bindings(package, unit, block, &mut loop_bindings, bindings)?;
+        return Ok(());
+    }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         let prior_len = visible_bindings.len();
         analyze_binding_node(package, unit, node, visible_bindings)?;
@@ -1676,6 +1694,7 @@ fn analyze_function_contract(
                 span: parameter.span,
                 value_type,
                 optional,
+                mutable: false,
             });
         }
     }
@@ -3298,39 +3317,73 @@ fn first_write_to<'a>(
 }
 
 fn record_binding_mutability(package: &mut SemanticPackage) {
-    let mutable_units = package
+    let mutable_bindings = package
         .units
         .iter()
         .map(|unit| {
             unit.typed_bindings
                 .iter()
-                .map(|binding| binding_is_mutated(package, unit, binding))
+                .map(|binding| {
+                    let initially_assigned =
+                        unit.source.text()[binding.span.start..binding.span.end].contains('=');
+                    binding_span_is_mutated(package, unit, binding.span, initially_assigned)
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    for (unit, mutable_bindings) in package.units.iter_mut().zip(mutable_units) {
-        for (binding, mutable) in unit.typed_bindings.iter_mut().zip(mutable_bindings) {
+    let mutable_parameters = package
+        .units
+        .iter()
+        .map(|unit| {
+            unit.functions
+                .iter()
+                .map(|function| {
+                    function
+                        .parameters
+                        .iter()
+                        .map(|parameter| {
+                            binding_span_is_mutated(package, unit, parameter.span, true)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for ((unit, binding_mutability), parameter_mutability) in package
+        .units
+        .iter_mut()
+        .zip(mutable_bindings)
+        .zip(mutable_parameters)
+    {
+        for (binding, mutable) in unit.typed_bindings.iter_mut().zip(binding_mutability) {
             binding.mutable = mutable;
+        }
+        for (function, mutability) in unit.functions.iter_mut().zip(parameter_mutability) {
+            for (parameter, mutable) in function.parameters.iter_mut().zip(mutability) {
+                parameter.mutable = mutable;
+            }
         }
     }
 }
 
-fn binding_is_mutated(
+pub(crate) fn binding_span_is_mutated(
     package: &SemanticPackage,
     unit: &SemanticUnit,
-    binding: &TypedBinding,
+    declaration_span: Span,
+    initially_assigned: bool,
 ) -> bool {
     fn writes(
         package: &SemanticPackage,
         unit: &SemanticUnit,
-        binding: &TypedBinding,
+        declaration_span: Span,
         node: &SyntaxNode,
     ) -> usize {
         let writes_here = usize::from(
             matches!(
                 node.kind,
                 SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-            ) && node.span != binding.span
+            ) && node.span != declaration_span
                 && node.children.first().is_some_and(|target| {
                     target.kind == SyntaxKind::Name
                         && package
@@ -3339,20 +3392,18 @@ fn binding_is_mutated(
                                 target.span.start,
                                 node_text(&unit.source, target),
                             )
-                            .is_some_and(|symbol| symbol.declaration_span == Some(binding.span))
+                            .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
                 }),
         );
         writes_here
             + node
                 .children
                 .iter()
-                .map(|child| writes(package, unit, binding, child))
+                .map(|child| writes(package, unit, declaration_span, child))
                 .sum::<usize>()
     }
 
-    let initially_unassigned =
-        !unit.source.text()[binding.span.start..binding.span.end].contains('=');
-    writes(package, unit, binding, &unit.tree.root) > usize::from(initially_unassigned)
+    writes(package, unit, declaration_span, &unit.tree.root) > usize::from(!initially_assigned)
 }
 
 fn namespace_with_objects<'a>(

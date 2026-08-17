@@ -6,7 +6,7 @@ use crate::{
     ScalarType, SourceFile,
     semantics::{
         CoercionPolicy, FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType,
-        integer_coercion_call,
+        binding_span_is_mutated, integer_coercion_call,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -128,7 +128,8 @@ impl Emitter<'_> {
                 self.output.push_str(", ");
             }
             let ty = parameter.value_type.map_or("i128", rust_type);
-            write!(self.output, "{}: {ty}", rust_name(&parameter.name)).unwrap();
+            let mutable = if parameter.mutable { "mut " } else { "" };
+            write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
         }
         self.output.push(')');
         if let Some(return_type) = contract.return_type
@@ -361,10 +362,15 @@ impl Emitter<'_> {
                 let Some(name) = target.children.first() else {
                     return;
                 };
+                let mutable = if binding_span_is_mutated(self.package, self.unit, name.span, true) {
+                    "mut "
+                } else {
+                    ""
+                };
                 let name = rust_name(self.text(name));
                 let collection = self.expression(collection);
                 self.line(&format!(
-                    "for {name} in terrane_string_support::graphemes(&{collection}) {{"
+                    "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
                 ));
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();

@@ -1559,6 +1559,26 @@ fn rejects_extracted_string_methods_as_values() {
     }
 }
 
+#[test]
+fn records_parameter_mutability() {
+    let analyzed = analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nfunction show; value string\n  value = 'changed'\nfunction main\n  for item in 'ab'\n    item = 'z'\n",
+        )],
+    ))
+    .unwrap();
+
+    let parameter = &analyzed.units[0]
+        .functions
+        .iter()
+        .find(|function| function.name == "show")
+        .unwrap()
+        .parameters[0];
+    assert!(parameter.mutable);
+}
+
 fn contains_kind(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bool {
     node.kind == kind || node.children.iter().any(|child| contains_kind(child, kind))
 }
