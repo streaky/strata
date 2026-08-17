@@ -308,7 +308,10 @@ Core:
 
 ```yaml
 int: exact arbitrary-precision signed semantic value; adaptive representation
-float: IEEE-754 binary64
+float: a SPELLING of float64, not a separate type; one canonical descriptor, so '.type', 'is a', reflection, and diagnostics all report float64
+float_intent: 'float' says floating point at default precision; 'float64' states an exact width for wire formats, foreign ABI, and binary layout, beside float32
+float_default_reason: failure modes are asymmetric - wanting float32 and getting float64 wastes memory (found by profiling, fixed locally); wanting float64 and getting float32 computes wrong answers (integers stop round-tripping above 2^24: timestamps, byte counts, money in minor units)
+float_future: may be repointed at a VERSION boundary, never by target or profile - the same source computing different results per build is what 'int' avoids by being semantically fixed
 bool: true|false
 string: Unicode text, UTF-8 standard representation
 bytes: arbitrary binary
@@ -368,7 +371,7 @@ negative_shift: throws negative-shift-count
 - Small multiplication computes exact `i128` intermediate; wider operations preserve exactness.
 - Division by zero throws `division-by-zero`.
 - Fixed widths require explicit `checked`/`wrap`/`saturate`/`overflowing` family children, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
-- Literal initializers are range-checked against the destination over the whole constant expression; a syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude.
+- Whole-number constant expressions are contextually range-checked as fixed-width values only when they initialize a typed binding. A syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude. Call arguments and return expressions remain unconstrained `int` values and require explicit coercion to satisfy fixed-width contracts; this is not general implicit assignment conversion.
 - Conversions are explicit through the `coerce` method family.
 - Named arithmetic families attach to `integer`: `add`, `subtract`, `multiply`, `divide`, `remainder`, `div-rem`, `negate`, `shift-left`, `shift-right`. Operators invoke each family's default child.
 

@@ -1442,6 +1442,24 @@ count word = 42
 
 A descriptor bound under another name represents the same type — identity is canonical and survives rebinding. The fixed-width spellings are therefore ordinary exported names, not reserved type keywords and not hidden compiler-only names.
 
+`float` is a spelling of `float64`, not a separate type. Both names resolve to one canonical descriptor, so a value declared `float` and a value declared `float64` are the same type in every observable respect:
+
+```terrane
+measure float = 1.5
+
+measure.type is float64      # true
+measure is a float           # true
+measure is a float64         # true
+```
+
+That equivalence is what makes the shortcut safe. A parallel descriptor that merely lowered the same way would make `.type`, `is a`, reflection, and diagnostics report two types where the program has one, and the shortcut would leak wherever a type is compared rather than merely declared.
+
+The two names differ in what they say, not in what they mean. `float` states that a value is floating point at the default precision, which is what ordinary code wants. `float64` states an exact width, which is what a wire format, a foreign ABI, or a binary layout needs, and it belongs beside `float32` in those declarations. Diagnostics name the canonical descriptor, so a mismatch involving either spelling reports `float64`.
+
+Binary64 is the default because the failure modes are not symmetric. A program that would have been fine in `float32` merely uses more memory, which profiling finds and an annotation fixes locally. A program that needed binary64 and silently received `float32` computes wrong answers: integers stop round-tripping above 2^24, so millisecond timestamps, byte counts, and money in minor units all degrade quietly, and the common interop boundaries — JSON numbers, C `double`, SQL `DOUBLE` — are 64-bit besides.
+
+Should a later version make a wider type the default, `float` may be repointed at a version boundary, where the change is visible, opt-in, and only ever gains precision. It must not vary by target or profile: the same source computing different results in different builds is the defect `int` avoids by being semantically fixed rather than machine-sized, and precision is the last place to reintroduce it.
+
 `int` is one source type, not an alias for `int64` and not a union of source-visible width types. Its values have no language-level minimum or maximum. Ordinary `int` arithmetic produces the exact mathematical result; crossing a representation boundary is internal runtime control flow, not a throw, panic, type change, or observable conversion.
 
 The standard runtime represents `int` values adaptively: a compact `i64` fast tier, an `i128` middle tier, and arbitrary-precision signed limb storage beyond that. The erased wrapper must keep an ordinary small integer machine-word-sized where the target permits; it must not inflate every `int` to an inline 128-bit payload merely because wider values are supported. A wide tier may therefore be boxed or share a wide/big allocation header. Statically proven values may lower directly to `i64`, `i128`, or specialised limb operations without constructing the erased wrapper.
@@ -1460,9 +1478,9 @@ name = my rifle # string
 empty = none    # none
 ```
 
-An unconstrained whole-number literal is an `int` regardless of magnitude. The front end parses its magnitude without a fixed-width limit, and the compiler selects the smallest exact runtime tier. In a fixed-width initializer, the literal is checked at compile time against the destination range:
+An unconstrained whole-number literal is an `int` regardless of magnitude. The front end parses its magnitude without a fixed-width limit, and the compiler selects the smallest exact runtime tier. When a whole-number constant expression is the initializer of a fixed-width binding, the binding annotation provides its destination type and the constant is checked at compile time against that destination's range.
 
-For a signed fixed-width initializer whose source is a syntactic unary `-` applied directly to a whole-number literal, range checking applies to the signed mathematical value after negation, not to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected. Parenthesised constant expressions use the same compile-time constant evaluation and destination-range check; this rule introduces no general implicit conversion.
+For a signed fixed-width binding initializer whose source is a syntactic unary `-` applied directly to a whole-number literal, range checking applies to the signed mathematical value after negation, not to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected. Parenthesised constant expressions in the same initializer position use the same compile-time constant evaluation and destination-range check.
 
 ```terrane
 large = 9223372036854775808
@@ -1470,7 +1488,7 @@ wide int128 = 9223372036854775808
 too-large int64 = 9223372036854775808 # compile-time range error
 ```
 
-This contextual literal check is not an implicit runtime conversion. The compiler may represent scalar objects as native Rust primitives when semantics permit.
+This contextual typing is deliberately limited to typed binding initializers. A whole-number literal used as a call argument or return expression remains an unconstrained `int`; satisfying a fixed-width parameter or return contract requires an explicit coercion. The initializer rule is not an implicit runtime conversion, and it does not introduce general assignment coercion. The compiler may represent scalar objects as native Rust primitives when semantics permit.
 
 ### 11.3 Dynamic bindings
 

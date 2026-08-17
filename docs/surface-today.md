@@ -176,6 +176,8 @@ fixed-width integer value T
 
 All integer descriptors, including `.int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `.int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked. Overflow, division by zero, invalid shift counts, and failing exact coercions terminate with deterministic Terrane runtime failures.
 
+Whole-number constant expressions may initialize a typed fixed-width binding directly when their mathematical value is in range; this includes signed minima such as `minimum int8 = -128`. This contextual treatment applies only to binding initializers. Whole-number literals passed to fixed-width parameters or returned through fixed-width contracts remain `int` and require explicit coercion.
+
 ### Floating-point values
 
 Implemented types are `float`, `float32`, and `float64`. `float` currently lowers as binary64, as does `float64`; they remain distinct canonical Terrane descriptors.
