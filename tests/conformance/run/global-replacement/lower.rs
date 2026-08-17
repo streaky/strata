@@ -7,16 +7,24 @@ fn __terrane_uninitialized_global(name: &str, path: &str, line: usize, column: u
 // Source: case.trn
 // Namespace: global-replacement
 fn setup() {
-    *__TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned") = Some(terrane_int_support::Int::from(11_i128));
+    {
+        let value = terrane_int_support::Int::from(11_i128);
+        *__TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned") = Some(value);
+    }
 }
 fn bump() {
     {
-        let mut value = __TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned");
-        *value = Some(value.clone().unwrap_or_else(|| __terrane_uninitialized_global("counter", "case.trn", 6, 10)) + terrane_int_support::Int::from(1_i128));
+        let value = __TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned").clone().unwrap_or_else(|| __terrane_uninitialized_global("counter", "case.trn", 6, 20)).clone() + terrane_int_support::Int::from(1_i128);
+        *__TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned") = Some(value);
     }
+}
+fn current() -> terrane_int_support::Int {
+    return __TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned").clone().unwrap_or_else(|| __terrane_uninitialized_global("counter", "case.trn", 8, 10)).clone();
 }
 fn main() {
     setup();
     bump();
-    println!("{}", terrane_scalar_support::scalar_text(&(__TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned").clone().unwrap_or_else(|| __terrane_uninitialized_global("counter", "case.trn", 10, 10)))));
+    if __TERRANE_GLOBAL_COUNTER.lock().expect("program-global lock poisoned").clone().unwrap_or_else(|| __terrane_uninitialized_global("counter", "case.trn", 12, 6)).clone() == terrane_int_support::Int::from(12_i128) {
+        println!("{}", terrane_scalar_support::scalar_text(&(((current()) + terrane_int_support::Int::from(1_i128)))));
+    }
 }

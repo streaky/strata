@@ -225,9 +225,15 @@ impl Emitter<'_> {
         } else {
             self.expression(initializer)
         };
+        let value = Self::unwrapped_expression(value);
+        self.line("{");
+        self.indent += 1;
+        self.line(&format!("let value = {value};"));
         self.line(&format!(
-            "*{storage}.lock().expect(\"program-global lock poisoned\") = Some({value});"
+            "*{storage}.lock().expect(\"program-global lock poisoned\") = Some(value);"
         ));
+        self.indent -= 1;
+        self.line("}");
         true
     }
     #[expect(
@@ -1200,6 +1206,9 @@ impl Emitter<'_> {
         let symbol =
             self.package
                 .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
+        if symbol.global {
+            return None;
+        }
         let span = symbol.declaration_span?;
         if !self.is_namespace_binding_span(span) {
             return None;
