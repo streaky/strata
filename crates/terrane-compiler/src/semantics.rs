@@ -2572,7 +2572,10 @@ fn populate_assignment(
                     ),
                     name.span,
                 )
-                .with_help(format!("use `global {} = ...`", declaration.name)),
+                .with_help(format!(
+                    "declare `global {} ...` or assign it at namespace level",
+                    declaration.name
+                )),
             ],
         });
     }
@@ -3454,10 +3457,45 @@ fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), 
             }
             return Ok(());
         }
-        if matches!(
-            node.kind,
-            SyntaxKind::IfStatement | SyntaxKind::WhileStatement
-        ) {
+        if node.kind == SyntaxKind::IfStatement {
+            if let Some(condition) = node.children.first() {
+                validate_node(package, unit, condition, relevant, assigned)?;
+            }
+            let incoming = assigned.clone();
+            let mut branch_results = Vec::new();
+            for branch in node.children.iter().skip(1) {
+                let branch_block = if branch.kind == SyntaxKind::Block {
+                    Some(branch)
+                } else {
+                    branch
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Block)
+                };
+                if let Some(branch_block) = branch_block {
+                    let mut branch_assigned = incoming.clone();
+                    validate_node(package, unit, branch_block, relevant, &mut branch_assigned)?;
+                    branch_results.push(branch_assigned);
+                }
+            }
+            if !node
+                .children
+                .iter()
+                .any(|child| child.kind == SyntaxKind::ElseClause)
+            {
+                branch_results.push(incoming);
+            }
+            if let Some(first) = branch_results.first() {
+                *assigned = branch_results
+                    .iter()
+                    .skip(1)
+                    .fold(first.clone(), |common, branch| {
+                        common.intersection(branch).cloned().collect()
+                    });
+            }
+            return Ok(());
+        }
+        if node.kind == SyntaxKind::WhileStatement {
             let before = assigned.clone();
             for child in &node.children {
                 let mut branch = before.clone();

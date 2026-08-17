@@ -346,13 +346,14 @@ fn plain_function_assignment_cannot_replace_namespace_bindings() {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
         let diagnostic = &failure.diagnostics[0];
         assert_eq!(diagnostic.code, "S2021", "{source}");
+        let name = if source.contains("value") {
+            "value"
+        } else {
+            "counter"
+        };
         assert_eq!(
             diagnostic.help.as_deref(),
-            Some(if source.contains("value") {
-                "use `global value = ...`"
-            } else {
-                "use `global counter = ...`"
-            }),
+            Some(format!("declare `global {name} ...` or assign it at namespace level").as_str()),
             "{source}"
         );
     }
@@ -408,6 +409,18 @@ fn unconditional_global_assignment_precedes_same_function_reads() {
         &[(
             "main.trn",
             "namespace app\nglobal counter int\nfunction main\n  global counter = 1\n  print; counter\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
+fn global_assignment_joins_complete_if_else_branches() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nglobal counter int\nfunction decide bool\n  return true\nfunction main\n  if (decide;)\n    global counter = 1\n  else\n    global counter = 2\n  print; counter\n",
         )],
     ))
     .unwrap();
