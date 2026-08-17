@@ -352,7 +352,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     }
     resolve_imports(imports, &mut namespaces)?;
     for unit in &mut units {
-        unit.scopes = collect_lexical_scopes(unit, &namespaces)?;
+        unit.scopes = collect_lexical_scopes(unit, &namespaces, &globals)?;
     }
     let prelude_bindings = if package.prelude {
         bootstrap_prelude()
@@ -2351,15 +2351,16 @@ fn integer_bounds(bits: usize, signed: bool) -> (BigInt, BigInt) {
 fn collect_lexical_scopes(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
 ) -> Result<Vec<LexicalScope>, SemanticFailure> {
     let mut scopes = Vec::new();
     for node in &unit.tree.root.children {
         match node.kind {
             SyntaxKind::FunctionDeclaration => {
-                add_lexical_scope(unit, namespaces, &mut scopes, node, None, true)?;
+                add_lexical_scope(unit, namespaces, globals, &mut scopes, node, None, true)?;
             }
             SyntaxKind::Block => {
-                add_lexical_scope(unit, namespaces, &mut scopes, node, None, false)?;
+                add_lexical_scope(unit, namespaces, globals, &mut scopes, node, None, false)?;
             }
             _ => {}
         }
@@ -2370,6 +2371,7 @@ fn collect_lexical_scopes(
 fn add_lexical_scope(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     node: &SyntaxNode,
     parent: Option<usize>,
@@ -2398,13 +2400,13 @@ fn add_lexical_scope(
         match child.kind {
             SyntaxKind::ParameterList => {}
             SyntaxKind::Block if node.kind == SyntaxKind::FunctionDeclaration => {
-                populate_scope(unit, namespaces, scopes, index, child)?;
+                populate_scope(unit, namespaces, globals, scopes, index, child)?;
             }
             SyntaxKind::Block => {
-                add_lexical_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                add_lexical_scope(unit, namespaces, globals, scopes, child, Some(index), false)?;
             }
             _ if function_body => {
-                populate_node(unit, namespaces, scopes, index, child)?;
+                populate_node(unit, namespaces, globals, scopes, index, child)?;
             }
             _ => {}
         }
@@ -2415,12 +2417,13 @@ fn add_lexical_scope(
 fn populate_scope(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     index: usize,
     block: &SyntaxNode,
 ) -> Result<(), SemanticFailure> {
     for node in &block.children {
-        populate_node(unit, namespaces, scopes, index, node)?;
+        populate_node(unit, namespaces, globals, scopes, index, node)?;
     }
     Ok(())
 }
@@ -2428,6 +2431,7 @@ fn populate_scope(
 fn populate_node(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
     scopes: &mut Vec<LexicalScope>,
     index: usize,
     node: &SyntaxNode,
@@ -2442,19 +2446,7 @@ fn populate_node(
             }
         }
         SyntaxKind::Assignment => {
-            if let Some(declaration) = declaration_from_syntax(unit, node)
-                && !declaration.object_form
-                && !declaration.global
-                && !local_or_namespace_binding_exists(
-                    scopes,
-                    index,
-                    namespaces,
-                    &unit.namespace,
-                    &declaration.name,
-                )
-            {
-                insert_local(unit, scopes, index, declaration.name, node.span)?;
-            }
+            populate_assignment(unit, namespaces, globals, scopes, index, node)?;
         }
 
         SyntaxKind::ImportDeclaration => {
@@ -2464,10 +2456,10 @@ fn populate_node(
             if let Some(name) = declaration_name(node, &unit.source) {
                 insert_local(unit, scopes, index, name, node.span)?;
             }
-            add_lexical_scope(unit, namespaces, scopes, node, Some(index), true)?;
+            add_lexical_scope(unit, namespaces, globals, scopes, node, Some(index), true)?;
         }
         SyntaxKind::Block => {
-            add_lexical_scope(unit, namespaces, scopes, node, Some(index), false)?;
+            add_lexical_scope(unit, namespaces, globals, scopes, node, Some(index), false)?;
         }
         SyntaxKind::ForStatement => {
             let loop_index = scopes.len();
@@ -2489,24 +2481,81 @@ fn populate_node(
                         )?;
                     }
                 } else {
-                    populate_node(unit, namespaces, scopes, loop_index, first)?;
+                    populate_node(unit, namespaces, globals, scopes, loop_index, first)?;
                 }
             }
             if let Some(block) = node.children.last()
                 && block.kind == SyntaxKind::Block
             {
-                add_lexical_scope(unit, namespaces, scopes, block, Some(loop_index), false)?;
+                add_lexical_scope(
+                    unit,
+                    namespaces,
+                    globals,
+                    scopes,
+                    block,
+                    Some(loop_index),
+                    false,
+                )?;
             }
         }
         _ => {
             for child in &node.children {
                 if child.kind == SyntaxKind::Block {
-                    add_lexical_scope(unit, namespaces, scopes, child, Some(index), false)?;
+                    add_lexical_scope(
+                        unit,
+                        namespaces,
+                        globals,
+                        scopes,
+                        child,
+                        Some(index),
+                        false,
+                    )?;
                 }
             }
         }
     }
     Ok(())
+}
+
+fn populate_assignment(
+    unit: &SemanticUnit,
+    namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
+    scopes: &mut [LexicalScope],
+    index: usize,
+    node: &SyntaxNode,
+) -> Result<(), SemanticFailure> {
+    let Some(declaration) = declaration_from_syntax(unit, node) else {
+        return Ok(());
+    };
+    if declaration.object_form
+        || declaration.global
+        || local_binding_exists(scopes, index, &declaration.name)
+    {
+        return Ok(());
+    }
+    if namespace_binding_exists(namespaces, globals, &unit.namespace, &declaration.name) {
+        let name = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+            .expect("ordinary assignment has a name");
+        return Err(SemanticFailure {
+            source: unit.source.clone(),
+            diagnostics: vec![
+                Diagnostic::error(
+                    "S2021",
+                    format!(
+                        "plain assignment cannot replace namespace binding `{}`",
+                        declaration.name
+                    ),
+                    name.span,
+                )
+                .with_help(format!("use `global {} = ...`", declaration.name)),
+            ],
+        });
+    }
+    insert_local(unit, scopes, index, declaration.name, node.span)
 }
 fn validate_definite_assignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
     for unit in &package.units {
@@ -2975,28 +3024,34 @@ fn populate_imports(
     Ok(())
 }
 
-fn local_or_namespace_binding_exists(
-    scopes: &[LexicalScope],
-    mut index: usize,
-    namespaces: &BTreeMap<String, Namespace>,
-    namespace: &str,
-    name: &str,
-) -> bool {
+fn local_binding_exists(scopes: &[LexicalScope], mut index: usize, name: &str) -> bool {
     loop {
         let scope = &scopes[index];
         if scope.ordinary.contains_key(name) {
             return true;
         }
         let Some(parent) = scope.parent else {
-            break;
+            return false;
         };
         index = parent;
     }
-    namespace_chain(namespace).any(|path| {
-        namespaces
-            .get(&path)
-            .is_some_and(|scope| scope.ordinary.contains_key(name))
-    })
+}
+
+fn namespace_binding_exists(
+    namespaces: &BTreeMap<String, Namespace>,
+    globals: &BTreeMap<String, Symbol>,
+    namespace: &str,
+    name: &str,
+) -> bool {
+    globals
+        .get(name)
+        .is_some_and(|symbol| symbol.kind == SymbolKind::Binding)
+        || namespace_chain(namespace).any(|path| {
+            namespaces
+                .get(&path)
+                .and_then(|scope| scope.ordinary.get(name))
+                .is_some_and(|symbol| symbol.kind == SymbolKind::Binding)
+        })
 }
 
 fn insert_local(

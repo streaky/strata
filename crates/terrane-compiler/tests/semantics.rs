@@ -336,6 +336,41 @@ fn namespace_local_bindings_may_shadow_program_globals() {
 }
 
 #[test]
+fn plain_function_assignment_cannot_replace_namespace_bindings() {
+    for source in [
+        "namespace app\ncounter int = 0\nfunction main\n  counter = 1\n",
+        "namespace app\nvalue int8 = 7\nfunction main\n  value = 16\n",
+        "namespace app\nglobal counter int = 0\nfunction main\n  counter = 1\n",
+        "namespace app\nvalue int8\nfunction main\n  value = 16\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2021", "{source}");
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(if source.contains("value") {
+                "use `global value = ...`"
+            } else {
+                "use `global counter = ...`"
+            }),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn local_binding_may_shadow_a_namespace_binding() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nvalue int8 = 7\nfunction main\n  value int8 = 12\n  value = 16\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
 fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
     let analyzed = analyze(&package(
         true,
