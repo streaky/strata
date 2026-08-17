@@ -12,3 +12,5 @@ AGENTS.md
 /editors/vscode/node_modules/
 /editors/vscode/server/
 /editors/vscode/*.vsix
+
+/demos/
