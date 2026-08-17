@@ -443,6 +443,10 @@ borrow: bounded reference with compiler provenance; may narrow, never widen life
 interior_ref: separates COW, pins path, cannot escape/replace/remove while live
 linear: noncopyable exclusive resource; move transfers identity
 constants: cannot rebind
+constant_scope: rejects reassignment regardless of lexical, namespace-local, or program-global identity tier
+shadowing: a namespace-local binding may shadow a distinct program-global constant; writes resolve to the local identity
+parameter_and_for_target_reassignment: allowed within lexical scope; value semantics preserve caller arguments and iterated collections
+lowering_mutability: emit mutable target storage only when resolver-backed write analysis finds a reassignment
 cleanup: deterministic lexical destruction; acyclic final strong reference release
 cycles: never promise deterministic collection; reject provable cycles or diagnose/document leak
 ```

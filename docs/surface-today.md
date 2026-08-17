@@ -364,6 +364,10 @@ Implemented ordinary entities are:
 
 Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
 
+`constant` declarations are non-rebindable at every supported identity tier. Parameters and
+`for` targets may be reassigned as lexical value bindings; generated Rust marks them mutable only
+when semantic write analysis finds a reassignment.
+
 ## Properties and methods index
 
 | Receiver | Member | Kind | Result / effect |

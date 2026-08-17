@@ -1959,6 +1959,17 @@ constant answer = 42
 
 This does not necessarily make the referenced object deeply immutable.
 
+Binding constancy is independent of the identity tier that supplied the name. A `constant`
+declaration rejects every later assignment to that declaration, whether it is namespace-local,
+program-global, or lexically local. A plain namespace-local declaration may shadow a distinct
+program-global identity of the same name; assigning the local binding does not rebind the global
+constant.
+
+Function parameters and `for` targets are ordinary value-semantic lexical bindings. They may be
+reassigned within their lexical scope, without mutating the caller's argument or the iterated
+collection. Lowering therefore makes their target storage mutable only when a resolved write
+actually occurs; this is an implementation detail and does not add reference semantics.
+
 Deeply immutable/frozen values should be expressed through the object/type contract rather than conflated with binding constancy.
 
 ### 12.9 Reference implementation strategy
