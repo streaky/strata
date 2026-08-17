@@ -275,7 +275,11 @@ function connect; host string, port int, timeout int = 10; connection
 
 - Type expression follows binding/parameter name.
 - A typed binding may omit its initializer (`name string`); flow-sensitive definite assignment must prove a value before any read, reference, member access, argument pass, or capture.
-- [binding-initialization-dependencies] A binding is not visible to its own declaration initializer. Direct or function-mediated self-reference is a compile-time error. Namespace initializer dependencies, including later namespace-level assignments folded into initialization, must be statically acyclic and rejected before lowering when they form a cycle.
+- [binding-initialization-dependencies] An initializer resolves against the scope as it stands immediately BEFORE its declaration, so the declared name is not in scope from its own initializer. Where nothing else binds that name, reading it — directly or through a called function — is a compile-time error naming the absent binding. Namespace initializer dependencies, including later namespace-level assignments folded into initialization, must be statically acyclic and rejected before lowering when they form a cycle.
+- [redeclaration] Where the name is already bound in the SAME LEXICAL scope, the initializer reads the earlier binding and the declaration REPLACES it: 'a int8 = 12' then 'a int = a.coerce; int'. One name means one thing at each point in a scope, read top to bottom. Lexical only — a namespace top-level declaration may not replace another, because namespace initialization is ordered by dependency, not source position.
+- [redeclaration-same-type] identical type => an assignment with a redundant annotation; an outstanding ref observes the new value, since the storage is the same.
+- [redeclaration-retype] type changes => the binding's type changes, and the replaced value is RELEASED at that point, after its initializer is evaluated. Deterministic and earlier than scope exit: nothing can name the old value again, so retaining it would hold a resource the program cannot reach.
+- [redeclaration-v1-limit] a type-changing replacement is REJECTED while an outstanding ref observes the binding (and, once closures exist, a capture); retyping what another scope holds must not happen without something explicit there. See DEFERRED.
 - Function return type follows parameter section.
 - Default value makes parameter optional; required parameters precede optional ones; variadic captures remaining values.
 - Named arguments require stable exposed parameter names.
@@ -803,7 +807,8 @@ Not version-one; no private incompatible syntax:
 - stateful hot-code replacement;
 - arbitrary C++ ABI integration;
 - multimethod/generic-function dispatch;
-- additional foreign runtime adapters.
+- additional foreign runtime adapters;
+- type-changing replacement of a binding observed by a ref or capture; a later version may let the holder accept the new type explicitly, but never silently.
 
 ## AUTHORING CHECKLIST
 

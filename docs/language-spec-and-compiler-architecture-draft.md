@@ -1549,7 +1549,20 @@ result task-struct|none
 
 An initialized typed binding is immediately available. A typed declaration without `=` creates a binding with no value; it does not construct a default value, contain `none`, zero storage, or invoke the type. Every control-flow path must definitely assign a compatible value before any read, reference creation, move, member access, argument passing, or capture of that binding. Failure is a compile-time error.
 
-A binding is not visible to its own declaration initializer: directly or indirectly reading the binding being declared is a compile-time error, rather than a read of an uninitialized or enclosing value. Namespace binding initialization dependencies, including dependencies reached through called functions and later namespace-level assignments folded into initialization, must be acyclic. The compiler rejects a statically provable cycle before lowering; it must not defer the cycle to backend initialization machinery.
+A declaration's initializer resolves names against the scope as it stands immediately before that declaration. The name being declared is therefore not in scope from its own initializer. Where nothing else binds that name, reading it — directly, or indirectly through a called function — is a compile-time error naming the absent binding, rather than a read of uninitialized storage. Namespace binding initialization dependencies, including dependencies reached through called functions and later namespace-level assignments folded into initialization, must be acyclic. The compiler rejects a statically provable cycle before lowering; it must not defer the cycle to backend initialization machinery.
+
+Where the name *is* already bound in that same lexical scope, the initializer reads the earlier binding and the declaration replaces it:
+
+```terrane
+a int8 = 12
+a int = a.coerce; int      # reads the int8, then `a` is an int for the rest of the scope
+```
+
+One name means one thing at each point in a scope, read top to bottom, which is what makes this safe to read locally. The rule is lexical: a declaration at namespace top level may not replace another, because namespace initialization is ordered by dependency rather than by source position, and a replaced namespace name would have no single answer for the declarations that read it.
+
+Replacement of an identical type is an assignment carrying a redundant annotation, and any outstanding reference observes the new value because the storage is the same. Where the type changes, the binding's type changes with it, and the replaced value is released at the point of replacement, after its initializer has been evaluated. That release is deterministic and earlier than scope exit: nothing can name the old value again, so holding it to the end of the scope would retain a resource — a file handle, a lock — that the program can no longer reach.
+
+Version one rejects a type-changing replacement while an outstanding reference observes the binding. Retyping a value that another scope holds a reference to would change that scope's view of it without anything explicit appearing there. See §42 for the direction this leaves open.
 
 ```terrane
 cpu int
@@ -5752,7 +5765,8 @@ The following already-motivated features may be specified later when implementat
 - stateful hot-code replacement with explicit object migration semantics;
 - arbitrary C++ ABI integration beyond C-compatible shims and Rust bridges;
 - multimethod or generic-function dispatch supplied as a library or language feature without making overload resolution implicit;
-- additional foreign-runtime adapters governed by the same explicit boundary contracts as Python.
+- additional foreign-runtime adapters governed by the same explicit boundary contracts as Python;
+- type-changing replacement of an observed binding. Version one rejects replacing a binding's type while an outstanding reference observes it, and the same exclusion covers a closure capture once closures exist. What a later version might offer is an explicit way for the holder to accept the new type, so the retyping appears in the scope that is affected by it rather than only in the scope that caused it. Silently retyping through a reference is not a candidate.
 
 This list is intentionally non-exhaustive. Adding an item here protects a design direction from accidental closure; it does not give that feature priority over the version-one compiler plan.
 

@@ -695,6 +695,15 @@ Deliver:
   aliasing mechanism, and holding a type in a value to dispatch or instantiate through it is a
   distinct capability that arrives with reflection in milestone 18 rather than borrowing assignment
   syntax now;
+- allow a declaration to replace an earlier binding of the same name in the same lexical scope, with
+  the initializer reading the earlier binding: `a int8 = 12` followed by `a int = a.coerce; int`.
+  `S2012` rejects this today, and `S2023` rejects the initializer's read, so both change. An
+  identical type is an assignment with a redundant annotation; a changed type changes the binding's
+  type and releases the replaced value at that point, after its initializer is evaluated. The rule is
+  lexical: `S2005` continues to reject a replacement at namespace top level, where initialization is
+  ordered by dependency rather than source position. The version-one exclusion for a binding observed
+  by a reference needs no check yet — `ref` is milestone 17 — but the diagnostic belongs with `ref`
+  when it lands, not here;
 - rewrite the assignment and visibility diagnostics so none of them advertises `global`. A fixit is
   read when the author is most willing to be told what to do, so it should teach the value path —
   a parameter, a return, or `constant` where the value never varies. `S2021` currently says
@@ -710,8 +719,9 @@ lookup; no compiler type carries an object-form discriminator; a value declared 
 answers `true` to `is a float64`, with one descriptor reported by `.type` and by diagnostics; a
 function body that names a namespace variable fails at its source span, while a `constant`, a
 construct, an imported name, and a `global` all resolve there; `public` on a namespace variable
-fails; `byte = int8` fails while `from /core/types import int8 as byte` succeeds; and no diagnostic
-in the compiler names `global` as a suggested fix.
+fails; `byte = int8` fails while `from /core/types import int8 as byte` succeeds; `a int8 = 12` followed by
+`a int = a.coerce; int` compiles and runs in a function body while the same pair at namespace top
+level still fails; and no diagnostic in the compiler names `global` as a suggested fix.
 
 Sequencing note: milestone 4.7 changes namespace *paths* and this milestone changes *name
 forms*. Both migrate the whole corpus, so running them back to back keeps the fixture churn
@@ -883,6 +893,10 @@ Deliver:
 
 - semantic value assignment for ordinary values, linear resources, and explicit references;
 - `ref`, `move`, and weak references with lifetime and provenance analysis reported in source terms;
+- the diagnostic that milestone 4.8 defers to this one: a type-changing replacement of a binding is
+  rejected while an outstanding reference observes it, since retyping a value another scope holds
+  must not happen without something explicit appearing there. Same-type replacement stays legal and
+  the reference observes the new value;
 - the deterministic drop pipeline;
 - identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
 
@@ -1236,7 +1250,17 @@ regressions. The previously ambiguous minimal collection subset is explicitly de
 `/core/collections` remains an empty reserved namespace until the iterator protocol and
 collections arrive in milestones 13 and 14.
 
-The next work in order is milestone 4.8, followed by milestone 5.
+Three defects remain open, none of them namespace-path or lookup-model work. A program-global read
+anywhere other than a bare `print` argument emits the namespace-local storage name and fails to
+compile. `global x = x + 1` takes the same lock twice and deadlocks the compiled program, which
+`terrane check` does not catch. A binding declared inside a nested `if`, `for`, or `while` body is
+never added to the scope table, so no later statement resolves it; that one reproduces on `main` and
+predates this branch.
+
+The next work in order is milestone 4.8, followed by milestone 5. The two program-global defects are
+effectively prerequisites for 4.8 rather than parallel work: that milestone removes namespace
+variables from function-body resolution, which makes `global` the only way to share mutable state
+between functions, and today that path cannot be read in an expression or safely incremented.
 
 Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
