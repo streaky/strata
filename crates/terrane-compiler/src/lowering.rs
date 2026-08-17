@@ -430,6 +430,15 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if let ValueType::Scalar(scalar) = value_type
+            && scalar != ScalarType::Int
+            && scalar.is_integer()
+            && node.kind == SyntaxKind::UnaryExpression
+            && let Some(operand) = node.children.last()
+        {
+            let operator = self.source.text()[node.span.start..operand.span.start].trim();
+            return format!("{operator}{}", self.expression(operand));
+        }
         match value_type {
             ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
             ValueType::Scalar(ScalarType::Float32)

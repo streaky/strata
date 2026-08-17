@@ -9,9 +9,13 @@ function main
   inferred = 3.5
   signed-value signed = 0x7f
   unsigned-value unsigned = 0xFF
+  minimum signed = -128
+  negative-hex signed = -0x10
   print; adaptive
   print; single
   print; double
   print; inferred
   print; signed-value
   print; unsigned-value
+  print; minimum
+  print; negative-hex
