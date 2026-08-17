@@ -376,6 +376,8 @@ fn constants_cannot_be_reassigned() {
         "namespace app\nfunction main\n  constant limit int = 10\n  limit = 11\n",
         "namespace app\nfunction main\n  constant limit int = 10\n  limit++\n",
         "namespace app\nconstant limit int = 10\nlimit = 11\n",
+        "namespace app\nconstant limit int = 10\nfunction main\n  global limit int = 11\n",
+        "namespace app\nfunction main\n  constant limit int = 10\n  global limit int = 11\n",
     ] {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
         let diagnostic = &failure.diagnostics[0];

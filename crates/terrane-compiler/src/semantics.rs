@@ -3281,6 +3281,31 @@ fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), Seman
                 target.span,
             ));
         }
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(&unit.source, child) == "global"
+            })
+            && let Some(target) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+            && let Some(symbol) =
+                package.resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+            && symbol
+                .declaration_span
+                .is_some_and(|span| declaration_is_constant(package, span))
+        {
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!(
+                    "constant binding `{}` cannot be reassigned",
+                    node_text(&unit.source, target)
+                ),
+                target.span,
+            ));
+        }
         for child in &node.children {
             visit_declarations(package, unit, child)?;
         }
@@ -3291,6 +3316,27 @@ fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), Seman
         visit_declarations(package, unit, &unit.tree.root)?;
     }
     Ok(())
+}
+
+fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
+    fn find(node: &SyntaxNode, span: Span, source: &SourceFile) -> Option<bool> {
+        if node.span == span {
+            return Some(node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(source, child) == "constant"
+            }));
+        }
+        node.children
+            .iter()
+            .find_map(|child| find(child, span, source))
+    }
+
+    package
+        .units
+        .iter()
+        .find(|unit| unit.source.id() == span.file)
+        .and_then(|unit| find(&unit.tree.root, span, &unit.source))
+        .unwrap_or(false)
 }
 
 fn first_write_to<'a>(
