@@ -51,9 +51,8 @@ object
 |   |   |   |       +-- unsigned-fixed-integer
 |   |   |   |           +-- uint8/uint16/uint32/uint64/uint128
 |   |   |   +-- floating
-|   |   |       +-- float                       canonical binary64
 |   |   |       +-- float32
-|   |   |       +-- float64                     same value contract as float
+|   |   |       +-- float64                     `float` is a spelling of this, not a third descriptor
 |   |   +-- bool
 |   |   +-- none
 |   +-- sequence
@@ -325,7 +324,7 @@ fixed-integer value/type descriptor
 +-- minimum
 +-- maximum
 
-floating value/type descriptor
+floating value/type descriptor                     float32 and float64; `float` spells float64
 +-- bits
 +-- finite / infinite / nan classification
 ```

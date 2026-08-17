@@ -309,7 +309,8 @@ Core:
 ```yaml
 int: exact arbitrary-precision signed semantic value; adaptive representation
 float: a SPELLING of float64, not a separate type; one canonical descriptor, so '.type', 'is a', reflection, and diagnostics all report float64
-float_intent: 'float' says floating point at default precision; 'float64' states an exact width for wire formats, foreign ABI, and binary layout, beside float32
+float_meaning: 'float' denotes THE DEFAULT PRECISION whatever that currently is; 'float64' denotes binary64 PINNED. Same descriptor this version, different meaning over time - which is what makes the default repointable
+float_intent: code in 'float' moves with the language; code in 'float64' stays pinned because it must (wire format, foreign ABI, binary layout, beside float32)
 float_default_reason: failure modes are asymmetric - wanting float32 and getting float64 wastes memory (found by profiling, fixed locally); wanting float64 and getting float32 computes wrong answers (integers stop round-tripping above 2^24: timestamps, byte counts, money in minor units)
 float_future: may be repointed at a VERSION boundary, never by target or profile - the same source computing different results per build is what 'int' avoids by being semantically fixed
 bool: true|false
