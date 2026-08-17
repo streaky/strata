@@ -113,17 +113,20 @@ overlap: longest matching namespace prefix wins; two roots mapped to one directo
 unmapped_file: a .trn file no mapping reaches is not part of the package; it is neither compiled nor reported
 third_party: a dependency's namespaces come from ITS manifest and are never discovered by scanning its tree
 determinism: the resolved source set is recorded in build metadata; sorted expansion, ambiguity is an error
-lookup: ONE view; a name resolves through lexical scope, then namespace, then prelude
+lookup: ONE view; a name resolves through lexical scope, then namespace, then program-global, then prelude
+lookup_from_a_function_body: the namespace tiers yield constants, constructs, imports, functions, types - NEVER a namespace variable; mutable state crosses a function boundary only as 'global', a parameter, or a return
 dot_rule: '.' appears only between a receiver and its member, never as a name prefix
 dot_exception: NONE - the dot has no other role anywhere in the language
 scope: lexical + namespace
+namespace_variable_scope: the namespace tier ONLY - not its own function bodies, not descendant namespaces, not importers; its role is composition at the tier
+leaving_the_tier: a value that must leave is a 'constant', a 'global', or a function result
 collision: different object symbols under same object name in same scope => error
 shadowing: nearer binding shadows farther binding
 reimport_same_export: idempotent
 reimport_different_same_name: collision; alias required
 ```
 
-Top-level plain assignment is namespace-local, including root namespace. `global` explicitly creates/replaces program-global identity and does not erase lexical provenance/visibility.
+Top-level plain assignment is namespace-local, including root namespace. `global` explicitly creates/replaces program-global identity and does not erase lexical provenance/visibility. A namespace variable is readable and writable only by other namespace-level declarations in that namespace, so `public` on one is meaningless and rejected rather than accepted as documentation.
 
 ```terrane
 namespace application/commands
@@ -342,8 +345,10 @@ function_type: 'function from A, B to R'; associates right
 - Type descriptors are language constructs backed by canonical compiler-owned objects, not independently instantiated values.
 
 ```yaml
-binding: 'd = int8' names the construct; it is a compile-time descriptor alias, not a value
-alias_use: legal in annotation position, coercion destination, and 'is a' right side
+binding: REJECTED - 'd = int8' would store a type in a value slot; a construct is not a value to bind
+rename: at the IMPORT only - 'from /core/types import int8 as byte'; one spelling per name in a scope, renamed where the name enters it
+rename_use: the renamed construct is legal in annotation position, coercion destination, and 'is a' right side
+type_in_a_value: holding a type to dispatch or instantiate through it is a DISTINCT capability belonging with reflection; it needs its own construct, not assignment syntax
 value_use: REJECTED at the source span - no display or value protocol in v1 (print; d, arithmetic, value parameter)
 lowering: a statically resolved descriptor needs NO runtime storage and lowers to nothing
 materialisation: reflection or dynamic descriptor use may require the canonical descriptor object at runtime; 'not an ordinary value' does NOT mean 'never has a runtime representation'

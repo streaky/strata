@@ -849,6 +849,13 @@ Plain names resolve in this order:
 
 A nearer binding shadows a farther binding.
 
+Tiers four and five carry one restriction. Resolving from inside a function or method body, the
+namespace tiers yield constants, descriptor constructs, imported names, functions, and types — never
+a namespace variable. A variable's value depends on when it is read, so a body that could name one
+would take execution order as an implicit input, which is the thing parameters and returns exist to
+make explicit. Where program-wide mutable state is genuinely wanted, `global` says so; where the
+value never varies, `constant` says that instead.
+
 Shadowing is legal. Linters may report it according to project policy.
 
 ### 7.8 Namespace-local bindings
@@ -861,7 +868,25 @@ namespace my-output/formatters
 from /core/output import print as emit
 ```
 
-The binding is inherited by descendant namespace resolution unless hidden by a nearer binding.
+A name bound here — an import, a constant, a construct, a function, a type — is inherited by
+descendant namespace resolution unless hidden by a nearer binding.
+
+A namespace variable is scoped to the namespace tier itself. Other namespace-level declarations in
+that namespace read and write it; nothing else can. Not a function body in the same namespace, not a
+descendant namespace, not an importer. Its role is composition at the tier — the intermediate steps
+that produce a value something else exposes:
+
+```terrane
+namespace app/config
+
+base int = 5
+derived int = base + 1          # namespace-level composition, visible here only
+
+constant page-size int = 4096   # crosses into function bodies
+global counter int = 0          # crosses, and may be replaced, because it says so
+```
+
+A value that must leave the tier is a `constant`, a `global`, or a function result.
 
 ### 7.9 Program-global bindings
 
@@ -1298,6 +1323,10 @@ protected function update-layout
 
 Writing `public` is permitted as documentation even though it matches the default.
 
+A namespace variable is the one declaration visibility cannot describe. It does not leave its
+namespace tier under any marker, so `public` on one is not redundant but meaningless, and is rejected
+rather than accepted as documentation.
+
 ### 10.2 Class visibility
 
 Inside a class:
@@ -1607,26 +1636,34 @@ In version one the callback must be a statically resolvable function name rather
 
 ### 11.6 Type objects
 
-A type is a language construct backed by a canonical object, not an independently instantiated value. Binding one names the construct; it does not produce a runtime value:
+A type is a language construct backed by a canonical object, not an independently instantiated value. An ordinary binding may not name one:
 
 ```terrane
-target-type = float
+target-type = float             # rejected: a construct is not a value to bind
+```
+
+A construct is renamed where it enters the scope, which is the import:
+
+```terrane
+from /core/types import float as target-type
+
 x = x.coerce; target-type
 ```
 
-`target-type` is a compile-time descriptor alias. It may appear anywhere the construct may appear — annotation position, a coercion destination, the right side of `is a` — and it may not appear where a runtime value is required. Passing it to `print`, using it in arithmetic, or handing it to a parameter expecting a value is rejected at the source span, because a descriptor has no display or value protocol in version one.
+The renamed construct may appear anywhere the construct may appear — annotation position, a coercion destination, the right side of `is a` — and it may not appear where a runtime value is required. Passing it to `print`, using it in arithmetic, or handing it to a parameter expecting a value is rejected at the source span, because a descriptor has no display or value protocol in version one.
 
-A descriptor binding therefore requires no runtime storage, and a statically resolved use lowers to nothing. Erasure here is not an optimisation the compiler happens to apply; where the descriptor is statically known there is simply nothing to store.
+Renaming at the import and nowhere else keeps one spelling per name in a scope: the point where a name enters is the point where it may be given another. An ordinary binding whose value is a construct would be a second, weaker aliasing mechanism, and it would read as storing a type in a variable slot — the one thing this model forbids. Holding a type in a value, to dispatch or instantiate through it, is a distinct capability that belongs with reflection and needs its own construct rather than borrowing assignment syntax.
+
+A statically resolved construct requires no runtime storage, and its use lowers to nothing. Erasure here is not an optimisation the compiler happens to apply; where the descriptor is statically known there is simply nothing to store.
 
 That is a statement about *ordinary value storage*, not a claim that descriptors never exist at runtime. A descriptor is a semantic object with canonical identity, and reflection or a dynamic descriptor use may require that identity to be materialised — at which point the compiler emits the canonical descriptor object rather than a variable slot holding one. The rule is that a descriptor is never an ordinary runtime value, not that it can never have a runtime representation. What is always a defect is emitting a plain Rust binding for a descriptor as if it were an ordinary value, which is what makes `d = int` lowering to `d = int;` wrong.
 
-A class object may be bound and used as a type expression:
+A class name is usable as a type expression, and is renamed the same way:
 
 ```terrane
-from /models import user
-user-type = user
+from /models import user as user-type
 
-person user-type = user; data
+person user-type = user-type; data
 ```
 
 The compiler resolves type compatibility through the object’s type protocol.

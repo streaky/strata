@@ -677,13 +677,41 @@ Deliver:
   inference and the `float` name at `Float64` and drop the variant; the value contract is
   identical, so diagnostics name `float64` for either spelling and nothing downstream changes.
   `float32` is untouched;
+- restrict the namespace tiers of the lookup chain to what may cross a function boundary. A body
+  resolves constants, descriptor constructs, imported names, functions, and types from the
+  namespace tiers, and never a namespace variable. A variable's value depends on when it is read,
+  so a body that can name one takes execution order as an implicit input, which is what parameters
+  and returns exist to express. The namespace tier is where a variable composes a value; `constant`,
+  `global`, a parameter, or a return is how one leaves. Today the tier is unrestricted and
+  `run/declarations` reads a namespace variable inside `main`, so this inverts a shipped behaviour
+  and the fixture becomes the test of the new rule;
+- confine a namespace variable to its own namespace: not a descendant namespace, not an importer.
+  `public` on one is meaningless rather than redundant and is rejected, unlike every other
+  declaration where the marker is permitted as documentation;
+- reject renaming by ordinary binding. A construct is renamed where it enters the scope, so
+  `from /core/types import int8 as byte` stands and `byte = int8` does not — milestone 4.6 accepted
+  the binding form, and `checked-coercion` (`tiny = .int8`) and `numeric-literals`
+  (`signed`, `unsigned`) use it. One spelling per name in a scope is worth more than a second
+  aliasing mechanism, and holding a type in a value to dispatch or instantiate through it is a
+  distinct capability that arrives with reflection in milestone 18 rather than borrowing assignment
+  syntax now;
+- rewrite the assignment and visibility diagnostics so none of them advertises `global`. A fixit is
+  read when the author is most willing to be told what to do, so it should teach the value path —
+  a parameter, a return, or `constant` where the value never varies. `S2021` currently says
+  `use 'global counter = ...'`, which routes an author from a caught error toward program-wide
+  mutable state as the shortcut rather than the exception. `global` stays documented in the
+  specification for the cases that need it;
 - migration of every remaining fixture, golden, example, and document.
 
 Exit criterion: no source anywhere in the repository contains a leading `.` outside member
 position; a program that writes one fails with a diagnostic naming the receiver form; the
 collision, visibility, and shadowing cases fail for their original reasons under single-view
-lookup; no compiler type carries an object-form discriminator; and a value declared `float`
-answers `true` to `is a float64`, with one descriptor reported by `.type` and by diagnostics.
+lookup; no compiler type carries an object-form discriminator; a value declared `float`
+answers `true` to `is a float64`, with one descriptor reported by `.type` and by diagnostics; a
+function body that names a namespace variable fails at its source span, while a `constant`, a
+construct, an imported name, and a `global` all resolve there; `public` on a namespace variable
+fails; `byte = int8` fails while `from /core/types import int8 as byte` succeeds; and no diagnostic
+in the compiler names `global` as a suggested fix.
 
 Sequencing note: milestone 4.7 changes namespace *paths* and this milestone changes *name
 forms*. Both migrate the whole corpus, so running them back to back keeps the fixture churn

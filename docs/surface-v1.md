@@ -668,6 +668,35 @@ function main
 
 Importing `print` or `int8` is redundant. Explicit import remains available for rebinding, aliasing, and shadowing, and the examples below use it because they are specifically about importing.
 
+The import is also the only place a name may be renamed. An ordinary binding never aliases a
+construct — `byte = int8` and `user-type = user` are rejected, `from /core/types import int8 as byte`
+is how it is spelled — because a construct is not a value to store, and one spelling per name in a
+scope is worth more than a second aliasing mechanism.
+
+**What crosses a function boundary.** A namespace variable is scoped to the namespace tier. Other
+namespace-level declarations read and write it; a function body in the same namespace cannot see it,
+nor can a descendant namespace or an importer:
+
+```terrane
+namespace app/config
+
+base int = 5
+derived int = base + 1          # composition at the tier: visible here only
+
+constant page-size int = 4096   # crosses into function bodies
+global counter int = 0          # crosses, and may be replaced, because it says so
+
+function report
+  print; page-size              # fine
+  print; derived                # rejected: namespace variable, not visible here
+  print; counter                # fine: declared global
+```
+
+A variable's value depends on when it is read, so a body that could name one would take execution
+order as an implicit input — which is what parameters and returns exist to make explicit. Anything
+that must cross is a `constant`, a `global`, a parameter, or a return. `public` cannot widen a
+namespace variable and is rejected on one.
+
 ### 11.1 Imports bind ordinary names; `as` renames
 
 A `from ... import` binds each selected object under an ordinary name in the scope containing the import. There is no separate declare-then-bind step and no second spelling for the same object.
