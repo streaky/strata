@@ -16,6 +16,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
         "// Generated deterministically by Terrane {}.\n",
         crate::VERSION
     );
+    emit_global_storage(package, &mut output);
     for unit in &package.units {
         let mut emitter = Emitter {
             package,
@@ -61,9 +62,163 @@ struct Emitter<'a> {
     parameter_types: Vec<(String, ScalarType)>,
 }
 
+fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
+    for (name, symbol) in &package.globals {
+        if symbol.kind != SymbolKind::Binding {
+            continue;
+        }
+        let Some(span) = symbol.declaration_span else {
+            continue;
+        };
+        let Some(unit) = package
+            .units
+            .iter()
+            .find(|unit| unit.source.id() == span.file)
+        else {
+            continue;
+        };
+        let Some(node) = find_node_by_span(&unit.tree.root, span) else {
+            continue;
+        };
+        let Some(name_node) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        else {
+            continue;
+        };
+        let emitter = Emitter {
+            package,
+            unit,
+            source: &unit.source,
+            output: String::new(),
+            indent: 0,
+            continue_label: None,
+            loop_counter: 0,
+            return_type: None,
+            parameter_types: Vec::new(),
+        };
+        let value_type = unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == span)
+            .map(|binding| binding.value_type)
+            .or_else(|| emitter.value_type(name_node));
+        let Some(ValueType::Scalar(scalar)) = value_type else {
+            continue;
+        };
+        let initial = package.units.iter().rev().find_map(|candidate_unit| {
+            candidate_unit
+                .tree
+                .root
+                .children
+                .iter()
+                .rev()
+                .find_map(|candidate| {
+                    let global = candidate.children.iter().any(|child| {
+                        child.kind == SyntaxKind::DeclarationQualifier
+                            && candidate_unit.source.text()[child.span.start..child.span.end].trim()
+                                == "global"
+                    });
+                    let candidate_name = candidate
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Name)?;
+                    (global
+                        && &candidate_unit.source.text()
+                            [candidate_name.span.start..candidate_name.span.end]
+                            == name.as_str())
+                    .then_some((candidate_unit, candidate, candidate_name))
+                })
+        });
+        let initial = initial.and_then(|(initial_unit, initial_node, initial_name)| {
+            let name_index = initial_node
+                .children
+                .iter()
+                .position(|child| child.span == initial_name.span)?;
+            let initializer = binding_initializer(initial_node, name_index)?;
+            let mut initial_emitter = Emitter {
+                package,
+                unit: initial_unit,
+                source: &initial_unit.source,
+                output: String::new(),
+                indent: 0,
+                continue_label: None,
+                loop_counter: 0,
+                return_type: None,
+                parameter_types: Vec::new(),
+            };
+            Some(initial_emitter.expression_as(initializer, ValueType::Scalar(scalar)))
+        });
+        let initial = initial.map_or_else(|| "None".to_owned(), |value| format!("Some({value})"));
+        writeln!(
+            output,
+            "static {}: std::sync::LazyLock<std::sync::Mutex<Option<{}>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new({initial}));",
+            global_binding_name(name),
+            rust_type(scalar)
+        )
+        .unwrap();
+    }
+}
+
 impl Emitter<'_> {
+    fn global_storage(&self, node: &SyntaxNode) -> Option<String> {
+        (node.kind == SyntaxKind::Name)
+            .then(|| {
+                self.package
+                    .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+            })
+            .flatten()
+            .filter(|symbol| symbol.global && symbol.kind == SymbolKind::Binding)
+            .map(|symbol| global_binding_name(&symbol.name))
+    }
+
+    fn global_assignment(&mut self, node: &SyntaxNode) -> bool {
+        let Some(name) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::Name)
+        else {
+            return false;
+        };
+        let declared_global = node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
+        });
+        let storage = if declared_global {
+            Some(global_binding_name(self.text(name)))
+        } else {
+            self.global_storage(name)
+        };
+        let Some(storage) = storage else {
+            return false;
+        };
+        let Some((name_index, _)) = node
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| child.kind == SyntaxKind::Name)
+        else {
+            return false;
+        };
+        let Some(initializer) = binding_initializer(node, name_index) else {
+            return false;
+        };
+        let value = if let Some(ty) = self.value_type(name) {
+            self.expression_as(initializer, ty)
+        } else {
+            self.expression(initializer)
+        };
+        self.line(&format!(
+            "*{storage}.lock().expect(\"program-global lock poisoned\") = Some({value});"
+        ));
+        true
+    }
     fn namespace_binding(&mut self, node: &SyntaxNode) {
-        if Self::is_compiler_object_binding(node) {
+        if Self::is_compiler_object_binding(node)
+            || node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
+            })
+        {
             return;
         }
         let Some((name_index, name)) = node
@@ -173,8 +328,15 @@ impl Emitter<'_> {
 
     fn statement(&mut self, node: &SyntaxNode) {
         match node.kind {
-            SyntaxKind::Binding => self.binding(node),
+            SyntaxKind::Binding => {
+                if !self.global_assignment(node) {
+                    self.binding(node);
+                }
+            }
             SyntaxKind::Assignment => {
+                if self.global_assignment(node) {
+                    return;
+                }
                 if self
                     .unit
                     .typed_bindings
@@ -302,6 +464,24 @@ impl Emitter<'_> {
         };
         let operator = &self.source.text()[value.span.end..node.span.end];
         let operation = if operator.trim() == "++" { "+" } else { "-" };
+        if let Some(storage) = self.global_storage(value) {
+            let one = if self.is_adaptive_expression(value) {
+                "terrane_int_support::Int::from(1_i128)"
+            } else {
+                "1"
+            };
+            self.line("{");
+            self.indent += 1;
+            self.line(&format!(
+                "let mut value = {storage}.lock().expect(\"program-global lock poisoned\");"
+            ));
+            self.line(&format!(
+                "*value = Some(value.clone().expect(\"program-global binding initialized before use\") {operation} {one});"
+            ));
+            self.indent -= 1;
+            self.line("}");
+            return;
+        }
         let target = self.expression(value);
         if self.is_adaptive_expression(value) {
             self.line(&format!(
@@ -885,6 +1065,12 @@ impl Emitter<'_> {
         if symbol.kind != SymbolKind::Binding {
             return rust_name(source_name);
         }
+        if symbol.global {
+            let storage = global_binding_name(&symbol.name);
+            return format!(
+                "{storage}.lock().expect(\"program-global lock poisoned\").clone().expect(\"program-global binding initialized before use\")"
+            );
+        }
         let Some(span) = symbol.declaration_span else {
             return rust_name(source_name);
         };
@@ -1184,6 +1370,14 @@ fn unescape(value: &str) -> String {
     output
 }
 
+fn find_node_by_span(node: &SyntaxNode, span: crate::Span) -> Option<&SyntaxNode> {
+    (node.span == span).then_some(node).or_else(|| {
+        node.children
+            .iter()
+            .find_map(|child| find_node_by_span(child, span))
+    })
+}
+
 fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNode> {
     node.children
         .iter()
@@ -1212,6 +1406,10 @@ fn function_name(contract: &FunctionContract) -> String {
 
 fn namespace_binding_name(file: u32, name: &str) -> String {
     format!("__TERRANE_F{file}_{}", rust_name(name).to_uppercase())
+}
+
+fn global_binding_name(name: &str) -> String {
+    format!("__TERRANE_GLOBAL_{}", rust_name(name).to_uppercase())
 }
 
 fn rust_name(name: &str) -> String {

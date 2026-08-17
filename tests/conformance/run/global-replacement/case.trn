@@ -1,0 +1,10 @@
+namespace global-replacement
+global counter int = 0
+function setup
+  global counter = 11
+function bump
+  global counter ++
+function main
+  setup;
+  bump;
+  print; counter

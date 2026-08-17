@@ -66,6 +66,15 @@ impl Parser<'_> {
             "global" | "constant" if self.peek_text(1) == Some("function") => {
                 self.parse_invalid_function_qualifier()
             }
+            "global"
+                if self.peek_kind(1) == Some(TokenKind::Identifier)
+                    && matches!(
+                        self.peek_kind(2),
+                        Some(TokenKind::Increment | TokenKind::Decrement)
+                    ) =>
+            {
+                self.parse_global_postfix()
+            }
             _ if self.looks_like_function_declaration() => self.parse_function(),
             "if" => self.parse_if(),
             "while" => self.parse_while(),
@@ -87,6 +96,19 @@ impl Parser<'_> {
             _ if self.looks_like_binding() => self.parse_binding(),
             _ => self.parse_expression_statement(),
         }
+    }
+
+    fn parse_global_postfix(&mut self) -> SyntaxNode {
+        let start = self.position;
+        let qualifier = self.leaf(SyntaxKind::DeclarationQualifier);
+        let value = self.leaf(SyntaxKind::Name);
+        self.bump();
+        self.node(
+            SyntaxKind::PostfixExpression,
+            start,
+            self.position,
+            vec![value, qualifier],
+        )
     }
 
     fn parse_invalid_function_qualifier(&mut self) -> SyntaxNode {
