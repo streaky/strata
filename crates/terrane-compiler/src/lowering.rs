@@ -1062,7 +1062,10 @@ fn literal(text: &str) -> String {
         return trimmed.to_owned();
     }
     let compact = trimmed.replace('_', "");
-    if compact.parse::<i128>().is_ok() || compact.parse::<f64>().is_ok() {
+    if let Some(value) = integer_literal(&compact) {
+        return value.to_string();
+    }
+    if compact.parse::<f64>().is_ok() {
         return compact;
     }
     let value = if let Some(value) = trimmed.strip_prefix('>') {
@@ -1095,15 +1098,16 @@ fn adaptive_literal(text: &str) -> String {
 }
 
 fn integer_literal(text: &str) -> Option<BigInt> {
-    let (radix, digits) = if let Some(digits) = text.strip_prefix("0x") {
-        (16, digits)
-    } else if let Some(digits) = text.strip_prefix("0o") {
-        (8, digits)
-    } else if let Some(digits) = text.strip_prefix("0b") {
-        (2, digits)
-    } else {
-        (10, text)
-    };
+    let (radix, digits) =
+        if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (16, digits)
+        } else if let Some(digits) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+            (8, digits)
+        } else if let Some(digits) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (2, digits)
+        } else {
+            (10, text)
+        };
     BigInt::parse_bytes(digits.as_bytes(), radix)
 }
 

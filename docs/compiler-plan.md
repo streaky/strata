@@ -271,12 +271,17 @@ Implementation status (completed on the `indentation-lexer` capability branch):
 
 Lexical diagnostics own the `L` code range and are the sole reporter of every condition listed here; the bootstrap parser keeps the `S` range for the value-level rules it still owns:
 
-```text
-L0001 invalid source character        L0006 illegal left-attached operator
-L0002 unterminated block comment      L0007 unterminated string literal
-L0003 indentation style               L0008 block string marker not final
-L0004 inconsistent dedent             L0009 invalid numeric literal
+L0001 invalid source character
+L0002 unterminated block comment
+L0003 indentation style
+L0004 inconsistent dedent
 L0005 joiner-introduced digit unit
+L0006 invalid attached operator
+L0007 malformed string literal
+L0008 block string marker not final
+L0009 invalid numeric literal
+L0010 comment delimiter inside namespace path
+L0011 whitespace around namespace separator
 ```
 
 The parser now owns grammar-defined continuation and recovery decisions. Blank and comment-only lines continue to emit terminators as part of the lossless lexical contract.

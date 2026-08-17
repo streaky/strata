@@ -1829,18 +1829,7 @@ fn validate_value_assignment(
 }
 
 fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
-    if node.kind == SyntaxKind::UnaryExpression {
-        let value = node.children.last()?;
-        let magnitude = constant_integer_from_source(source, value)?;
-        return match &source.text()[node.span.start..value.span.start] {
-            prefix if prefix.trim() == "-" => Some(-magnitude),
-            prefix if prefix.trim() == "+" => Some(magnitude),
-            _ => None,
-        };
-    }
-    (node.kind == SyntaxKind::Literal)
-        .then(|| source.text()[node.span.start..node.span.end].replace('_', ""))
-        .and_then(|text| BigInt::parse_bytes(text.as_bytes(), 10))
+    parse_integer_source_text(source, node)
 }
 fn infer_value_type(
     unit: &SemanticUnit,
@@ -2277,18 +2266,32 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
 }
 
 fn constant_integer(unit: &SemanticUnit, node: &SyntaxNode) -> Option<BigInt> {
-    let compact = node_text(&unit.source, node)
+    parse_integer_source_text(&unit.source, node)
+}
+
+fn parse_integer_source_text(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
+    let compact = source.text()[node.span.start..node.span.end]
         .chars()
         .filter(|character| !character.is_whitespace() && *character != '_')
         .collect::<String>();
     let (negative, digits) = compact
         .strip_prefix('-')
         .map_or((false, compact.as_str()), |digits| (true, digits));
-    let (radix, digits) = if let Some(digits) = digits.strip_prefix("0x") {
+    let digits = digits.strip_prefix('+').unwrap_or(digits);
+    let (radix, digits) = if let Some(digits) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         (16, digits)
-    } else if let Some(digits) = digits.strip_prefix("0o") {
+    } else if let Some(digits) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
         (8, digits)
-    } else if let Some(digits) = digits.strip_prefix("0b") {
+    } else if let Some(digits) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
         (2, digits)
     } else {
         (10, digits)

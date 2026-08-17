@@ -88,10 +88,7 @@ fn permits_a_comment_after_a_closed_quote() {
 
 #[test]
 fn compilation_failure_owns_the_original_source() {
-    let source = HELLO.replace(
-        "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
-        "print; .missing",
-    );
+    let source = "namespace app\nfunction main\n  print; .missing\n".to_owned();
     let failure = terrane_compiler::compile("owned.trn", source.clone()).unwrap_err();
     assert_eq!(failure.source.text(), source);
     assert_eq!(failure.source.path(), PathBuf::from("owned.trn").as_path());

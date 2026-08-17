@@ -2,4 +2,3 @@ package = "namespace-package"
 prelude = false
 [namespaces]
 app = "app"
-"app/support" = "app/support"

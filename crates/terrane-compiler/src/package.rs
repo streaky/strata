@@ -335,12 +335,6 @@ fn discover_source_units(
     if !errors.is_empty() {
         return Err(errors);
     }
-    if discovered.is_empty() {
-        return Err(vec![PackageLoadError::unreadable(
-            root.to_path_buf(),
-            "package namespace roots contain no `.trn` source files",
-        )]);
-    }
     let mut units = Vec::with_capacity(discovered.len());
     for (id, (relative_path, (_, expected_namespace))) in discovered.into_iter().enumerate() {
         let source_path = root.join(&relative_path);

@@ -263,7 +263,7 @@ fn lex_line(
                         .is_some_and(char::is_whitespace)
                 {
                     diagnostics.push(Diagnostic::error(
-                        "L0007",
+                        "L0010",
                         "`//` cannot begin a comment inside a namespace path",
                         Span::new(source.id(), base + start, base + start + 2),
                     ));
@@ -584,7 +584,7 @@ fn lex_line(
                     };
                     if !compact {
                         diagnostics.push(Diagnostic::error(
-                            "L0007",
+                            "L0011",
                             "namespace path separators must not have surrounding whitespace",
                             Span::new(source.id(), base + start, base + index),
                         ));

@@ -1,10 +1,17 @@
 namespace numeric-literals
+from /core/types import .int8, .uint8
+signed = .int8
+unsigned = .uint8
 function main
   adaptive = 0x10
   single float32 = 1.5
   double float64 = 2.25
   inferred = 3.5
+  signed-value signed = 0x7f
+  unsigned-value unsigned = 0xFF
   print; adaptive
   print; single
   print; double
   print; inferred
+  print; signed-value
+  print; unsigned-value

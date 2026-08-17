@@ -58,6 +58,29 @@ fn slash_is_a_namespace_separator_or_a_spaced_operator() {
 }
 
 #[test]
+fn namespace_path_lexical_failures_have_distinct_codes() {
+    let whitespace = SourceFile::new(0, "case.trn".into(), "namespace app /http".to_owned());
+    assert!(
+        lex(&whitespace)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0011")
+    );
+
+    let comment = SourceFile::new(
+        0,
+        "case.trn".into(),
+        "from /app//http import .thing".to_owned(),
+    );
+    assert!(
+        lex(&comment)
+            .unwrap_err()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "L0010")
+    );
+}
+
+#[test]
 fn required_attachment_spellings_remain_distinct() {
     assert_eq!(significant("a + b")[1].2, Attachment::Detached);
     assert_eq!(significant("-einval")[0].1, "-");
