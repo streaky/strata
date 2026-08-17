@@ -371,6 +371,35 @@ fn local_binding_may_shadow_a_namespace_binding() {
 }
 
 #[test]
+fn constants_cannot_be_reassigned() {
+    for source in [
+        "namespace app\nfunction main\n  constant limit int = 10\n  limit = 11\n",
+        "namespace app\nfunction main\n  constant limit int = 10\n  limit++\n",
+        "namespace app\nconstant limit int = 10\nlimit = 11\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2022", "{source}");
+        assert_eq!(
+            diagnostic.message, "constant binding `limit` cannot be reassigned",
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn inner_binding_may_shadow_a_constant() {
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nconstant limit int = 10\nfunction main\n  limit int = 11\n  limit = 12\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
 fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
     let analyzed = analyze(&package(
         true,

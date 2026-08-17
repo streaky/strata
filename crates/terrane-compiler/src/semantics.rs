@@ -373,6 +373,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     };
     validate_references(&semantic)?;
     analyze_types(&mut semantic)?;
+    validate_constant_reassignment(&semantic)?;
     record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
@@ -3234,6 +3235,66 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
     namespaces.insert("/core/errors".to_owned(), errors);
     namespaces.insert("/core/collections".to_owned(), Namespace::default());
     namespaces
+}
+
+fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn visit_declarations(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> Result<(), SemanticFailure> {
+        if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+            && node.children.iter().any(|child| {
+                child.kind == SyntaxKind::DeclarationQualifier
+                    && node_text(&unit.source, child) == "constant"
+            })
+            && let Some(target) = first_write_to(package, unit, node.span, &unit.tree.root)
+        {
+            let name = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name)
+                .map_or("constant", |child| node_text(&unit.source, child));
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!("constant binding `{name}` cannot be reassigned"),
+                target.span,
+            ));
+        }
+        for child in &node.children {
+            visit_declarations(package, unit, child)?;
+        }
+        Ok(())
+    }
+
+    for unit in &package.units {
+        visit_declarations(package, unit, &unit.tree.root)?;
+    }
+    Ok(())
+}
+
+fn first_write_to<'a>(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    declaration_span: Span,
+    node: &'a SyntaxNode,
+) -> Option<&'a SyntaxNode> {
+    if matches!(
+        node.kind,
+        SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+    ) && node.span != declaration_span
+        && let Some(target) = node.children.first()
+        && target.kind == SyntaxKind::Name
+        && package
+            .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+            .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
+    {
+        return Some(target);
+    }
+    node.children
+        .iter()
+        .find_map(|child| first_write_to(package, unit, declaration_span, child))
 }
 
 fn record_binding_mutability(package: &mut SemanticPackage) {
