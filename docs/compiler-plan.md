@@ -672,12 +672,18 @@ Deliver:
   `import-collision` and `private-import` import `.item` and `.secret` and must keep failing
   for the same reasons under the new spelling, while `unresolved-object` currently binds
   `print = .missing` and needs a form that still exercises an unresolved import;
+- collapse `float` and `float64` to one descriptor. They are separate `ScalarType` variants
+  today, so a value declared `float` answers `false` to `is a float64`. Point float-literal
+  inference and the `float` name at `Float64` and drop the variant; the value contract is
+  identical, so diagnostics name `float64` for either spelling and nothing downstream changes.
+  `float32` is untouched;
 - migration of every remaining fixture, golden, example, and document.
 
 Exit criterion: no source anywhere in the repository contains a leading `.` outside member
 position; a program that writes one fails with a diagnostic naming the receiver form; the
 collision, visibility, and shadowing cases fail for their original reasons under single-view
-lookup; and no compiler type carries an object-form discriminator.
+lookup; no compiler type carries an object-form discriminator; and a value declared `float`
+answers `true` to `is a float64`, with one descriptor reported by `.type` and by diagnostics.
 
 Sequencing note: milestone 4.7 changes namespace *paths* and this milestone changes *name
 forms*. Both migrate the whole corpus, so running them back to back keeps the fixture churn
