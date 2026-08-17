@@ -2555,12 +2555,37 @@ fn populate_assignment(
     {
         return Ok(());
     }
-    if namespace_binding_exists(namespaces, globals, &unit.namespace, &declaration.name) {
+    let namespace_binding = globals
+        .get(&declaration.name)
+        .filter(|symbol| symbol.kind == SymbolKind::Binding)
+        .or_else(|| {
+            namespace_chain(&unit.namespace).find_map(|path| {
+                namespaces
+                    .get(&path)
+                    .and_then(|scope| scope.ordinary.get(&declaration.name))
+                    .filter(|symbol| symbol.kind == SymbolKind::Binding)
+            })
+        });
+    if let Some(symbol) = namespace_binding {
         let name = node
             .children
             .iter()
             .find(|child| child.kind == SyntaxKind::Name)
             .expect("ordinary assignment has a name");
+        if symbol
+            .declaration_span
+            .is_some_and(|span| declaration_is_constant_in_unit(unit, span))
+        {
+            return Err(failure(
+                &unit.source,
+                "S2022",
+                format!(
+                    "constant binding `{}` cannot be reassigned",
+                    declaration.name
+                ),
+                name.span,
+            ));
+        }
         return Err(SemanticFailure {
             source: unit.source.clone(),
             diagnostics: vec![
@@ -3061,23 +3086,6 @@ fn local_binding_exists(scopes: &[LexicalScope], mut index: usize, name: &str) -
     }
 }
 
-fn namespace_binding_exists(
-    namespaces: &BTreeMap<String, Namespace>,
-    globals: &BTreeMap<String, Symbol>,
-    namespace: &str,
-    name: &str,
-) -> bool {
-    globals
-        .get(name)
-        .is_some_and(|symbol| symbol.kind == SymbolKind::Binding)
-        || namespace_chain(namespace).any(|path| {
-            namespaces
-                .get(&path)
-                .and_then(|scope| scope.ordinary.get(name))
-                .is_some_and(|symbol| symbol.kind == SymbolKind::Binding)
-        })
-}
-
 fn insert_local(
     unit: &SemanticUnit,
     scopes: &mut [LexicalScope],
@@ -3325,7 +3333,7 @@ fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), Seman
     Ok(())
 }
 
-fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
+fn declaration_is_constant_in_unit(unit: &SemanticUnit, span: Span) -> bool {
     fn find(node: &SyntaxNode, span: Span, source: &SourceFile) -> Option<bool> {
         if node.span == span {
             return Some(node.children.iter().any(|child| {
@@ -3338,12 +3346,15 @@ fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
             .find_map(|child| find(child, span, source))
     }
 
+    span.file == unit.source.id() && find(&unit.tree.root, span, &unit.source).unwrap_or(false)
+}
+
+fn declaration_is_constant(package: &SemanticPackage, span: Span) -> bool {
     package
         .units
         .iter()
         .find(|unit| unit.source.id() == span.file)
-        .and_then(|unit| find(&unit.tree.root, span, &unit.source))
-        .unwrap_or(false)
+        .is_some_and(|unit| declaration_is_constant_in_unit(unit, span))
 }
 
 #[expect(

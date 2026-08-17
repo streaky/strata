@@ -28,6 +28,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             loop_counter: 0,
             return_type: None,
             parameter_types: Vec::new(),
+            namespace_initializer: None,
         };
         for node in &unit.tree.root.children {
             match node.kind {
@@ -60,6 +61,7 @@ struct Emitter<'a> {
     loop_counter: usize,
     return_type: Option<ScalarType>,
     parameter_types: Vec<(String, ScalarType)>,
+    namespace_initializer: Option<(String, String)>,
 }
 
 #[expect(
@@ -101,6 +103,7 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             loop_counter: 0,
             return_type: None,
             parameter_types: Vec::new(),
+            namespace_initializer: None,
         };
         let value_type = unit
             .typed_bindings
@@ -151,6 +154,7 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
                 loop_counter: 0,
                 return_type: None,
                 parameter_types: Vec::new(),
+                namespace_initializer: None,
             };
             Some(initial_emitter.expression_as(initializer, ValueType::Scalar(scalar)))
         });
@@ -226,6 +230,10 @@ impl Emitter<'_> {
         ));
         true
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "namespace initialization sequencing remains auditable as one lowering operation"
+    )]
     fn namespace_binding(&mut self, node: &SyntaxNode) {
         if Self::is_compiler_object_binding(node)
             || node.children.iter().any(|child| {
@@ -234,52 +242,103 @@ impl Emitter<'_> {
         {
             return;
         }
-        let Some((name_index, name)) = node
+        let Some(name_node) = node
             .children
             .iter()
-            .enumerate()
-            .find(|(_, child)| child.kind == SyntaxKind::Name)
+            .find(|child| child.kind == SyntaxKind::Name)
         else {
             return;
         };
+        let source_name = self.text(name_node);
+        let Some(symbol) =
+            self.package
+                .resolve_ordinary_at(self.unit, name_node.span.start, source_name)
+        else {
+            return;
+        };
+        let Some(declaration_span) = symbol.declaration_span else {
+            return;
+        };
+        if symbol.global || !self.is_namespace_binding_span(declaration_span) {
+            return;
+        }
         let Some(binding) = self
             .unit
             .typed_bindings
             .iter()
-            .find(|binding| binding.span == node.span)
-            .or_else(|| {
-                (node.kind == SyntaxKind::Assignment).then(|| {
-                    self.unit.typed_bindings.iter().rev().find(|binding| {
-                        binding.name == self.text(name) && binding.span.start <= node.span.start
-                    })
-                })?
-            })
+            .find(|binding| binding.span == declaration_span)
         else {
             return;
         };
-        if matches!(binding.value_type, ValueType::TypeDescriptor(_)) {
+        let ValueType::Scalar(scalar) = binding.value_type else {
             return;
-        }
-        let Some(initializer) = binding_initializer(node, name_index) else {
+        };
+        let initializers = self
+            .unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|candidate| {
+                matches!(candidate.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+                    && !candidate.children.iter().any(|child| {
+                        child.kind == SyntaxKind::DeclarationQualifier
+                            && self.text(child) == "global"
+                    })
+            })
+            .filter_map(|candidate| {
+                let (name_index, candidate_name) = candidate
+                    .children
+                    .iter()
+                    .enumerate()
+                    .find(|(_, child)| child.kind == SyntaxKind::Name)?;
+                (self.text(candidate_name) == source_name)
+                    .then_some(binding_initializer(candidate, name_index))
+                    .flatten()
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let Some(first) = initializers.first() else {
             assert!(
                 !self.text(node).contains('='),
                 "analyzed initialized value binding must have a selected initializer"
             );
             return;
         };
-        let ValueType::Scalar(scalar) = binding.value_type else {
+        if !node.children.iter().any(|child| child.span == first.span) {
             return;
-        };
-        let ty = rust_type(scalar);
-        let value = self.expression_as(initializer, binding.value_type);
-        let name = namespace_binding_name(self.source.id(), self.text(name));
-        if matches!(scalar, ScalarType::Int | ScalarType::String) {
-            self.line(&format!(
-                "static {name}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {value});"
-            ));
-        } else {
-            self.line(&format!("static {name}: {ty} = {value};"));
         }
+
+        let ty = rust_type(scalar);
+        let storage = namespace_binding_name(declaration_span.file, source_name);
+        let local = format!("__terrane_{}_value", rust_name(source_name));
+        self.namespace_initializer = Some((source_name.to_owned(), local.clone()));
+        let values = initializers
+            .iter()
+            .map(|initializer| self.expression_as(initializer, binding.value_type))
+            .collect::<Vec<_>>();
+        self.namespace_initializer = None;
+        if values.len() == 1 {
+            self.line(&format!(
+                "static {storage}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {});",
+                values[0]
+            ));
+            return;
+        }
+        self.line(&format!(
+            "static {storage}: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {{"
+        ));
+        self.indent += 1;
+        self.line(&format!("let mut {local} = {};", values[0]));
+        for value in &values[1..] {
+            self.line(&format!(
+                "{local} = {};",
+                Self::unwrapped_expression(value.clone())
+            ));
+        }
+        self.line(&local);
+        self.indent -= 1;
+        self.line("});");
     }
     fn function(&mut self, node: &SyntaxNode) {
         let contract = self
@@ -811,7 +870,7 @@ impl Emitter<'_> {
             .then(|| Self::discarded_expression(self.expression(effect)))
     }
 
-    fn discarded_expression(mut expression: String) -> String {
+    fn unwrapped_expression(mut expression: String) -> String {
         loop {
             let bytes = expression.as_bytes();
             if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
@@ -831,7 +890,11 @@ impl Emitter<'_> {
             }
             expression = expression[1..expression.len() - 1].to_owned();
         }
-        format!("let _ = {expression};")
+        expression
+    }
+
+    fn discarded_expression(expression: String) -> String {
+        format!("let _ = {};", Self::unwrapped_expression(expression))
     }
 
     fn value_type(&self, node: &SyntaxNode) -> Option<ValueType> {
@@ -1070,6 +1133,13 @@ impl Emitter<'_> {
 
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
+        if let Some((_, local)) = self
+            .namespace_initializer
+            .as_ref()
+            .filter(|(name, _)| name == source_name)
+        {
+            return local.clone();
+        }
         let Some(symbol) =
             self.package
                 .resolve_ordinary_at(self.unit, node.span.start, source_name)
@@ -1120,6 +1190,13 @@ impl Emitter<'_> {
     }
 
     fn lazy_namespace_binding_type(&self, node: &SyntaxNode) -> Option<ValueType> {
+        if self
+            .namespace_initializer
+            .as_ref()
+            .is_some_and(|(name, _)| name == self.text(node))
+        {
+            return None;
+        }
         let symbol =
             self.package
                 .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
@@ -1137,12 +1214,6 @@ impl Emitter<'_> {
             .iter()
             .find(|binding| binding.span == span)
             .map(|binding| binding.value_type)
-            .filter(|value_type| {
-                matches!(
-                    value_type,
-                    ValueType::Scalar(ScalarType::Int | ScalarType::String)
-                )
-            })
     }
 
     fn is_namespace_binding_span(&self, span: crate::Span) -> bool {
