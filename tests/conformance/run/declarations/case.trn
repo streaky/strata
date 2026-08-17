@@ -11,3 +11,8 @@ function main
   if true
     block-value int = 300
     print; block-value
+  if false
+    print; >no
+  else
+    else-value int = 400
+    print; else-value

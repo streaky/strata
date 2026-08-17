@@ -574,15 +574,20 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
 fn nested_blocks_record_and_confine_their_own_bindings() {
     for source in [
         "namespace app\nfunction main\n  if true\n    nested int = 1\n    print; nested\n",
+        "namespace app\nfunction main\n  if false\n    print; >no\n  else\n    nested int = 2\n    print; nested\n",
         "namespace app\nfunction main\n  while false\n    nested int = 1\n    print; nested\n",
         "namespace app\nfunction main\n  text string = 'a'\n  for character in text\n    nested int = 1\n    print; nested\n",
     ] {
         analyze(&package(true, &[("main.trn", source)])).unwrap();
     }
 
-    let source = "namespace app\nfunction main\n  if true\n    nested int = 1\n  print; nested\n";
-    let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
-    assert_eq!(failure.diagnostics[0].code, "S2013");
+    for source in [
+        "namespace app\nfunction main\n  if true\n    nested int = 1\n  print; nested\n",
+        "namespace app\nfunction main\n  text string = 'a'\n  for character in text\n    block-scoped int = 1\n  print; block-scoped\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "S2013");
+    }
 }
 
 #[test]

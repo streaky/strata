@@ -280,6 +280,7 @@ function connect; host string, port int, timeout int = 10; connection
 - [redeclaration-same-type] identical type => an assignment with a redundant annotation; an outstanding ref observes the new value, since the storage is the same.
 - [redeclaration-retype] type changes => the binding's type changes, and the replaced value is RELEASED at that point, after its initializer is evaluated. Deterministic and earlier than scope exit: nothing can name the old value again, so retaining it would hold a resource the program cannot reach.
 - [redeclaration-v1-limit] a type-changing replacement is REJECTED while an outstanding ref observes the binding (and, once closures exist, a capture); retyping what another scope holds must not happen without something explicit there. See DEFERRED.
+- [block-scope] Function bodies and every indented control-flow body create lexical scopes. A nested declaration is visible through that body and deeper scopes, never in sibling bodies or after exit; its value is released on each exit. A `for` target spans its loop body only. A nearer declaration shadows until exit, while untyped assignment to an enclosing name assigns that existing binding.
 - Function return type follows parameter section.
 - Default value makes parameter optional; required parameters precede optional ones; variadic captures remaining values.
 - Named arguments require stable exposed parameter names.

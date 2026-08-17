@@ -16,4 +16,10 @@ fn main() {
         let block_value: terrane_int_support::Int = terrane_int_support::Int::from(300_i128);
         println!("{}", terrane_scalar_support::scalar_text(&(block_value)));
     }
+    if false {
+        println!("{}", terrane_scalar_support::scalar_text(&(String::from("no"))));
+    } else {
+        let else_value: terrane_int_support::Int = terrane_int_support::Int::from(400_i128);
+        println!("{}", terrane_scalar_support::scalar_text(&(else_value)));
+    }
 }

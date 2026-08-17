@@ -1564,6 +1564,8 @@ Replacement of an identical type is an assignment carrying a redundant annotatio
 
 Version one rejects a type-changing replacement while an outstanding reference observes the binding. Retyping a value that another scope holds a reference to would change that scope's view of it without anything explicit appearing there. See §42 for the direction this leaves open.
 
+Function bodies and every indented control-flow body create lexical scopes. A binding declared in an `if`, `else`, loop, or other nested body is visible from its declaration through the end of that body, including deeper scopes, but not in a sibling body or after the body exits. A `for` target belongs to the loop's lexical scope: it is visible in the loop body and unavailable after the loop. Declaring a nearer name shadows an enclosing binding only until the nested scope exits; an untyped assignment to a name already found in an enclosing scope assigns that binding rather than declaring a shadow. Values owned by a nested scope are released on each exit from that scope, so a loop-body local is released on every iteration.
+
 ```terrane
 cpu int
 

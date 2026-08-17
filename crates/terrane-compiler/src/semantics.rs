@@ -2774,6 +2774,21 @@ fn populate_node(
                 )?;
             }
         }
+        SyntaxKind::ElseClause => {
+            for child in &node.children {
+                if child.kind == SyntaxKind::Block {
+                    add_lexical_scope(
+                        unit,
+                        namespaces,
+                        globals,
+                        scopes,
+                        child,
+                        Some(index),
+                        false,
+                    )?;
+                }
+            }
+        }
         _ => {
             for child in &node.children {
                 if child.kind == SyntaxKind::Block {
@@ -2786,6 +2801,8 @@ fn populate_node(
                         Some(index),
                         false,
                     )?;
+                } else if child.kind == SyntaxKind::ElseClause {
+                    populate_node(unit, namespaces, globals, scopes, index, child)?;
                 }
             }
         }
