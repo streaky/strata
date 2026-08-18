@@ -1,5 +1,4 @@
 namespace hello
-from /core/output import print
-missing
+from /core/output import missing
 function main
   print; 'hello'

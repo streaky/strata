@@ -278,7 +278,7 @@ impl Parser<'_> {
 
     fn parse_binding(&mut self) -> SyntaxNode {
         let start = self.position;
-        let mut children = self.parse_declaration_modifiers();
+        let mut children = Vec::new();
         self.parse_visibility(&mut children);
         let mut qualifier_seen = false;
         while matches!(self.text(), "global" | "constant") {
@@ -323,7 +323,7 @@ impl Parser<'_> {
 
     fn parse_function(&mut self) -> SyntaxNode {
         let start = self.position;
-        let mut children = self.parse_declaration_modifiers();
+        let mut children = Vec::new();
         self.parse_visibility(&mut children);
         let mut qualifiers = 0u8;
         while matches!(self.text(), "static" | "async" | "mutating" | "throws") {
@@ -991,27 +991,6 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_declaration_modifiers(&mut self) -> Vec<SyntaxNode> {
-        let mut modifiers = Vec::new();
-        while self.at(TokenKind::Dot) {
-            let start = self.position;
-            self.bump();
-            let object = if self.at(TokenKind::Identifier) {
-                self.leaf(SyntaxKind::Name)
-            } else {
-                self.error_here("S1029", "expected a declaration modifier name");
-                self.node(SyntaxKind::Error, start, self.position, Vec::new())
-            };
-            modifiers.push(self.node(
-                SyntaxKind::DeclarationModifier,
-                start,
-                self.position,
-                vec![object],
-            ));
-        }
-        modifiers
-    }
-
     fn parse_visibility(&mut self, children: &mut Vec<SyntaxNode>) {
         if matches!(self.text(), "public" | "private" | "protected") {
             children.push(self.leaf(SyntaxKind::Visibility));
@@ -1025,12 +1004,6 @@ impl Parser<'_> {
     fn looks_like_binding(&self) -> bool {
         let mut offset = 0usize;
         let mut has_prefix = false;
-        while self.peek_kind(offset) == Some(TokenKind::Dot)
-            && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
-        {
-            has_prefix = true;
-            offset += 2;
-        }
         if matches!(
             self.peek_text(offset),
             Some("public" | "private" | "protected")
@@ -1042,30 +1015,18 @@ impl Parser<'_> {
             has_prefix = true;
             offset += 1;
         }
-        (self.peek_kind(offset) == Some(TokenKind::Identifier)
+        self.peek_kind(offset) == Some(TokenKind::Identifier)
             && !matches!(self.peek_text(offset + 1), Some("in" | "is" | "and" | "or"))
             && (self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
                 || (has_prefix
                     && matches!(
                         self.peek_kind(offset + 1),
                         Some(TokenKind::Assign | TokenKind::Newline)
-                    ))))
-            || (has_prefix
-                && self.peek_kind(offset) == Some(TokenKind::Dot)
-                && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
-                && matches!(
-                    self.peek_kind(offset + 2),
-                    Some(TokenKind::Assign | TokenKind::Newline)
-                ))
+                    )))
     }
 
     fn looks_like_function_declaration(&self) -> bool {
         let mut offset = 0usize;
-        while self.peek_kind(offset) == Some(TokenKind::Dot)
-            && self.peek_kind(offset + 1) == Some(TokenKind::Identifier)
-        {
-            offset += 2;
-        }
         if matches!(
             self.peek_text(offset),
             Some("public" | "private" | "protected")

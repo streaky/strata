@@ -118,9 +118,6 @@ fn classify_node(
         SyntaxKind::TypeExpression => {
             classify_names(node, tokens, classified, HighlightKind::Type, false);
         }
-        SyntaxKind::ObjectName => {
-            classify_names(node, tokens, classified, HighlightKind::Property, false);
-        }
         SyntaxKind::Parameter => {
             if let Some(name) = node
                 .children
@@ -143,14 +140,9 @@ fn classify_node(
             if let Some(name) = node
                 .children
                 .iter()
-                .find(|child| matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName))
+                .find(|child| child.kind == SyntaxKind::Name)
             {
-                let kind = if name.kind == SyntaxKind::ObjectName {
-                    HighlightKind::Property
-                } else {
-                    HighlightKind::Variable
-                };
-                classify_names(name, tokens, classified, kind, true);
+                classify_names(name, tokens, classified, HighlightKind::Variable, true);
             }
         }
         SyntaxKind::MemberExpression => {
