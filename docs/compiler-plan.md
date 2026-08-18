@@ -761,6 +761,84 @@ shadowing. The conformance corpus, unit fixtures, generated-Rust goldens, and ex
 use the canonical spellings.
 
 
+### Milestone 4.9 — Numeric destination conversion and contextual constant arithmetic
+
+The specification previously required an explicit `coerce` at every numeric type crossing and
+confined contextual constant typing to fixed-width binding initializers. Both have been replaced by
+one rule: a numeric value reaching a declared numeric destination arrives exactly or throws, and a
+constant expression is evaluated in the arithmetic its destination or typed operand selects. This
+milestone implements that rule across semantics and lowering, and migrates the corpus that was
+written against the old one.
+
+Deliver:
+
+- constant-expression evaluation in destination context. An integer destination folds the whole
+  expression exactly with unbounded intermediates, including Euclidean `/`, and checks only the final
+  value; a floating destination folds operation by operation at destination precision so the result
+  matches runtime arithmetic. Admission tests the value a constant denotes rather than its spelling,
+  so `count int = 4.0` is `4`, `count int = 4.2` is rejected, and `ratio float = 1 / 3` performs
+  floating division. The existing single-literal parser and `T0003` range check generalise into this;
+  parenthesised and folded constant expressions are specified today and not implemented;
+- the destination-context set: typed binding initialization and assignment, parameter default,
+  argument matched to a declared parameter, return against a declared return type, and declared
+  element or field. Arguments and returns currently reject admissible constants at `T0012` and
+  `T0015`;
+- operand context. A constant takes the type of a statically typed numeric operand, with shift counts
+  exempt and governed by §17.6. Two integer values of different concrete types promote to the
+  smallest integer type containing both source ranges, or `int` where no fixed width does. Integer
+  and floating value mixtures, and unrelated categories, stay rejected;
+- numeric destination conversion as one predicate over source and destination ranges: exact widening
+  lowers to a representation change with no check and no failure path; every other pair is admitted
+  with a check that throws `integer-conversion-overflow`. This covers integer narrowing, integer to
+  floating where the value must be exactly representable, and floating to integer where it must be
+  finite, integral, and in range. Acceptance is decided by declared types and constant evaluation
+  alone — range knowledge may delete a check and must never decide validity;
+- the floating rounding members `round`, `floor`, `ceiling`, and `truncate`, each yielding an
+  integer, with `round` pinned to ties-to-even. No floating-to-integer pair is declared on `coerce`,
+  because selecting an integer for a fractional value requires a mode and `coerce` takes none;
+- union destination selection: exact type match first, otherwise the unique admitting arm, otherwise
+  a compile-time ambiguity naming the candidates. Arm order never decides;
+- `is a` against a numeric constant answers whether the constant can become that type, returning
+  `false` for an inadmissible one rather than raising the constant-range error a destination would.
+  A typed operand keeps type membership. Independently of that rule, `is a` must resolve its
+  right-hand side: an unresolvable name currently answers `false` instead of failing at its span,
+  which is a resolution defect rather than the absent category descriptors of milestone 7;
+- numeric lowering that matches the source contract. A contextual constant materialises directly in
+  its destination representation; an exact widening selects the `int` tier from the source range and
+  emits no check; a checked conversion narrows, widens back, compares, and branches. An implicit
+  narrowing and an equivalent written `coerce` emit equivalent code, and neither routes a statically
+  known fixed-width source through the generic support-crate conversion behind `unwrap_or_fail`. A
+  statically known `int` binding in the Small tier lowers to a machine word rather than constructing
+  the erased wrapper and cloning it per operand;
+- migration of every fixture, golden, example, and demo written against required coercion, including
+  the coercions the new rule makes unnecessary.
+
+Exit criterion: a function declaring a fixed-width return compiles `return 1` and lowers it to a
+bare literal with no support-crate call; the Mandelbrot demo compiles without a companion binding
+per literal and without a written coercion; `a int8 = 12` followed by `a int = a` compiles and runs,
+and the written form still compiles; `wide int32 = small` emits no check while `narrow; 128` through
+an `int8` contract throws `integer-conversion-overflow` naming the value and destination;
+`total float = count` runs for an `int32` count with no check, and throws at `2^53 + 1` while
+succeeding at `2^54`; `count int = ratio` yields `4` from `4.0` and throws from `4.2`, `nan`, and
+both infinities, while `ratio.round` yields `4` from `4.2`; `count int = (1 / 3)` and
+`ratio float = (1 / 3)` print `0` and the floating quotient in one program; `limit int8 = (1000 -
+900)` compiles; a constant out of range reports `T0003` at the constant's span in argument, return,
+and operand position; `flags int8 = 1` with `flags << 200` reports an out-of-width shift count rather
+than a constant-range error; `left int8 + right int` computes in `int` while `counter int8 = 127`
+with `counter + 1` throws `arithmetic-overflow`; a fixed-width value in an `int|none` destination
+widens while the constant `5` in `int8|int32` is rejected as ambiguous; and `is a` fails at its span
+on an unresolvable right-hand name.
+
+Deferred out of this milestone and recorded in specification §40.9: the exact-arrival predicate for a
+typed value, proposed as `value.fits; Destination`; the statically false `is a` lint and the lossy
+constant-division lint; whether `integer-conversion-overflow` keeps a name that now covers neither
+only integers nor only overflow. Abstract category descriptors remain milestone 7, so `is a integer`
+is not answered here.
+
+Sequencing note: this is semantic and lowering work inside the existing pipeline, not the Rust IR
+rework. It precedes milestone 5 so that the IR is built against the settled numeric contract rather
+than being retrofitted to it, and so the corpus migrates once.
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:
@@ -1280,12 +1358,14 @@ all use the single-view name model. Permanent run cases compile and execute anno
 lexical replacement and same-type reassignment, while focused rejected cases preserve
 assignment-type compatibility at lexical and namespace scope.
 
-The next work in order is milestone 5. Its boundary is Rust IR, readable deterministic emission,
-and Cargo builds; later language features remain staged by their own milestones. The minimal
+The next work in order is milestone 4.9, which implements the numeric destination and contextual
+constant rules now settled in the specification. Milestone 5 follows, with its boundary at Rust IR,
+readable deterministic emission, and Cargo builds; later language features remain staged by their own
+milestones. The minimal
 collection subset remains explicitly deferred: `/core/collections` is an empty reserved namespace
 until iterator and collection support arrives in milestones 13 and 14.
 
-Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
+Every item above is implementation; the only open questions are the naming and diagnostic surfaces milestone 4.9 defers to specification §40.9, and no semantics wait on them. The conversion boundary is settled: a declared numeric destination performs its own exact-or-throw conversion, `coerce` selects a policy other than that default and never takes options, the floating rounding members name their mode, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 
 ## 13. Definition of done
 
