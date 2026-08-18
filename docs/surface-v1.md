@@ -27,6 +27,8 @@ A type attachment such as `integer -> coerce` means every value satisfying `inte
 
 Terrane says that everything is an object semantically, but it should not force every value into one boxed runtime class. The following is the source-visible contract hierarchy; the compiler may lower any statically known leaf directly to native Rust.
 
+A numeric constant expression is temporarily contextual rather than a third runtime numeric object: its whole-number or decimal spelling denotes an exact mathematical constant, and a destination or typed numeric operand selects the descriptor and arithmetic with which it materialises. Outside such a context, whole-number constants become `int` and decimal constants become `float`.
+
 ```text
 object
 +-- semantic-descriptor                         identity-bearing
@@ -98,7 +100,7 @@ integer protocol/interface
     +-- per-width/per-signedness descriptor data
 ```
 
-This gives us real inheritance of contracts and implementation traits without claiming that distinct numeric source types are assignment-compatible.
+This gives us real inheritance of contracts and implementation traits without claiming substitutability among distinct numeric source types. A declared numeric destination may still accept another numeric type under the separate exact-or-throw destination rule below.
 
 ## 2. Universal protocols and members
 
@@ -216,7 +218,37 @@ print
 int float bool string bytes none
 ```
 
-Fixed-width numeric descriptors and collection constructors remain explicit imports. Abstract protocol descriptors should likewise not flood the prelude.
+Fixed-width numeric descriptors, abstract protocol descriptors, and collection constructors are not ordinary prelude bindings, so they do not flood value-name lookup. They are compiler-owned descriptor constructs usable directly in construct positions; explicit import remains available when a source scope needs rebinding, aliasing, or shadowing.
+
+### 4.1 Numeric context and destinations
+
+Numeric constants materialise in a type selected by context:
+
+```text
+contextual numeric constant
++-- typed binding initialization or assignment
++-- declared parameter default, function argument, or return
++-- declared collection element or object field
++-- arithmetic with one typed numeric operand
+```
+
+For an integer destination, the compiler folds the complete constant expression exactly with unbounded intermediates and checks only the final value. For a floating destination, it performs each operation at destination precision with round-to-nearest, ties-to-even, so folding matches runtime floating arithmetic rather than rounding an exact result once. Finite decimal or non-integral results may round normally, but an integral whole-number value must be exactly representable. A constant admitted this way is materialised directly; it does not perform a runtime conversion.
+
+For runtime values, a single declared numeric destination accepts any numeric source and preserves the exact mathematical value or throws:
+
+```text
+numeric destination
++-- range-contained widening                  exact; no representability check/conversion error
++-- checked integer narrowing                 integer-conversion-overflow on failure
++-- integer -> floating                       exact representability or failure
++-- floating -> integer                       finite, integral, in range or failure
+```
+
+Widening into adaptive `int` still chooses a physical tier. Sources through signed `int64` and unsigned `uint32` fit Small, `uint64` through `int128` fit Wide, and `uint128` selects Wide below $2^{127}$ or Big otherwise. Creating Big storage may have the ordinary allocation effect, but representability cannot fail.
+
+This rule applies to typed assignment, arguments, returns, collection elements, and object fields. It is not weak coercion and does not make distinct numeric types substitutable. Range analysis may remove a redundant check but never changes whether a source/destination pair is legal. Union destinations choose an exact match first, then the unique arm admitting the value; multiple admitted arms are a compile-time ambiguity rather than an arm-order rule.
+
+With one typed numeric operand, a numeric constant takes that operand's type; shift counts are exempt. Differently typed integer runtime values promote to the smallest integer type containing both source ranges, falling back to adaptive `int`. Integer/floating runtime mixtures and unrelated categories remain rejected without a written policy conversion.
 
 ## 5. Scalar method attachment map
 
@@ -242,16 +274,28 @@ Attachment and gating:
 |---|---|---|---|---|
 | `int` | every integer; floating | fixed integer; floating | fixed integer only | fixed integer only |
 | fixed integer | every integer; floating | fixed integer; floating | fixed integer only | fixed integer only |
-| floating | floating; integer under an explicitly named rounding operation | the same fallible destinations | absent | bounded numeric destinations where meaningful |
+| floating | floating only | floating only | absent | absent |
 | `string` | numeric destinations, from the canonical base-ten text spelling | the same numeric destinations | absent | absent |
 | `bool` | integer destinations: `false` is `0`, `true` is `1`, total and lossless | not applicable; the conversion cannot fail | absent | absent |
 | `bytes` | absent — text and bytes convert only through an explicit encoding object | absent | absent | absent |
 | `none` | absent | absent | absent | absent |
 | collection | declared sequence/map/set contracts with a statically known item conversion | the same declared destinations | absent | absent |
 
-Integer to floating rounds to nearest, ties to even, and throws when the magnitude falls outside the destination's finite range rather than yielding an infinity. Integer to `bool` is *not* a conversion: it is a predicate choice and must be written as a comparison. Number to `string` uses the canonical text/display operation that `print` consumes, not `coerce`. No conversion substitutes a default value for a failure; a total substitute-on-failure conversion is permitted only as a separately named child.
+Written integer-to-floating `coerce` deliberately selects IEEE round-to-nearest, ties to even, and throws when the magnitude falls outside the destination's finite range rather than yielding an infinity. This differs from an unwritten numeric destination, which admits only an exactly representable result. A finite, integral, in-range floating value reaches an integer destination directly under the exact-or-throw rule; a fractional value throws. To choose approximation instead, the author first selects `round`, `floor`, `ceiling`, or `truncate`, and the resulting integer then crosses its destination under the same rule. An out-of-range written floating conversion throws `coercion-error`.
 
-Conversions are declared per source/destination pair rather than universal, so an undeclared pair is absent from the type rather than a runtime failure.
+`wrap` and `saturate` are absent from a floating receiver for the same reason its integer destinations are: every one would have to answer what integer a fractional value becomes, and that mode belongs in a name rather than in a policy child of `coerce`.
+
+```text
+floating
++-- round    -> int    nearest, ties to even
++-- floor    -> int    toward negative infinity
++-- ceiling  -> int    toward positive infinity
++-- truncate -> int    toward zero
+```
+
+Integer to `bool` is *not* a conversion: it is a predicate choice and must be written as a comparison. Number to `string` uses the canonical text/display operation that `print` consumes, not `coerce`. No conversion substitutes a default value for a failure; a total substitute-on-failure conversion is permitted only as a separately named child.
+
+Conversions are declared per source/destination pair rather than universal, so an undeclared pair is absent from the type rather than a runtime failure. Written coercion chooses a policy that differs from the exact-or-throw numeric destination rule; it is not ceremony for satisfying a numeric annotation.
 
 ```text
 source.parse
@@ -579,6 +623,7 @@ error                                              structural interface; all cat
 /core/errors::integer-conversion-overflow
 +-- source value/type
 +-- destination type
++-- failed exactness condition                    range, fractional part, non-finite value, or float precision
 
 /core/errors::negative-shift-count
 +-- attempted count
@@ -656,7 +701,7 @@ All user-declared names are lowercase kebab-case. Uppercase parses and is then r
 
 The namespace tree corresponds to a directory tree; a declaration disagreeing with its location is an error unless the manifest declares that mapping. The manifest maps a namespace root to a directory root, longest prefix wins, and a dependency's namespaces come from its own manifest rather than from scanning its tree.
 
-**Most programs need no imports at all.** The prelude supplies `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none` as ordinary bindings, and every descriptor is a construct available without import. This is a complete program:
+**Most programs need few imports.** The prelude supplies `print`, `int`, `float`, `bool`, `string`, `bytes`, and `none` as ordinary bindings. Other compiler-owned descriptors are constructs available directly in construct positions without becoming ordinary prelude values. This is a complete program:
 
 ```terrane
 namespace demo
@@ -666,7 +711,7 @@ function main
   print; value
 ```
 
-Importing `print` or `int8` is redundant. Explicit import remains available for rebinding, aliasing, and shadowing, and the examples below use it because they are specifically about importing.
+Importing `print` or `int8` is redundant for direct use. Explicit import remains useful for rebinding, aliasing, and shadowing, and the examples below use it to make that boundary visible.
 
 The import is also the only place a name may be renamed. An ordinary binding never aliases a
 construct — `byte = int8` and `user-type = user` are rejected, `from /core/types import int8 as byte`

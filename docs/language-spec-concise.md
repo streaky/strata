@@ -276,7 +276,7 @@ function connect; host string, port int, timeout int = 10; connection
 - Type expression follows binding/parameter name.
 - A typed binding may omit its initializer (`name string`); flow-sensitive definite assignment must prove a value before any read, reference, member access, argument pass, or capture.
 - [binding-initialization-dependencies] An initializer resolves against the scope as it stands immediately BEFORE its declaration, so the declared name is not in scope from its own initializer. Where nothing else binds that name, reading it — directly or through a called function — is a compile-time error naming the absent binding. Namespace initializer dependencies, including later namespace-level assignments folded into initialization, must be statically acyclic and rejected before lowering when they form a cycle.
-- [redeclaration] Where the name is already bound in the SAME LEXICAL scope, the initializer reads the earlier binding and the declaration REPLACES it: 'a int8 = 12' then 'a int = a.coerce; int'. One name means one thing at each point in a scope, read top to bottom. Lexical only — a namespace top-level declaration may not replace another, because namespace initialization is ordered by dependency, not source position.
+- [redeclaration] Where the name is already bound in the SAME LEXICAL scope, the initializer reads the earlier binding and the declaration REPLACES it: `a int8 = 12` then `a int = a`. One name means one thing at each point in a scope, read top to bottom. Lexical only — a namespace top-level declaration may not replace another, because namespace initialization is ordered by dependency, not source position.
 - [redeclaration-same-type] identical type => an assignment with a redundant annotation; an outstanding ref observes the new value, since the storage is the same.
 - [redeclaration-retype] type changes => the binding's type changes, and the replaced value is RELEASED at that point, after its initializer is evaluated. Deterministic and earlier than scope exit: nothing can name the old value again, so retaining it would hold a resource the program cannot reach.
 - [redeclaration-v1-limit] a type-changing replacement is REJECTED while an outstanding ref observes the binding (and, once closures exist, a capture); retyping what another scope holds must not happen without something explicit there. See DEFERRED.
@@ -338,13 +338,13 @@ constructor: 'list of string'; arguments classified semantically as type or comp
 function_type: 'function from A, B to R'; associates right
 ```
 
-- Values always have types; unconstrained binding may be dynamic without weakening values.
-- No implicit cross-type arithmetic/coercion.
-- Explicit coercion is object-driven.
-- Abstract descriptors are interface/category contracts exported from `/core/types`, never prelude names. `int` implements `integer` and `number`; fixed widths add `fixed-integer` plus their signedness contract; `float`/`float32`/`float64` implement `floating` and `number`. Conformance drives member attachment and finite-union reasoning; it creates no implicit assignment conversion and no storage supertype.
+- Values always have types; an unconstrained binding may be dynamic without weakening values. Numeric constant expressions are the exception before context: their spelling denotes a mathematical constant but a destination or typed operand selects its numeric type and arithmetic.
+- Numeric values cross a single declared destination exactly or throw; mixed integer values promote exactly. Arithmetic across integer/floating values or unrelated categories remains rejected without an explicit policy conversion.
+- Written coercion is object-driven and selects a different conversion policy; it is not permission merely to satisfy a numeric destination.
+- Abstract descriptors are interface/category contracts exported from `/core/types`, never prelude names. `int` implements `integer` and `number`; fixed widths add `fixed-integer` plus their signedness contract; `float`/`float32`/`float64` implement `floating` and `number`. Conformance drives member attachment and finite-union reasoning; it creates no storage supertype.
 - Type violations compile-time when provable.
 - Conditions invoke truth protocol.
-- `==` value equality; `is` source-visible identity; `is a` type membership/assignability. `===` invalid.
+- `==` value equality; `is` source-visible identity; `is a` type membership, not numeric destination convertibility. A typed `int8` value is not an `int`; a numeric constant uses the queried type as context, so `42 is a int8` is true and an inadmissible constant answers false rather than failing. `===` invalid.
 - `c is a` is identity against binding `a`; `c is a widget` is membership when complete type follows.
 - Ordinary scalars/strings/collections are identity-less: `is` is false even for `x is x` and `42 is 42`. Only explicit refs, linear resources, and canonical descriptors carry identity. Exact-type-and-value comparison is `left == right and left.type is right.type`.
 - Type descriptors are language constructs backed by canonical compiler-owned objects, not independently instantiated values.
@@ -362,6 +362,8 @@ backing_object: real - type returns it, 'is a' compares it, identity survives re
 ```
 
 - Type descriptors are semantic objects with stable canonical identity, not ordinary values. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
+
+Union destinations choose an exact type match first, otherwise the unique arm admitted by contextual constant typing or numeric destination conversion. Multiple admitted arms are a compile-time ambiguity; arm order never decides.
 
 ## INTEGER
 
@@ -383,8 +385,10 @@ negative_shift: throws negative-shift-count
 - Small multiplication computes exact `i128` intermediate; wider operations preserve exactness.
 - Division by zero throws `division-by-zero`.
 - Fixed widths require explicit `checked`/`wrap`/`saturate`/`overflowing` family children, never host build-mode behavior; fixed-width shift counts need their own source-language contract rather than inherited host behavior.
-- Whole-number constant expressions are contextually range-checked as fixed-width values only when they initialize a typed binding. A syntactically negated minimum is accepted (`-128` as `int8`, `-2^127` as `int128`) without first rejecting its positive magnitude. Call arguments and return expressions remain unconstrained `int` values and require explicit coercion to satisfy fixed-width contracts; this is not general implicit assignment conversion.
-- Conversions are explicit through the `coerce` method family.
+- A constant expression is a literal, unary-negated literal, parenthesised constant, or compile-time arithmetic combination. Its whole-number/decimal spelling does not fix a type. Typed binding initialization or assignment, a parameter default, a declared argument or return, a declared element or field, and a typed numeric operand supply context.
+- Integer constant folding uses exact arithmetic with unbounded intermediates and checks only the final destination value. Floating folding performs each operation at destination precision, matching runtime arithmetic rather than rounding an exact result once; finite decimal/non-integral results may round normally, but an integral whole-number value must be exactly representable. An admitted constant materialises directly with no conversion/check. Outside context, whole-number constants are `int` and decimal constants are `float`.
+- With one typed numeric operand, a constant takes that type; shift counts are exempt. Two differently typed integer values promote to the smallest integer type containing both source ranges, or `int`. Integer/floating value mixtures remain rejected.
+- Numeric destinations admit every numeric source exactly or throw: range-contained widening has no representability check or conversion-error path; narrowing checks; integer-to-float requires exact representability; float-to-integer requires finite, integral, in-range input. Declared types and constant evaluation decide acceptance; range analysis may remove checks, never decide it.
 - Named arithmetic families attach to `integer`: `add`, `subtract`, `multiply`, `divide`, `remainder`, `div-rem`, `negate`, `shift-left`, `shift-right`. Operators invoke each family's default child.
 
 ```yaml
@@ -407,11 +411,16 @@ postfix_policy: they select the default add/subtract child only; other policies 
 form: receiver family/policy; 'value.coerce; destination-type' | 'value.coerce.checked; destination-type'
 family: invocation is the throwing default | coerce.checked | coerce.wrap | coerce.saturate
 default_child: 'default' exists in compiler metadata for reflection only; source lookup of 'default' is rejected
-integer_to_integer: per full spec §17.7; fixed-width-to-int always exact but still explicit
-fixed_to_int: exact, explicit, cannot overflow
-to_float: IEEE-754 round-to-nearest, ties-to-even
-inexact_float: ordinary result, NOT an error; precision loss shown by destination type
-float_out_of_range: throws coercion-error; never yields an infinity
+implicit_numeric_destination: assignment/argument/return/element/field accepts exactly or throws; no written coerce required
+exact_widening: source range contained by destination exact values; representation change, no representability check/conversion-error path
+checked_narrowing: direct representability check; integer destination failure throws integer-conversion-overflow
+float_to_integer: succeeds only for finite, integral, in-range values; otherwise integer-conversion-overflow
+integer_to_float_implicit: succeeds only when this integer is exactly representable; otherwise throws
+integer_to_float_written: 'value.coerce; float-type' requests IEEE round-to-nearest, ties-to-even; inexact result is ordinary
+fixed_to_int: exact; int8..int64 and uint8..uint32 fit Small, uint64..int128 fit Wide, uint128 uses Wide below 2^127 or Big otherwise; Big may have an ordinary allocation failure but no conversion error
+float_to_integer_written: NO declared coerce pair - choosing an integer for a fractional value needs a rounding mode and coerce never takes one; 'ratio.coerce; int' is absent while 'count int = ratio' is admitted
+float_rounding_members: round (ties-to-even) | floor | ceiling | truncate; each yields an integer before destination conversion
+float_out_of_range: written coerce throws coercion-error; never yields an infinity
 string_parse: accepts exactly the destination's canonical text-display spelling
 coerce_options: NONE - coerce takes only its destination; it must never grow radix or format arguments
 parse_family: 'value.parse; callback' - the callback is REQUIRED; there is no built-in destination-owned parse
@@ -430,6 +439,7 @@ callback: caller-supplied conversion callback admitted for undeclared pairs; req
 locale_parse: imported formatting facilities only, never coerce
 universality: no guarantee any type coerces to any other
 destination: version-one destinations resolve to finite compiler-known descriptors
+lowering: contextual constants materialise directly; widening changes representation; checked conversion narrows/widens-back/compares; equivalent implicit and written integer narrowing emit equivalent checks
 ```
 
 - The receiver evaluates once before policy selection and destination arguments. The whole call resolves policy availability statically; a selected family is not a storable bound-method value in version one.
@@ -505,7 +515,7 @@ finally
 ```text
 arithmetic-overflow          checked fixed-width result outside receiver range, incl. signed MIN / -1
 division-by-zero             zero divisor for / % div-rem, every integer type and mode
-integer-conversion-overflow  coerce to a fixed-width integer cannot represent the source value
+integer-conversion-overflow  exact-or-throw numeric arrival cannot preserve the source value: integer out of range, fractional/NaN/infinite float into an integer, or an integer not exactly representable by a float. Name is broader than 'integer'/'overflow'; see OPEN
 negative-shift-count         negative shift count on unbounded int << >>
 coercion-error               coercion has no compatible result outside the overflow case above
 ```
@@ -760,7 +770,7 @@ const                     -> invalid declaration word; use `constant`
 Priority: these override examples/lowering sketches/plans. Condensed from full spec §41:
 
 1. Everything semantic is object; representation can specialize invisibly.
-2. Values always typed; dynamic != weak coercion; constraints optional/local/real; coercion explicit.
+2. Values are typed once context fixes them; dynamic != weak coercion; constraints optional/local/real. Numeric constants take destination/operand arithmetic, numeric destinations preserve the exact value or throw, and written coercion selects alternative object-driven policies.
 3. Assignment value-semantic; COW allowed; `ref` shared identity; `move` ownership transfer.
 4. One lookup view; imports bind ordinary names scoped to the containing block, function, or namespace.
 5. Namespace segments `/`-separated, lowercase `[a-z]([a-z0-9]|-[a-z0-9])*`; `/` is both root anchor and separator, and is never an identifier character.
@@ -781,7 +791,7 @@ Priority: these override examples/lowering sketches/plans. Condensed from full s
 20. Derived borrow provenance never widens.
 21. Source/generated/native names independent.
 22. Destruction deterministic only for lexical ownership and acyclic final strong release.
-23. `int` exact arbitrary precision with adaptive promotion/normalization; fixed widths expose bounds/overflow policy.
+23. `int` exact arbitrary precision with adaptive promotion/normalization; fixed widths expose arithmetic bounds/overflow policy; numeric destination conversion is exact-or-throw.
 
 ## OPEN
 
@@ -791,6 +801,7 @@ Validation/prototype points, not permission to invent semantics:
 - map literal syntax;
 - exact COW split policy;
 - conversion-declaration coherence: conflicting declarations for one source/destination pair, and whether a declaration may be added for a type the author does not own;
+- numeric arrival diagnostics: final spelling of the typed-value exact-arrival predicate (proposed `value.fits; Destination`), wording/severity of the typed false-`is a` and lossy constant-division lints, stable `T00xx` codes for contextual-constant rejections, and whether `integer-conversion-overflow` keeps its name now that it covers every exact-or-throw arrival failure;
 - the version-one async surface: task identity/linearity, un-awaited task disposal, scope failure semantics for surviving siblings, defined cancellation points, and the executor boundary the language fixes versus the profile selects;
 - dynamic finite-union representation;
 - reference implementation thresholds (`borrow`/Rc/Arc/custom);
@@ -824,7 +835,7 @@ Before writing Terrane:
 6. Parenthesize nested calls and calls in three-clause `for` clauses.
 7. Use indentation; empty block is legal.
 8. Write type after name; use `T|none`; canonical constructors use `of`.
-9. Use explicit coercion; never assume integer or foreign conversion.
+9. Let a single numeric destination perform its exact-or-throw conversion; write `coerce` or a rounding member when selecting a different policy. Never assume foreign conversion.
 10. Choose value assignment vs `ref` vs `move` deliberately.
 11. Use `constant`, not `const`; distinguish `void`/`opaque`.
 12. Do not use source generics, `===`, adjacency calls, or implicit object imports.

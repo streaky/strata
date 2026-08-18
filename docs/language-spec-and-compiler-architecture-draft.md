@@ -139,7 +139,7 @@ When a contract matters, it can be added locally:
 x int = 42
 ```
 
-When conversion is intended, it is explicit:
+A declared destination performs its own conversion, preserving the value exactly or throwing. Where there is no destination, or where a policy other than that default is wanted, the conversion is written:
 
 ```terrane
 x = x.coerce; float
@@ -1489,7 +1489,7 @@ Binary64 is the default because the failure modes are not symmetric. A program t
 
 Repointing therefore follows from what `float` denotes rather than being a separate promise. Should a later version make a wider type the default — IEEE 754 defines interchange formats for any width of 128 bits or more in multiples of 32, so `float128` and beyond are standard formats awaiting hardware rather than inventions — `float` may be repointed at a version boundary, where the change is visible, opt-in, and only ever gains precision. The width-suffixed names extend additively and need no grammar change.
 
-It must not vary by target or profile. The same source computing different results in different builds is the defect `int` avoids by being semantically fixed rather than machine-sized, and precision is the last place to reintroduce it. Note also that the explicit-coercion rule makes a repoint safer here than in a language with implicit conversions: every crossing to a pinned width, a foreign ABI, or a narrower buffer is already written out, so a changed default surfaces at those sites rather than silently altering them.
+It must not vary by target or profile. The same source computing different results in different builds is the defect `int` avoids by being semantically fixed rather than machine-sized, and precision is the last place to reintroduce it. Note also that the destination rule makes a repoint safer here than in a language with silent conversions: every crossing to a pinned width, a foreign ABI, or a narrower buffer carries a written destination type, and each such crossing preserves its value exactly or throws. A changed default therefore surfaces at those annotated sites — as a wider exact arrival, or as a failure that names the value and destination — rather than silently altering results.
 
 `int` is one source type, not an alias for `int64` and not a union of source-visible width types. Its values have no language-level minimum or maximum. Ordinary `int` arithmetic produces the exact mathematical result; crossing a representation boundary is internal runtime control flow, not a throw, panic, type change, or observable conversion.
 
@@ -1499,7 +1499,7 @@ Every completed `int` operation normalises its result to the smallest tier that 
 
 The fixed-width integer names are distinct source types whose bounds and bit widths are contractual. Their ordinary arithmetic never promotes to `int` or another width. They exist for bounded storage, predictable machine operations, layout, and ABI contracts.
 
-### 11.2 Literals are typed objects
+### 11.2 Literals become typed objects through context
 
 ```terrane
 x = 42          # int
@@ -1509,9 +1509,28 @@ name = my rifle # string
 empty = none    # none
 ```
 
-An unconstrained whole-number literal is an `int` regardless of magnitude. The front end parses its magnitude without a fixed-width limit, and the compiler selects the smallest exact runtime tier. When a whole-number constant expression is the initializer of a fixed-width binding, the binding annotation provides its destination type and the constant is checked at compile time against that destination's range.
+A **constant expression** is a literal, unary `-` applied to one, a parenthesised constant expression, or a compile-time-evaluable arithmetic combination of these. Its spelling classifies it as **whole-number** (`42`, `-128`) or **decimal** (`1.5`, `4.0`), but does not by itself fix a runtime type.
 
-For a signed fixed-width binding initializer whose source is a syntactic unary `-` applied directly to a whole-number literal, range checking applies to the signed mathematical value after negation, not to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected. Parenthesised constant expressions in the same initializer position use the same compile-time constant evaluation and destination-range check.
+A constant expression is unconstrained until a destination or numeric operand supplies a type. A destination context is an initializer or assignment to a typed binding, a parameter default, an argument matched to a declared parameter type, a return expression in a function with a declared return type, or an element or field whose type is fixed by its declared container or field. In such a context the destination reaches through the whole expression and selects its numeric domain and operators:
+
+| Destination | Constant arithmetic and admission |
+|---|---|
+| `int` or a fixed-width integer | Exact integer arithmetic with unbounded intermediates, including Euclidean `/`; the final value must be an integer and lie in the finite destination range where one exists. |
+| `float`, `float32`, or `float64` | Binary floating-point arithmetic performed operation by operation at the destination precision, using round-to-nearest with ties to even. The result must be finite; a whole-number constant whose floating result is integral must also preserve that integer exactly. |
+
+The rule therefore selects constant *arithmetic*, not merely a constant's representation. The same text denotes different operations in different contexts:
+
+```terrane
+x = 1 / 3               # int - Euclidean quotient, 0
+x float = 1 / 3         # float - floating division, 0.333...
+takes-float; 1 / 3      # float - a parameter's declared type reaches the operator
+```
+
+Thus `count int = 4.0` is `4` and `count int = 4.2` is a compile-time error. Admission tests the value a constant denotes rather than how it was spelled: `4.0` denotes the integer four, while a decimal constant in a floating destination denotes the representable value nearest what was written, which is why `tiny float32 = 0.1` is ordinary and `budget float = 9007199254740993` is not. Integer folding may accept more than the corresponding runtime expression because its unbounded intermediates cannot overflow: `limit int8 = (1000 - 900)` is valid and materialises directly as `100`. Floating folding instead reproduces runtime arithmetic at the destination precision, so `ratio float = (0.1 + 0.2)` has the ordinary binary64 result rather than exact decimal `0.3` rounded once. A constant admitted by context is emitted in the destination representation with no conversion call, runtime check, or failure path.
+
+Declared types and compile-time constant evaluation alone decide whether source is accepted. Additional range analysis may remove a runtime check but must never make an otherwise rejected program valid; proof changes generated code, not language semantics.
+
+For a signed fixed-width destination, range checking applies to the signed mathematical value after unary negation rather than to the positive magnitude first. Thus `minimum int8 = -128` and the corresponding minimum of every signed width are valid, while `below int8 = -129` is rejected.
 
 ```terrane
 large = 9223372036854775808
@@ -1519,7 +1538,7 @@ wide int128 = 9223372036854775808
 too-large int64 = 9223372036854775808 # compile-time range error
 ```
 
-This contextual typing is deliberately limited to typed binding initializers. A whole-number literal used as a call argument or return expression remains an unconstrained `int`; satisfying a fixed-width parameter or return contract requires an explicit coercion. The initializer rule is not an implicit runtime conversion, and it does not introduce general assignment coercion. The compiler may represent scalar objects as native Rust primitives when semantics permit.
+Outside every destination and operand context, a whole-number constant expression is an `int` and a decimal constant expression is a `float`. The compiler may represent scalar objects as native Rust primitives when semantics permit.
 
 ### 11.3 Dynamic bindings
 
@@ -1555,7 +1574,7 @@ Where the name *is* already bound in that same lexical scope, the initializer re
 
 ```terrane
 a int8 = 12
-a int = a.coerce; int      # reads the int8, then `a` is an int for the rest of the scope
+a int = a      # reads the int8, widens it exactly, then `a` is an int
 ```
 
 One name means one thing at each point in a scope, read top to bottom, which is what makes this safe to read locally. The rule is lexical: a declaration at namespace top level may not replace another, because namespace initialization is ordered by dependency rather than by source position, and a replaced namespace name would have no single answer for the declarations that read it.
@@ -1585,13 +1604,13 @@ Untyped declarations without assignment do not exist: `value` alone remains an e
 total int = 0
 ```
 
-Typed assignment is strict:
+Typed destinations admit numeric values by the exact-or-throw rule in §17.7. Unrelated categories remain strict:
 
 ```terrane
-ratio float = 42
+count int = 4.2        # compile-time error: the constant is not an integer
+name string = 42       # type error: no numeric-to-string destination conversion
 ```
 
-is a type error because the value is an `int`.
 ### 11.5 Explicit coercion
 
 Coercion is a callable method family on the source value:
@@ -1604,11 +1623,15 @@ x = x.coerce.checked; int8
 
 The bare invocation is its throwing default. `coerce.checked` returns an absence-aware result without a representability throw; `coerce.wrap` and `coerce.saturate` are available only where the source/destination policy table defines them. A receiver is evaluated exactly once before policy selection and arguments. The complete call, including its statically resolved destination descriptor, determines whether a policy exists; selecting a family alone does not make it a freely storable bound method value in version one.
 
-`coerce` either returns an object compatible with the requested type or throws `coercion-error`.
+`coerce` either returns an object compatible with the requested type or throws `coercion-error`, except that a numeric destination unable to preserve the exact source value uses the more specific `integer-conversion-overflow`.
 
-There is no universal guarantee that every type can coerce to every other type.
+There is no universal guarantee that every type can coerce to every other type. Numeric destination contexts have their own exact-or-throw rule in §17.7; writing `coerce` is not blanket permission for an undeclared pair, but a request for a declared policy or arithmetic interpretation that may differ from the destination default.
 
-Coercion among integer types follows §17.7 exactly. Coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. A source magnitude beyond the destination's finite range throws `coercion-error`; it never yields an infinity, because a silent infinity is a lost error rather than a result. `checked` returns absence for exactly that overflow case.
+Coercion among integer types follows §17.7 exactly. Written coercion to a floating-point destination rounds to the nearest representable value using the IEEE 754 default round-to-nearest, ties-to-even rule; because that rounding is defined for every finite source magnitude, an inexact numeric-to-float coercion is a normal result rather than a failure, and precision loss is visible through the destination type rather than through an error. This differs deliberately from an implicit numeric destination, which accepts the value exactly or throws. A source magnitude beyond the destination's finite range throws `coercion-error`; it never yields an infinity, because a silent infinity is a lost error rather than a result. `checked` returns absence for exactly that overflow case.
+
+Floating values expose the zero-argument members `round`, `floor`, `ceiling`, and `truncate`, each producing an integer before any later destination conversion. `round` uses round-to-nearest with ties to even; the other names state their direction. These members are how an author selects a policy for a fractional floating value before an integer destination applies §17.7's exact-or-throw rule.
+
+No floating-to-integer pair is declared on `coerce`, because choosing an integer for a fractional value requires a rounding mode and `coerce` never takes one. `ratio.coerce; int` is therefore absent from the type, while `count int = ratio` is admitted under §17.7 and `ratio.round` states the policy. This is the one place where a destination admits a conversion the written family does not offer, and it is deliberate: the destination rule is exact-or-throw and needs no mode, whereas any written alternative would have to name one.
 
 Conversions are declared rather than universal. A descriptor declares the source/destination pairs it supports, and `coerce` attaches exactly where a declaration exists, so an undeclared pair is absent from the type rather than a runtime failure. Declaration coherence — what happens when two protocols declare the same pair, and whether a declaration may be added for a type the author does not own — is part of the conversion-protocol contract. A caller-supplied conversion callback is admitted for pairs no descriptor declares, and therefore cannot precede first-class function values.
 
@@ -1627,10 +1650,10 @@ Locale-dependent parsing belongs to an imported formatting facility, never to `c
 `coerce` covers the conversions the language defines. Interpretation the language does not define is supplied by the program through `parse`, which always takes a callback as a required argument:
 
 ```terrane
-function to-code int|int8; input string
+function to-code int|string; input string
   if input == 'foobar'
     return 10
-  return 20
+  return input
 
 d string = 'foobar'
 print; d.parse; to-code
@@ -1638,13 +1661,13 @@ print; d.parse; to-code
 
 There is no built-in destination-owned `parse`. The member exists to apply a program's own interpretation to a receiver, so a form without a callback would have no operation to perform.
 
-`parse` differs from every other member in where its result type comes from: `coerce; int8` is typed by its destination descriptor, whereas `d.parse; to-code` is typed by the callback's declared return, here `int|int8`. That union is then checked at the destination by ordinary union rules — `value int8 = d.parse; to-code` is rejected because the `int` alternative is not assignable to `int8` — and the diagnostic is available statically from the callback's declaration. No parse-specific runtime recheck exists.
+`parse` differs from every other member in where its result type comes from: `coerce; int8` is typed by its destination descriptor, whereas `d.parse; to-code` is typed by the callback's declared return, here `int|string`. That union is then checked at the destination by ordinary union rules — `value int8 = d.parse; to-code` is rejected because the `string` alternative has no numeric destination conversion — and the diagnostic is available statically from the callback's declaration. No parse-specific runtime recheck exists. A return of `int|int8` would be admitted into an `int8` destination and checked at runtime for the `int` arm under §17.7.
 
 The `checked` child catches a callback that throws and yields absence, which plain application of the same function cannot express:
 
 ```terrane
 d.parse; to-code            # propagates a throw from the callback
-d.parse.checked; to-code    # int|int8|none
+d.parse.checked; to-code    # int|string|none
 ```
 
 In version one the callback must be a statically resolvable function name rather than an arbitrary expression. The compiler then resolves and inlines it exactly as it resolves a coercion destination, with no runtime callable representation and no boxed value. The restriction lifts when first-class function values arrive.
@@ -1685,7 +1708,7 @@ The compiler resolves type compatibility through the object’s type protocol.
 
 Alongside the concrete descriptors, `/core/types` exports abstract category descriptors: `number`, `integer`, `fixed-integer`, `signed-fixed-integer`, `unsigned-fixed-integer`, and `floating`, beneath the two identity roots `value` and `object`. `int` implements `integer` and `number` but no fixed-width contract; `int8` through `int128` implement `signed-fixed-integer`, `fixed-integer`, `integer`, and `number`; `uint8` through `uint128` implement `unsigned-fixed-integer` in place of the signed contract; `float`, `float32`, and `float64` implement `floating` and `number`. The roots `value` and `object` classify identity, copy, and ownership behaviour rather than numeric capability, so no arithmetic or conversion member attaches to them.
 
-These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype, and none creates an implicit assignment conversion. Like the concrete fixed-width descriptors, they are descriptor constructs available without import rather than prelude bindings: the default prelude's ordinary bindings are unchanged, and a construct name is usable in construct position directly while explicit import remains available for rebinding, aliasing, and shadowing. In particular, fixed-width integers are not assignment-compatible subclasses of `int`: that would contradict explicit coercion and the differing arithmetic result contracts.
+These are interface and category contracts used for member attachment, compatibility, reflection, and finite-union reasoning. None of them is a storage supertype. Like the concrete fixed-width descriptors, they are descriptor constructs available without import rather than prelude bindings: the default prelude's ordinary bindings are unchanged, and a construct name is usable in construct position directly while explicit import remains available for rebinding, aliasing, and shadowing. In particular, fixed-width integers are not subclasses of `int`: an exact destination conversion does not change the source value's concrete type or the differing arithmetic result contracts.
 
 Type objects are canonical compiler-owned descriptors with stable type identity. They are semantic objects rather than ordinary values: the backing object is real — `.type` returns it, `is a` compares it, canonical identity survives rebinding under another name, and reflection exposes it — but it is never independently constructed by source and never occupies an ordinary variable slot. Source-observable behavior must remain the same as naming the descriptor directly: `.type`, identity, compatibility queries, and operations such as `coerce` all consult the same canonical descriptor. Version one does not accept an arbitrary runtime value as a type expression or coercion destination; the value must resolve to a finite, compiler-known descriptor alternative so lowering remains statically representable.
 
@@ -1695,11 +1718,12 @@ Union types use `|`. `none` is an ordinary union member rather than a special ge
 
 ```terrane
 name string|none = none
-value int|float = 42
+value int|float = 42.5
 function parse int|parse-error; source string
 ```
 
 The spelling `optional<thing>` is not part of the language: write `thing|none`. `none` is not automatically admitted into every type.
+Where a destination type is a union, an exact type match wins. Otherwise the compiler selects the unique arm that admits the value under the contextual-constant or numeric destination rules. If two or more arms admit it, the destination is ambiguous and compilation fails naming those arms; source order never breaks the tie. Thus an `int8` value selects `int8` from `int8|int`, while the constant `5` is ambiguous in `int8|int32`.
 
 The word `of` applies a parameterised type constructor using the language's fixed constructor-application grammar:
 
@@ -1739,7 +1763,7 @@ In strict type mode:
 - public parameters and returns must be typed;
 - fields and globals must be typed;
 - incompatible assignments are errors;
-- implicit coercion remains forbidden;
+- weak or undeclared implicit coercion remains forbidden; numeric destination conversion follows §17.7;
 - dynamic locals may still be permitted when explicitly marked or inferred under a project policy.
 
 Strictness is local and composable. A strict package may call a dynamic package through generated checked boundaries.
@@ -1792,7 +1816,7 @@ The language keeps three different questions separate:
 
 - `a == b` asks whether the values are equal;
 - `a is b` asks whether both expressions denote the same source-visible identity;
-- `a is a type` asks whether the value is an instance of, subtype of, or interface-compatible with the type expression.
+- `a is a type` asks whether the left operand is a value of, subtype of, or interface-compatible with the type expression.
 
 `==` performs value equality with no unrelated implicit coercion. A type may explicitly define meaningful cross-type equality through its equality protocol, but equality never performs a hidden general conversion merely to make operands comparable.
 
@@ -1811,7 +1835,7 @@ c is d  # true: value assignment of a ref value preserves the referenced identit
 42 is 42 # false
 ```
 
-`is a` is a contextual two-word operator whose right operand is a type expression:
+`is a` is a contextual two-word operator whose right operand is a type expression.
 
 The parser treats `is a` as type membership only when the contextual `a` is followed by a complete type expression. At the end of an expression, or whenever no type expression follows, `a` remains an ordinary identifier and `left is a` is identity comparison against that binding. Thus `value is a serializable` is membership while `c is a` is identity. Formatters preserve the two-word membership spelling and do not rewrite identity comparisons.
 
@@ -1820,7 +1844,9 @@ if value is a serializable
   print; value
 ```
 
-It tests assignability to that type, not exact runtime-type equality. It is true for an instance of the named class, a permitted subclass, an implementation of the named interface, or a value admitted by a union type. `isa` is not an operator: it remains available as an ordinary identifier and is less readable than the separated phrase.
+For a typed left operand, `is a` asks about the type the value already has: exact concrete type, subclass, implemented interface or category, or an arm of the queried union. Destination convertibility is not membership. Therefore an `int8` value satisfies `int8`, `integer`, `fixed-integer`, and `number`, but not `int`, even though an `int` destination admits it exactly.
+
+A numeric constant has no type before context, so `is a` supplies that context and answers whether the constant can become the named type. `42 is a int8` is true; `7828748 is a int8` and `42.5 is a int` are false rather than compile-time range errors. This asking context is the one exception that answers instead of rejecting an inadmissible constant. `isa` is not an operator: it remains available as an ordinary identifier and is less readable than the separated phrase.
 
 The following values carry source-visible identity without requiring a new `ref` at the comparison site:
 
@@ -2451,7 +2477,7 @@ The `/core/errors` namespace defines the standard error protocol and the followi
 |---|---|---|---|
 | `arithmetic-overflow` | A checked fixed-width arithmetic result is outside the receiver type's range. | Ordinary checked fixed-width addition, subtraction, multiplication, signed negation, increment/decrement, and signed `MIN / -1`. | operation and fixed-width type |
 | `division-by-zero` | An integer division or remainder operation has a zero divisor. | `/`, `%`, and `div-rem` for every integer type and arithmetic mode. | operation and numeric type |
-| `integer-conversion-overflow` | An explicit throwing integer conversion cannot represent the mathematical source value in its destination type. | `coerce` to a fixed-width integer destination. | source value/type and destination type |
+| `integer-conversion-overflow` | An exact-or-throw numeric destination cannot preserve the mathematical source value. | Implicit assignment, argument, return, element, or field conversion across numeric types; throwing `coerce` to a fixed-width integer destination; floating-to-integer conversion for a fractional, NaN, or infinite value. | source value/type, destination type, and failed exactness condition |
 | `negative-shift-count` | An integer shift count is negative. | Unbounded-`int` `<<` and `>>`. | attempted count and shift operation |
 | `coercion-error` | An explicit coercion has no result compatible with the requested destination, outside the integer-overflow case above. | `coerce` where the source value or text cannot be represented in the destination type, including parsing coercion from `string` and an out-of-range floating-point destination whose protocol does not declare infinity. | source value/type and destination type |
 
@@ -2719,20 +2745,33 @@ Operators lower through object/type protocols.
 
 The compiler may statically emit native Rust operators only where the operand types are known and the Rust operation has the same complete source contract. In particular, signed integer `/` and `%` cannot lower directly to Rust's truncating operators when the dividend may be negative; lowering must use an equivalent Euclidean operation or correction sequence. The same rule applies to overflow, shifts, and every other host/source semantic difference.
 
+Known numeric values lower according to their source contract rather than through a universal conversion helper. A contextual constant is emitted directly in its selected representation. An exact widening is a representation change with no representability check or conversion-error path. A checked conversion between statically known integer types narrows, widens back, compares, and branches to the failure path; implicit narrowing and equivalent written `coerce` use the same check. Range proof may remove that check. Widening to adaptive `int` chooses the smallest sufficient physical tier and may allocate only for a value that requires Big storage.
+
 Dynamic dispatch occurs only where required by source semantics.
 
-### 17.3 No implicit cross-type arithmetic
+### 17.3 Numeric operand context and promotion
 
-```text
-1 + '2'
-```
+Where one operand of a binary numeric operator has a statically known type and the other is a constant expression, the constant takes the known operand's type under §11.2 and the operation uses that type's ordinary contract. Thus `iteration < 50` with `iteration int32` compares two `int32` values, and `scale * 2` with `scale float32` performs `float32` multiplication. An inadmissible constant is a compile-time error. Shift counts are exempt: they remain non-negative counts governed by §17.6 rather than values of the receiver's type.
 
-is an error unless a type explicitly defines that operation.
+Where both operands are integer values of different concrete types, the operation promotes them to the smallest integer type whose range contains both source-type ranges; if no fixed width does, it uses `int`. This promotion is exact and cannot throw. `int8` with `int` therefore operates in `int`; `int8` with `uint8` in `int16`; `uint64` with `int64` in `int128`; and `uint128` with a signed type in `int`. The result reaches any later destination through §17.7.
 
-Coercion remains explicit:
+Constants remain contextual rather than pre-typed, while runtime values carry their declared types. The resulting seam is deliberate:
 
 ```terrane
-1 + '2'.coerce; int
+counter int8 = 127
+right int = 1
+counter + 1          # int8 arithmetic; throws arithmetic-overflow
+counter + right      # promoted int arithmetic; produces 128
+counter = counter + right # promoted arithmetic, then checked int8 destination; throws integer-conversion-overflow
+```
+
+The check moves with the semantics: a constant adapts to the typed operand, two integer values promote, and a later destination checks the promoted result.
+
+This rule does not permit arithmetic across unrelated numeric categories or other types. Integer/floating value mixtures remain rejected because they would choose a quiet approximation without a destination, as do integer/string, integer/`bool`, and integer/`none` mixtures. Such an operation requires an explicit conversion that states the intended policy:
+
+```terrane
+integer + text.coerce; int
+count.coerce; float + ratio
 ```
 
 ### 17.4 Unbounded `int` arithmetic
@@ -2794,35 +2833,36 @@ value.add.overflowing; rhs    -> overflow-result of T   with value T and overflo
 
 For signed `MIN / -1`, `divide.wrap` returns `MIN`, `divide.saturate` returns `MAX`, and `divide.checked` returns `none`; `divide.overflowing` returns `MIN` with `overflowed = true`. Division by zero still throws `division-by-zero` under every policy because it is not overflow, and it is never converted into a wrapped or saturated value.
 
-Shifts accept a non-negative count. On a fixed-width receiver, the default and `checked` reject counts outside the width, and `wrap` reduces the count modulo the width; `saturate` is absent, because saturating a shift *count* has no coherent value contract. On `int`, `shift-left` is unbounded and total and `shift-right` is an arithmetic shift, with no count-policy children. Shift behaviour never inherits host-language debug/release behaviour.
+A shift count is not a numeric operand in the sense of §17.3 and never takes the receiver's type merely because it is a constant. Shifts accept a non-negative count. On a fixed-width receiver, the default and `checked` reject counts outside the width, and `wrap` reduces the count modulo the width; `saturate` is absent, because saturating a shift *count* has no coherent value contract. On `int`, `shift-left` is unbounded and total and `shift-right` is an arithmetic shift, with no count-policy children. Shift behaviour never inherits host-language debug/release behaviour.
 
 Postfix `++` and `--` remain statements selecting the default `add`/`subtract` child only. A non-default policy is written as an ordinary assignment, `value = value.add.wrap; 1`.
 
 The profiler and debugger identify the selected overflow mode in lowered Rust. An explicitly selected panic-on-overflow operation, if supplied by a package, is a panic and follows the target panic policy; it is not an ordinary core arithmetic mode.
 
-### 17.7 Integer conversions
+### 17.7 Numeric destination conversion
 
-Cross-type integer conversion is explicit. The canonical throwing form remains:
+Every numeric value is admitted to a single numeric destination in assignment, argument, return, declared element, and declared field contexts. The value either arrives exactly or the operation throws; it never silently truncates, rounds, wraps, saturates, changes signedness interpretation, or promotes the destination.
+
+The compiler classifies a source/destination pair by one mechanical test: whether every value of the source type is exactly representable in the destination type. If yes, the conversion is an exact widening and lowers to a representation change with no representability check or conversion-error path. This includes fixed-width integer to `int`, range-contained fixed-width pairs such as `int8` to `int32` and `uint8` to `int16`, and integer types whose full range is exactly representable by the floating destination. Range containment, not width or signedness, decides it.
+
+If the source type has values the destination cannot represent, the conversion remains admitted but checks the runtime value. Integer narrowing throws `integer-conversion-overflow` when out of range. Integer to floating succeeds only when that integer is exactly representable and otherwise throws `integer-conversion-overflow`: binary32 exactly covers every integer through $2^{24}$ and binary64 through $2^{53}$, but larger exactly representable multiples remain valid, so $2^{53}+1$ fails a `float64` destination while $2^{54}$ arrives. A floating value reaches an integer destination only when finite, integral, and in range; fractional values, NaN, and infinities throw `integer-conversion-overflow`. No optimiser proof is required for acceptance, though range analysis may remove a redundant check without changing semantics.
+
+None of these conversions creates a subtype relation. A destination supplies one unambiguous target type; mixed-operand arithmetic without one follows §17.3 instead. A union destination follows §11.7.
+
+Written coercion remains available to request a policy different from the destination default:
 
 ```terrane
-converted = value.coerce; int64
+value.coerce; T             # canonical declared conversion; numeric-to-float may round
+value.coerce.checked; T     # T|none
+value.coerce.wrap; T        # destination-width modular reduction
+value.coerce.saturate; T    # clamp to destination bounds
 ```
 
-It returns the exact destination value when representable and otherwise throws `integer-conversion-overflow`, a numeric error distinct from `arithmetic-overflow`. It never silently truncates, wraps, saturates, changes signedness interpretation, or promotes the destination.
+For integer destinations, bare `coerce` has the same exact-or-throw result as an implicit destination conversion. `checked` returns `T|none`; `wrap` reduces the mathematical value modulo `2^N` and interprets the resulting bits using the destination signedness; `saturate` clamps to the destination bounds. Therefore `-1.coerce.wrap; uint8` is `255`, `255.coerce.wrap; int8` is `-1`, and `300.coerce.saturate; uint8` is `255`. Wrapping and saturation exist only for fixed-width destinations.
 
-Every integer source exposes one canonical family:
+Written integer-to-floating `coerce` deliberately requests IEEE round-to-nearest, ties-to-even, as specified in §11.5; the implicit destination form is exact-or-throw. Floating values expose `round`, `floor`, `ceiling`, and `truncate`, each yielding an integer; `round` uses ties-to-even. These members state how a fractional value should become integral before an integer destination receives it.
 
-```terrane
-value.coerce.checked; T
-value.coerce.wrap; T
-value.coerce.saturate; T
-```
-
-`checked` returns `T|none`. `wrap` reduces the mathematical value modulo `2^N` and interprets the resulting bits using the destination signedness. `saturate` clamps to the destination bounds. Therefore `-1.coerce.wrap; uint8` is `255`, `255.coerce.wrap; int8` is `-1`, and `300.coerce.saturate; uint8` is `255`.
-
-Conversion from any fixed-width integer to `int` is exact and cannot overflow, though it remains explicit under the no-implicit-cross-type rule. Conversion among fixed-width types follows the same checked, wrapping, or saturating contract; widening is not a privileged implicit coercion. Compile-time literal initialization remains governed by §11.2.
-
-Wrapping and saturation have no arithmetic meaning for an unbounded `int` destination because it has no maximum width. They are defined only for an explicitly fixed-width destination or fixed-width arithmetic receiver. The flat spellings `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` are not language syntax.
+Lowering materialises a contextual constant directly in the destination representation, emits an unchecked representation change for exact widening, and emits a direct narrow/widen-back comparison for a checked conversion whose source and destination are statically known. An implicit narrowing and an equivalent written `coerce` must generate equivalent checks. Exact widening from a fixed-width integer to adaptive `int` selects storage from the source range: `int8` through `int64` and `uint8` through `uint32` fit the Small tier; `uint64` through `int128` fit the Wide tier; and `uint128` uses Wide below $2^{127}$ or Big otherwise. A Big conversion may allocate, whose failure follows the ordinary allocation contract, but it cannot throw a conversion error. Flat spellings such as `checked-coerce`, `wrapping-coerce`, and `saturating-coerce` are not language syntax.
 
 ---
 
@@ -5264,15 +5304,15 @@ from third-party/plugin import plugin
 
 The final import is resolved by `sandboxed-import`.
 
-### 35.4 Strict conversion
+### 35.4 Exact-or-throw numeric destination
 
 ```terrane
-function read-ratio float; input
-  ratio float = input.coerce; float
-  return ratio
+function read-count int; ratio float
+  count int = ratio
+  return count
 ```
 
-An invalid conversion throws `coercion-error`.
+An integral finite value arrives exactly; a fractional, infinite, or NaN value throws `integer-conversion-overflow`. Writing `ratio.round` states a rounding policy instead.
 
 ### 35.5 Value, ref, and move
 
@@ -5550,7 +5590,7 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 14. quoted, tail, and indented block strings preserve their specified content deterministically.
 15. typed scalars lower to native Rust primitives.
 16. dynamic finite alternatives lower without a universal heap object.
-17. explicit coercion succeeds or throws cleanly; integer checked, wrapping, and saturating conversions obey their destination-width contracts.
+17. contextual constants select the arithmetic of typed destinations and operands; numeric destination conversion widens exactly or checks and throws, while explicit checked, wrapping, saturating, and rounding policies obey their contracts.
 18. value assignment prevents mutation leakage.
 19. COW avoids a physical copy until mutation.
 20. `ref` preserves shared identity.
@@ -5566,7 +5606,7 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 30. profiling distinguishes semantic assignment, shared storage, physical copy, COW split, ref, and move.
 31. profiling exposes Python transitions and data copies.
 32. a simple allocator-free target rejects hosted-only capabilities at source level.
-33. `==`, `is`, and `is a` respectively test value equality, source-visible identity, and type assignability; exact type-and-value comparison uses an explicit conjunction and `===` is rejected.
+33. `==`, `is`, and `is a` respectively test value equality, source-visible identity, and type membership; a numeric constant uses the queried type as context and returns false rather than failing when inadmissible, while a typed numeric value is not a member of a merely convertible concrete type; exact type-and-value comparison uses an explicit conjunction and `===` is rejected.
 34. labels are function-local; `goto` cannot enter a deeper lexical scope or cross initialisation/lifetime transitions unsafely, and every accepted jump lowers to sound Rust with identical cleanup order.
 35. `when build` selects namespace declarations and function statements deterministically, excludes inactive branches from the current build, and records every selection input in the build cache key.
 36. `ref T`, `borrowed-ref of T`, `user-ref of T`, `raw-address of T`, `array-ref of T`, `c-pointer of T`, and `function from ... to ...` enforce distinct identity, lifetime, address-space, provenance, extent, and ABI contracts without implicit conversion between them.
@@ -5602,12 +5642,15 @@ Unless a snippet explicitly tests unresolved lookup, the conformance harness sup
 66. multiplying two small `int` values uses an exact `i128` intermediate, wider multiplication produces the exact arbitrary-precision result, and multiplication by `0`, `1`, or `-1` preserves promotion and normalisation edge cases.
 67. signed `/`, `%`, and `div-rem` obey the Euclidean quotient/remainder invariant for every sign combination; division by zero throws `division-by-zero`, `int` division promotes for a representation `MIN / -1`, and fixed-width `MIN / -1` follows its selected overflow mode.
 68. every signed and unsigned fixed width through 128 bits keeps its declared type under arithmetic and implements throwing ordinary, checked, wrapping, saturating, and overflowing operation contracts without build-mode-dependent behaviour.
-69. `coerce`, `coerce.checked`, `coerce.wrap`, and `coerce.saturate` handle signedness and every `int`/fixed-width boundary exactly; checked failure never mutates the destination, wrapping uses destination-width bits, fixed-width-to-`int` conversion cannot overflow, and flat spellings such as `checked-coerce` are rejected.
-70. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
-71. direct signed fixed-width initialisers accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
-72. fixed-width numeric descriptors are constructs available without import, distinct from the seven prelude ordinary bindings; explicit import remains available for aliasing and shadowing, and they are not reserved type words.
-73. canonical type descriptors are semantic objects with stable identity rather than ordinary values, requiring no runtime storage when statically resolved and materialising only where reflection or dynamic descriptor use demands it, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative.
-74. numeric-to-float coercion rounds to nearest with ties to even and reports precision loss through the destination type rather than an error, unrepresentable float destinations and unparseable text throw `coercion-error`, and parsing coercion accepts exactly the destination's canonical text-display spelling.
+69. contextual constant expressions are evaluated in destination or typed-operand arithmetic, admitted by mathematical value rather than literal spelling, materialised directly in the selected representation, and rejected at compile time when the selected domain cannot represent the result.
+70. mixed integer values promote exactly to the smallest integer type containing both source ranges, while integer/floating value mixtures and unrelated categories remain rejected without an explicit policy conversion.
+71. numeric destination contexts admit exact widening without a representability check or conversion-error path and checked narrowing with `integer-conversion-overflow`; floating/integer crossings succeed implicitly only for exactly representable values, optimiser range knowledge may remove checks but never decide source validity, and widening to adaptive `int` may retain an ordinary allocation effect.
+72. `coerce`, `coerce.checked`, `coerce.wrap`, and `coerce.saturate` handle signedness and every `int`/fixed-width boundary exactly; written integer-to-float `coerce` rounds ties-to-even while an implicit float destination is exact-or-throw; flat spellings such as `checked-coerce` are rejected.
+73. `int` bitwise operations behave as infinite two's-complement arithmetic across positive and negative operands and every representation tier; `~x == -x - 1`, left shift is exact, right shift is arithmetic/flooring, negative counts throw `negative-shift-count`, and very large right shifts produce `0` or `-1` without count wrapping or proportional allocation.
+74. contextual signed fixed-width destinations accept each type's syntactically negated minimum literal, including `-128` as `int8` and `-2^127` as `int128`, reject the next lower value, and do not first reject the unsigned positive magnitude.
+75. fixed-width numeric descriptors are constructs available without import, distinct from the seven prelude ordinary bindings; explicit import remains available for aliasing and shadowing, and they are not reserved type words.
+76. canonical type descriptors are semantic objects with stable identity rather than ordinary values, requiring no runtime storage when statically resolved and materialising only where reflection or dynamic descriptor use demands it, while a first-version type expression or coercion destination must resolve to a finite compiler-known descriptor alternative.
+77. numeric-to-float coercion rounds to nearest with ties to even and reports precision loss through the destination type rather than an error, unrepresentable float destinations and unparseable text throw `coercion-error`, and parsing coercion accepts exactly the destination's canonical text-display spelling.
 
 ---
 
@@ -5679,6 +5722,14 @@ Source-order `import with` selection is understandable and bootstrappable.
 
 Large projects may prefer manifest/declarative importer composition. Both can coexist if precedence is rigidly specified.
 
+### 40.9 Numeric arrival diagnostics
+
+The exact-or-throw destination rule creates two useful diagnostics whose semantics are fixed but whose final surface should be tested against real code. A typed numeric value needs a predicate asking whether this value would arrive exactly in a destination; the proposal spelling is `value.fits; Destination`, but whether this remains a member or becomes a contextual operator is not frozen. A statically false `is a` on a typed numeric operand should lint with the categories that operand does implement, and constant integer division that discards a nonzero remainder should lint at the operator.
+
+The name `integer-conversion-overflow` should also be revisited there. It now covers the whole exact-or-throw rule, including a fractional or non-finite floating value reaching an integer destination and an integer too precise for a floating one — neither an integer destination nor an overflow. One error for one rule is the right shape, so the semantics are settled and only the spelling is open; a rename is a coordinated change across this document, the compact reference, and existing conformance cases.
+
+The wording, severity defaults, and stable `T00xx` codes for contextual-constant rejection and these lints should be assigned with their first conformance cases rather than guessed in advance.
+
 ---
 
 ## 41. Core invariants
@@ -5688,9 +5739,9 @@ The following are the design’s constitutional layer. They govern the entire do
 1. Everything is an object semantically.
 2. Runtime representation is free to be non-object-shaped when behaviour remains identical.
 3. Values have types even when bindings are dynamic.
-4. Dynamic typing never implies weak implicit coercion.
+4. Dynamic typing never implies weak or unrelated implicit coercion.
 5. Type constraints are optional, local, and real.
-6. Coercion is explicit and object-driven.
+6. Numeric constants take the arithmetic of their destination or typed operand; numeric values cross a single declared destination exactly or throw, while written coercion remains object-driven and selects alternative policies.
 7. Ordinary assignment has value semantics.
 8. Ordinary values may share backing storage, but mutation separates them before changes become observable elsewhere.
 9. `ref` is the visible shared-identity operation.
@@ -5730,7 +5781,7 @@ The following are the design’s constitutional layer. They govern the entire do
 43. Every derived borrow retains compiler-assigned provenance and may preserve or narrow, but never widen, the origin lifetime.
 44. Source names, generated Rust names, and native ABI/link symbols are independent reflected identities.
 45. Deterministic destruction is guaranteed by lexical ownership and acyclic final strong-reference release, not by arbitrary strong-cycle reachability.
-46. `int` denotes an exact arbitrary-precision signed value with compact adaptive representation; representation overflow promotes and completed results normalise, while explicitly fixed-width integers alone make width overflow and conversion policy source-visible.
+46. `int` denotes an exact arbitrary-precision signed value with compact adaptive representation; representation overflow promotes and completed results normalise, fixed-width arithmetic alone exposes width overflow, and numeric destination conversions preserve the exact mathematical value or throw.
 
 ---
 
