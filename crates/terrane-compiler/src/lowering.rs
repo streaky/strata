@@ -481,22 +481,6 @@ impl Emitter<'_> {
             return;
         };
         let name = rust_name(self.text(name_node));
-        if node.kind == SyntaxKind::Assignment
-            && self
-                .package
-                .resolve_name_at(self.unit, node.span.start, self.text(name_node))
-                .is_some_and(|symbol| symbol.declaration_span.is_some())
-            && !self
-                .package
-                .is_lexical_replacement(self.unit, node.span, self.text(name_node))
-        {
-            let value = binding_initializer(node, name_index)
-                .map_or_else(String::new, |initializer| {
-                    Self::unwrapped_expression(self.expression(initializer))
-                });
-            self.line(&format!("{name} = {value};"));
-            return;
-        }
         let binding = self
             .unit
             .typed_bindings

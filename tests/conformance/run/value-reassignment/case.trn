@@ -1,0 +1,9 @@
+namespace value-reassignment
+function main
+  value = 1
+  print; value
+  next = 2
+  value = next
+  print; value
+  value = 3
+  print; value

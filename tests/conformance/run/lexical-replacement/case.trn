@@ -1,6 +1,6 @@
 namespace lexical-replacement
 function main
-  value = 1
+  value int8 = 1
   print; value
-  value = 'two'
+  value int = 2
   print; value

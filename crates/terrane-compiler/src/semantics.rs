@@ -461,32 +461,27 @@ impl SemanticPackage {
 
     #[must_use]
     pub fn is_lexical_replacement(&self, unit: &SemanticUnit, span: Span, name: &str) -> bool {
-        let replaces_scoped_symbol = lexical_scope_chain(unit, span.start).any(|scope| {
+        let Some(current) = unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.name == name && binding.span == span)
+        else {
+            return false;
+        };
+        let current_scope = lexical_scope_index_at(unit, current.span.start);
+        lexical_scope_chain(unit, span.start).any(|scope| {
             scope.symbols.get(name).is_some_and(|symbols| {
                 symbols
                     .iter()
                     .any(|symbol| symbol.declaration_span == Some(span))
                     && symbols.iter().any(|symbol| {
-                        symbol
-                            .declaration_span
-                            .is_some_and(|prior| prior.start < span.start)
+                        symbol.declaration_span.is_some_and(|prior| {
+                            prior.start < span.start
+                                && lexical_scope_index_at(unit, prior.start) == current_scope
+                        })
                     })
             })
-        });
-        let inferred_type_change = unit
-            .typed_bindings
-            .iter()
-            .find(|binding| binding.name == name && binding.span == span)
-            .is_some_and(|current| {
-                let current_scope = lexical_scope_index_at(unit, current.span.start);
-                unit.typed_bindings.iter().any(|prior| {
-                    prior.name == name
-                        && prior.span.start < span.start
-                        && lexical_scope_index_at(unit, prior.span.start) == current_scope
-                        && prior.value_type != current.value_type
-                })
-            });
-        replaces_scoped_symbol || inferred_type_change
+        })
     }
 }
 
@@ -873,7 +868,7 @@ fn imported_object(
         ));
     }
     if !export.available_in_function_body() {
-        return Err(namespace_variable_boundary_failure(
+        return Err(namespace_variable_import_failure(
             &import.source,
             &import.object,
             import.span,
@@ -930,7 +925,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
                                 && !symbol.available_in_function_body()
                         })
                     {
-                        return Err(namespace_variable_boundary_failure(
+                        return Err(namespace_variable_reference_failure(
                             &unit.source,
                             name,
                             node.span,
@@ -993,7 +988,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
     }
     Ok(())
 }
-fn namespace_variable_boundary_failure(
+fn namespace_variable_reference_failure(
     source: &SourceFile,
     name: &str,
     span: Span,
@@ -1007,7 +1002,27 @@ fn namespace_variable_boundary_failure(
                 span,
             )
             .with_help(format!(
-                "pass `{name}` as a parameter, return it from a function, or declare it `global` if shared mutable state is required"
+                "pass `{name}` as a parameter or return it from a function"
+            )),
+        ],
+    }
+}
+
+fn namespace_variable_import_failure(
+    source: &SourceFile,
+    name: &str,
+    span: Span,
+) -> SemanticFailure {
+    SemanticFailure {
+        source: source.clone(),
+        diagnostics: vec![
+            Diagnostic::error(
+                "S2026",
+                format!("namespace variable `{name}` cannot be imported outside its namespace"),
+                span,
+            )
+            .with_help(format!(
+                "import a function that reads `{name}` and returns its value instead"
             )),
         ],
     }
@@ -2055,11 +2070,6 @@ fn analyze_binding_node(
     if node.kind == SyntaxKind::Assignment
         && declared.is_none()
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
-        && (find_node_by_span(&unit.tree.root, previous.span)
-            .and_then(binding_initializer)
-            .is_none()
-            || lexical_scope_index_at(unit, previous.span.start)
-                != lexical_scope_index_at(unit, node.span.start))
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
         && let Some(actual) = infer_value_type(unit, initializer, bindings)?

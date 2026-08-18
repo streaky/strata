@@ -413,7 +413,7 @@ fn namespace_variables_stay_at_their_own_namespace_tier() {
         assert!(diagnostic.help.as_deref().is_some_and(|help| {
             help.contains("pass `value` as a parameter")
                 && help.contains("return it from a function")
-                && help.contains("declare it `global`")
+                && !help.contains("global")
         }));
     }
 
@@ -466,10 +466,15 @@ fn namespace_variables_cannot_be_imported_across_the_boundary() {
         ],
     ))
     .unwrap_err();
-    assert_eq!(failure.diagnostics[0].code, "S2026");
+    let diagnostic = &failure.diagnostics[0];
+    assert_eq!(diagnostic.code, "S2026");
     assert_eq!(
-        failure.diagnostics[0].message,
-        "namespace variable `value` cannot cross a function boundary"
+        diagnostic.message,
+        "namespace variable `value` cannot be imported outside its namespace"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("import a function that reads `value` and returns its value instead")
     );
 }
 
@@ -1024,12 +1029,12 @@ fn collection_for_targets_are_typed_only_inside_the_loop_body() {
 }
 
 #[test]
-fn ordinary_value_bindings_replace_earlier_lexical_bindings() {
+fn untyped_assignment_preserves_the_existing_lexical_binding_type() {
     let analyzed = analyze(&package(
         true,
         &[(
             "main.trn",
-            "namespace app\nfunction main\n  value = 1\n  before = value\n  value = true\n  after = value\n",
+            "namespace app\nfunction main\n  value int8 = 1\n  value = 2\n  after = value\n",
         )],
     ))
     .unwrap();
@@ -1040,18 +1045,7 @@ fn ordinary_value_bindings_replace_earlier_lexical_bindings() {
             .filter(|binding| binding.name == "value")
             .map(|binding| binding.value_type)
             .collect::<Vec<_>>(),
-        [
-            ValueType::Scalar(ScalarType::Int),
-            ValueType::Scalar(ScalarType::Bool)
-        ]
-    );
-    assert_eq!(
-        bindings
-            .iter()
-            .find(|binding| binding.name == "before")
-            .unwrap()
-            .value_type,
-        ValueType::Scalar(ScalarType::Int)
+        [ValueType::Scalar(ScalarType::Int8)]
     );
     assert_eq!(
         bindings
@@ -1059,7 +1053,7 @@ fn ordinary_value_bindings_replace_earlier_lexical_bindings() {
             .find(|binding| binding.name == "after")
             .unwrap()
             .value_type,
-        ValueType::Scalar(ScalarType::Bool)
+        ValueType::Scalar(ScalarType::Int8)
     );
 }
 
