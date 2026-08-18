@@ -396,6 +396,26 @@ deterministic package and source order because subsequent resolution failures ca
 on declarations or imports that the first failure prevented from assembling; manifest
 loading instead accumulates its independently discoverable diagnostics.
 
+Semantic diagnostics own the stable `S2xxx` range:
+
+```text
+S2001 package or manifest load failure       S2014 retired; do not reuse
+S2002 invalid namespace declaration count    S2015 missing package `main`
+S2003 anchored namespace declaration         S2016 multiple package `main` functions
+S2004 declaration without a name             S2017 compiler-owned namespace declaration
+S2005 duplicate namespace declaration        S2018 invalid source identifier
+S2006 malformed import                       S2019 reserved namespace segment
+S2007 namespace path above root              S2020 namespace-directory mismatch
+S2008 import without a name                  S2021 invalid namespace replacement
+S2009 unresolved imported name               S2022 constant reassignment
+S2010 inaccessible imported name             S2023 initializer self-reference
+S2011 import collision                       S2024 namespace initialization cycle
+S2012 duplicate lexical binding              S2025 public namespace variable
+S2013 unresolved source name                 S2026 namespace-variable confinement
+```
+
+Retired codes remain unavailable so a stable code never acquires a second meaning.
+
 ### Milestone 4 — Types, calls, and control-flow semantics
 
 Deliver:
@@ -1253,10 +1273,12 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections and the
+Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections and
 milestone 4.8 review remediation are closed: symbol storage, resolution, diagnostics,
 semantic types, lowering metadata, fixtures, goldens, examples, and surface documentation
-all use the single-view name model.
+all use the single-view name model. Permanent run cases compile and execute annotated
+lexical replacement and same-type reassignment, while focused rejected cases preserve
+assignment-type compatibility at lexical and namespace scope.
 
 The next work in order is milestone 5. Its boundary is Rust IR, readable deterministic emission,
 and Cargo builds; later language features remain staged by their own milestones. The minimal
