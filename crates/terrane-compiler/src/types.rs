@@ -15,7 +15,6 @@ pub enum ScalarType {
     Uint32,
     Uint64,
     Uint128,
-    Float,
     Float32,
     Float64,
     String,
@@ -23,7 +22,7 @@ pub enum ScalarType {
 }
 
 impl ScalarType {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 16] = [
         Self::Bool,
         Self::Int,
         Self::Int8,
@@ -36,11 +35,30 @@ impl ScalarType {
         Self::Uint32,
         Self::Uint64,
         Self::Uint128,
-        Self::Float,
         Self::Float32,
         Self::Float64,
         Self::String,
         Self::None,
+    ];
+
+    pub const SOURCE_NAMES: [(&'static str, Self); 17] = [
+        ("bool", Self::Bool),
+        ("int", Self::Int),
+        ("int8", Self::Int8),
+        ("int16", Self::Int16),
+        ("int32", Self::Int32),
+        ("int64", Self::Int64),
+        ("int128", Self::Int128),
+        ("uint8", Self::Uint8),
+        ("uint16", Self::Uint16),
+        ("uint32", Self::Uint32),
+        ("uint64", Self::Uint64),
+        ("uint128", Self::Uint128),
+        ("float", Self::Float64),
+        ("float32", Self::Float32),
+        ("float64", Self::Float64),
+        ("string", Self::String),
+        ("none", Self::None),
     ];
 
     #[must_use]
@@ -58,7 +76,6 @@ impl ScalarType {
             Self::Uint32 => "uint32",
             Self::Uint64 => "uint64",
             Self::Uint128 => "uint128",
-            Self::Float => "float",
             Self::Float32 => "float32",
             Self::Float64 => "float64",
             Self::String => "string",
@@ -83,7 +100,7 @@ impl ScalarType {
             Self::Uint32 => Some("u32"),
             Self::Uint64 => Some("u64"),
             Self::Uint128 => Some("u128"),
-            Self::Float | Self::Float64 => Some("f64"),
+            Self::Float64 => Some("f64"),
             Self::Float32 => Some("f32"),
             Self::String => Some("String"),
             Self::None => Some("()"),
@@ -101,7 +118,9 @@ impl ScalarType {
 
     #[must_use]
     pub fn from_source_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|ty| ty.source_name() == name)
+        Self::SOURCE_NAMES
+            .into_iter()
+            .find_map(|(source_name, ty)| (source_name == name).then_some(ty))
     }
 
     #[must_use]

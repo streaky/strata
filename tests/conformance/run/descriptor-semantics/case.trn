@@ -15,5 +15,9 @@ function main
   print; (accepts; 1)
   print; (byte is byte)
   print; (byte is other-byte)
+  value float = 1.0
+  print; (value is a float64)
+  print; (value.type is float64)
+  print; (float is float64)
   print; (same-type; 2, 3)
   print; (different-type; 4, 'five')

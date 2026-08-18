@@ -2086,9 +2086,9 @@ fn validate_value_assignment(
         {
             return check_integer_range(source, expected, &integer, value.span);
         }
-        if actual == ScalarType::Float
-            && matches!(expected, ScalarType::Float32 | ScalarType::Float64)
-            && infer_literal_type_from_source(source, value) == Some(ScalarType::Float)
+        if actual == ScalarType::Float64
+            && expected == ScalarType::Float32
+            && infer_literal_type_from_source(source, value) == Some(ScalarType::Float64)
         {
             return Ok(());
         }
@@ -2246,13 +2246,7 @@ fn infer_unary_type(
     };
     let operator = unit.source.text()[node.span.start..operand_node.span.start].trim();
     let valid = match operator {
-        "-" => {
-            operand.is_integer()
-                || matches!(
-                    operand,
-                    ScalarType::Float | ScalarType::Float32 | ScalarType::Float64
-                )
-        }
+        "-" => operand.is_integer() || matches!(operand, ScalarType::Float32 | ScalarType::Float64),
         "~" => operand.is_integer(),
         "not" => operand == ScalarType::Bool,
         _ => false,
@@ -2480,13 +2474,8 @@ fn infer_binary_type(
         ));
     };
     let same = left == right;
-    let numeric = |ty: ScalarType| {
-        ty.is_integer()
-            || matches!(
-                ty,
-                ScalarType::Float | ScalarType::Float32 | ScalarType::Float64
-            )
-    };
+    let numeric =
+        |ty: ScalarType| ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64);
     let result = match operator {
         "+" | "-" | "*" | "/" | "%" if same && numeric(left) => left,
         "<<" | ">>" if left.is_integer() && right.is_integer() => left,
@@ -2533,7 +2522,7 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
     match text {
         "true" | "false" => Some(ScalarType::Bool),
         value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
-        value if value.contains('.') => Some(ScalarType::Float),
+        value if value.contains('.') => Some(ScalarType::Float64),
         _ => Some(ScalarType::Int),
     }
 }
@@ -3453,14 +3442,14 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
 }
 
 fn bootstrap_descriptor_constructs() -> BTreeMap<String, Symbol> {
-    ScalarType::ALL
+    ScalarType::SOURCE_NAMES
         .into_iter()
-        .map(|ty| {
-            let name = ty.source_name().to_owned();
+        .map(|(source_name, ty)| {
+            let name = source_name.to_owned();
             (
                 name.clone(),
                 Symbol {
-                    identity: format!("/core/types::{name}"),
+                    identity: format!("/core/types::{}", ty.source_name()),
                     name,
                     namespace: "/core/types".to_owned(),
                     visibility: Visibility::Public,

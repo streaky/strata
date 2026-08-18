@@ -14,7 +14,6 @@ fn every_native_scalar_has_the_contract_preserving_rust_representation() {
         (ScalarType::Uint32, "u32"),
         (ScalarType::Uint64, "u64"),
         (ScalarType::Uint128, "u128"),
-        (ScalarType::Float, "f64"),
         (ScalarType::Float32, "f32"),
         (ScalarType::Float64, "f64"),
         (ScalarType::String, "String"),
@@ -25,6 +24,11 @@ fn every_native_scalar_has_the_contract_preserving_rust_representation() {
         assert_eq!(ty.rust_type(), Some(rust), "{ty}");
         assert_eq!(ScalarType::from_source_name(ty.source_name()), Some(ty));
     }
+
+    assert_eq!(
+        ScalarType::from_source_name("float"),
+        Some(ScalarType::Float64)
+    );
 }
 
 #[test]

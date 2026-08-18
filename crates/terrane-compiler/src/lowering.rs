@@ -707,7 +707,7 @@ impl Emitter<'_> {
         match value_type {
             ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
             ValueType::Scalar(ScalarType::Float32)
-                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float)) =>
+                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float64)) =>
             {
                 format!("({}) as f32", self.expression(node))
             }
@@ -913,7 +913,7 @@ impl Emitter<'_> {
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
-                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float)),
+                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float64)),
                 text if text.chars().all(|character| {
                     character.is_ascii_hexdigit() || matches!(character, '_' | 'x' | 'o' | 'b')
                 }) =>

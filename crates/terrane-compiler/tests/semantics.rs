@@ -157,8 +157,14 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
 
     let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
     assert!(disabled.prelude_bindings.is_empty());
-    assert_eq!(enabled.descriptor_constructs.len(), ScalarType::ALL.len());
-    assert_eq!(disabled.descriptor_constructs.len(), ScalarType::ALL.len());
+    assert_eq!(
+        enabled.descriptor_constructs.len(),
+        ScalarType::SOURCE_NAMES.len()
+    );
+    assert_eq!(
+        disabled.descriptor_constructs.len(),
+        ScalarType::SOURCE_NAMES.len()
+    );
     for ty in ScalarType::ALL {
         let construct = disabled
             .descriptor_constructs
@@ -166,6 +172,10 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
             .unwrap();
         assert_eq!(construct.descriptor_type(), Some(ty));
     }
+    assert_eq!(
+        disabled.descriptor_constructs["float"].identity,
+        disabled.descriptor_constructs["float64"].identity
+    );
 }
 
 #[test]
