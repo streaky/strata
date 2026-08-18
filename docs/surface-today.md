@@ -15,52 +15,53 @@ Terrane package
 ├── compiler-owned namespaces
 │   ├── /core
 │   │   ├── /core/output
-│   │   │   └── .print                         function
+│   │   │   └── print                          function
 │   │   ├── /core/types
-│   │   │   ├── .bool                         type descriptor
-│   │   │   ├── .int                          type descriptor
+│   │   │   ├── bool                           type descriptor
+│   │   │   ├── int                            type descriptor
 │   │   │   ├── signed fixed-width descriptors
-│   │   │   │   ├── .int8
-│   │   │   │   ├── .int16
-│   │   │   │   ├── .int32
-│   │   │   │   ├── .int64
-│   │   │   │   └── .int128
+│   │   │   │   ├── int8
+│   │   │   │   ├── int16
+│   │   │   │   ├── int32
+│   │   │   │   ├── int64
+│   │   │   │   └── int128
 │   │   │   ├── unsigned fixed-width descriptors
-│   │   │   │   ├── .uint8
-│   │   │   │   ├── .uint16
-│   │   │   │   ├── .uint32
-│   │   │   │   ├── .uint64
-│   │   │   │   └── .uint128
+│   │   │   │   ├── uint8
+│   │   │   │   ├── uint16
+│   │   │   │   ├── uint32
+│   │   │   │   ├── uint64
+│   │   │   │   └── uint128
 │   │   │   ├── floating-point descriptors
-│   │   │   │   ├── .float
-│   │   │   │   ├── .float32
-│   │   │   │   └── .float64
-│   │   │   ├── .string                       type descriptor
-│   │   │   ├── .none                         type descriptor
-│   │   │   └── .bytes                        descriptor name only
+│   │   │   │   ├── float                     spelling of float64
+│   │   │   │   ├── float32                   canonical descriptor
+│   │   │   │   └── float64                   canonical descriptor
+│   │   │   ├── string                         type descriptor
+│   │   │   ├── none                           type descriptor
+│   │   │   └── bytes                          descriptor name only
 │   │   └── /core/errors
-│   │       ├── .error                         structural interface name only
-│   │       ├── .arithmetic-overflow           error object name only
-│   │       ├── .division-by-zero              error object name only
-│   │       ├── .integer-conversion-overflow   error object name only
-│   │       ├── .negative-shift-count          error object name only
-│   │       ├── .resource-error                error object name only
-│   │       └── .coercion-error                error object name only
+│   │       ├── error                          structural interface name only
+│   │       ├── arithmetic-overflow            error object name only
+│   │       ├── division-by-zero               error object name only
+│   │       ├── integer-conversion-overflow    error object name only
+│   │       ├── negative-shift-count           error object name only
+│   │       ├── resource-error                 error object name only
+│   │       └── coercion-error                 error object name only
 │   └── /core/collections                      empty namespace; name only
 ├── default prelude
-│   ├── print                                  ordinary binding to /core/output::.print
-│   ├── bool                                   type name for /core/types::.bool
-│   ├── int                                    type name for /core/types::.int
-│   ├── float                                  type name for /core/types::.float
-│   ├── string                                 type name for /core/types::.string
-│   ├── bytes                                  type name for /core/types::.bytes
-│   └── none                                   type name for /core/types::.none
+│   ├── print                                  binding to /core/output::print
+│   ├── bool                                   type name for /core/types::bool
+│   ├── int                                    type name for /core/types::int
+│   ├── float                                  type spelling for /core/types::float64
+│   ├── string                                 type name for /core/types::string
+│   ├── bytes                                  type name for /core/types::bytes
+│   └── none                                   type name for /core/types::none
 └── source-declared package surface
     ├── namespace                              hierarchical object container
-    │   ├── binding                            ordinary value
-    │   ├── function                           ordinary callable value
-    │   ├── nested namespace                   object-form name
-    │   └── import                             selected names or namespace alias
+    │   ├── variable                           namespace-local value
+    │   ├── constant                           namespace-local or program-global value
+    │   ├── function                           callable value
+    │   ├── nested namespace                   hierarchical name
+    │   └── import                             selected names or namespace binding
     ├── function
     │   ├── parameter                          positional or named
     │   ├── optional parameter                 has a default expression
@@ -76,7 +77,7 @@ Terrane package
 ```text
 bool value
 ├── property
-│   └── .type -> .bool
+│   └── .type -> bool
 ├── unary operation
 │   └── not bool -> bool
 ├── logical operations
@@ -86,7 +87,7 @@ bool value
 │   ├── bool == bool -> bool
 │   └── bool != bool -> bool
 └── descriptor relation
-    └── value is a .bool -> bool
+    └── value is a bool -> bool
 ```
 
 `and` and `or` short-circuit. A descriptor comparison through `.type` uses canonical descriptor identity.
@@ -98,7 +99,7 @@ bool value
 ```text
 int value
 ├── property
-│   └── .type -> .int
+│   └── .type -> int
 ├── unary operations
 │   ├── -int -> int
 │   └── ~int -> int
@@ -125,7 +126,7 @@ int value
 │   ├── .coerce; Destination -> Destination
 │   └── .coerce.checked; Destination -> Destination or none
 └── descriptor relation
-    └── value is a .int -> bool
+    └── value is an int -> bool
 ```
 
 For an `int` source, the destination may be `int` or any fixed-width integer descriptor. `.coerce.wrap` and `.coerce.saturate` require a fixed-width source and therefore are not available from `int`.
@@ -174,13 +175,13 @@ fixed-width integer value T
     └── value is a descriptor T -> bool
 ```
 
-All integer descriptors, including `.int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `.int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked. Overflow, division by zero, invalid shift counts, and failing exact coercions terminate with deterministic Terrane runtime failures.
+All integer descriptors, including `int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked; overflow is a runtime failure. `.coerce.checked` returns `T or none`; `.coerce.wrap` and `.coerce.saturate` return `T`.
 
 Whole-number constant expressions may initialize a typed fixed-width binding directly when their mathematical value is in range; this includes signed minima such as `minimum int8 = -128`. This contextual treatment applies only to binding initializers. Whole-number literals passed to fixed-width parameters or returned through fixed-width contracts remain `int` and require explicit coercion.
 
 ### Floating-point values
 
-Implemented types are `float`, `float32`, and `float64`. `float` currently lowers as binary64, as does `float64`; they remain distinct canonical Terrane descriptors.
+Implemented types are `float32` and `float64`. `float` is the default-precision spelling of `float64` in this compiler version: both resolve to one canonical `float64` descriptor and lower as binary64.
 
 ```text
 floating-point value T
@@ -213,7 +214,7 @@ No float conversion methods are implemented.
 string value
 ├── properties
 │   ├── .length -> int        Unicode extended grapheme-cluster count
-│   └── .type -> .string
+│   └── .type -> string
 ├── methods
 │   ├── .concat; values... -> string
 │   └── .join; values... -> string
@@ -227,7 +228,7 @@ string value
 │   ├── string > string -> bool
 │   └── string >= string -> bool
 └── descriptor relation
-    └── value is a .string -> bool
+    └── value is a string -> bool
 ```
 
 `.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
@@ -237,29 +238,29 @@ string value
 ```text
 none value
 ├── property
-│   └── .type -> .none
+│   └── .type -> none
 └── descriptor relation
-    └── value is a .none -> bool
+    └── value is a none -> bool
 ```
 
 `none` is also the absent arm of `.coerce.checked`. No other operations on `none` are implemented.
 
 ### `bytes`
 
-`.bytes` is present in `/core/types` and the default prelude, but bytes literals, values, properties, methods, and operators are not implemented. It is therefore currently a reserved descriptor name rather than a usable implemented value type.
+`bytes` is present in `/core/types` and the default prelude, but bytes literals, values, properties, methods, and operators are not implemented. It is therefore currently a reserved descriptor name rather than a usable implemented value type.
 
 ## Type descriptor objects
 
 Every implemented scalar type has one canonical descriptor object:
 
 ```text
-.bool
-.int
-.int8  .int16  .int32  .int64  .int128
-.uint8 .uint16 .uint32 .uint64 .uint128
-.float .float32 .float64
-.string
-.none
+bool
+int
+int8  int16  int32  int64  int128
+uint8 uint16 uint32 uint64 uint128
+float32 float64 (`float` resolves to `float64`)
+string
+none
 ```
 
 Descriptor behavior:
@@ -286,7 +287,7 @@ value is a D
 
 both compare its resolved canonical Terrane type with `D`. Scalar values themselves are identity-less: `is` between ordinary scalar values is false even when their values and types are equal. Operand expressions are still evaluated for their effects.
 
-A source binding that holds a descriptor preserves that descriptor's canonical identity. Imported descriptors do the same.
+Descriptor constructs are not runtime values and cannot be assigned to source bindings. An explicit import may bind a canonical descriptor under another name without creating a new descriptor.
 
 ## Functions
 
@@ -295,7 +296,7 @@ A source binding that holds a descriptor preserves that descriptor's canonical i
 Canonical object and default-prelude spellings:
 
 ```text
-/core/output::.print
+/core/output::print
 print
 ```
 
@@ -337,36 +338,19 @@ The compiler checks duplicate, unknown, missing, and excess arguments, and rejec
 
 ## Source object and name model
 
-Terrane has separate ordinary-name and object-form lookup domains.
+Terrane resolves every bare name through one ordered view:
 
 ```text
-ordinary form: name
-object form:   .name
-member form:   value.name
-qualified:     namespace::.name
+lexical scope -> namespace -> program-global -> default prelude
 ```
 
-Implemented object-form entities are:
+The first matching name may denote a value, function, canonical descriptor, namespace, or imported entity. There is no leading-dot object form: `.` appears only between a receiver and a member, as in `value.name`. Namespace qualification uses `namespace::name`.
 
-- namespace objects;
-- canonical scalar type descriptors;
-- the compiler-reserved core error names;
-- object-form namespace imports/aliases.
+Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace bindings, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented.
 
-Implemented ordinary entities are:
+A top-level plain assignment creates a namespace variable. Functions cannot read or write namespace variables across that boundary; mutable state must cross as an explicit `global`, parameter, or return value. Namespace variables cannot be `public`.
 
-- bindings;
-- functions;
-- parameters;
-- loop targets;
-- imported ordinary names;
-- `.print` after object-form resolution.
-
-Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
-
-`constant` declarations are non-rebindable at every supported identity tier. Parameters and
-`for` targets may be reassigned as lexical value bindings; generated Rust marks them mutable only
-when semantic write analysis finds a reassignment.
+`constant` declarations are non-rebindable at every supported identity tier. In one lexical scope, an ordinary assignment to an already initialized local creates a replacement binding; its initializer sees the earlier binding, and its inferred type may change. Assignment to an uninitialized local, an enclosing-scope binding, a parameter, or a `for` target remains mutation. Generated Rust marks only genuinely mutated storage mutable.
 
 ## Properties and methods index
 
@@ -394,14 +378,14 @@ No other value properties or methods are recognized by the current semantic/lowe
 These names exist so the namespace and resolution model has stable canonical identities. They must not be mistaken for completed runtime behavior. The `.error` name is classified as a structural interface and the remaining `/core/errors` names as error objects, but fields, inheritance, constructors, catchability, and runtime instances remain unimplemented:
 
 ```text
-/core/types::.bytes
-/core/errors::.error
-/core/errors::.arithmetic-overflow
-/core/errors::.division-by-zero
-/core/errors::.integer-conversion-overflow
-/core/errors::.negative-shift-count
-/core/errors::.resource-error
-/core/errors::.coercion-error
+/core/types::bytes
+/core/errors::error
+/core/errors::arithmetic-overflow
+/core/errors::division-by-zero
+/core/errors::integer-conversion-overflow
+/core/errors::negative-shift-count
+/core/errors::resource-error
+/core/errors::coercion-error
 /core/collections
 ```
 

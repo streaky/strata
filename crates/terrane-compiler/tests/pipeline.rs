@@ -15,18 +15,43 @@ fn hello_lowers_deterministically() {
 }
 
 #[test]
-fn inferred_local_first_assignment_lowers_as_a_declaration() {
+fn inferred_local_reassignment_lowers_as_assignment() {
     let source = "namespace inferred\nfunction main\n  total = 5\n  total = total + 1\n";
     let compilation = terrane_compiler::compile("inferred.trn", source.to_owned()).unwrap();
 
     assert!(compilation.rust.contains(
         "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
     ));
+    assert!(!compilation.rust.contains("let _ = &total;"));
     assert!(
         compilation
             .rust
             .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
     );
+}
+
+#[test]
+fn annotated_replacement_lowers_as_source_ordered_shadowing() {
+    let source = concat!(
+        "namespace replacement\n",
+        "from /core/types import int8\n",
+        "function main\n",
+        "  value int8 = 12\n",
+        "  value int = value.coerce; int\n",
+        "  print; value\n",
+        "function second\n",
+        "  value int8 = 7\n",
+        "  print; value\n",
+        "function blocks\n",
+        "  if true\n",
+        "    value int8 = 1\n",
+        "    value int = value.coerce; int\n",
+        "  if true\n",
+        "    value int8 = 2\n",
+    );
+    let compilation = terrane_compiler::compile("replacement.trn", source.to_owned()).unwrap();
+
+    assert_eq!(compilation.rust.matches("let _ = &value;").count(), 2);
 }
 
 #[test]
@@ -88,11 +113,11 @@ fn permits_a_comment_after_a_closed_quote() {
 
 #[test]
 fn compilation_failure_owns_the_original_source() {
-    let source = "namespace app\nfunction main\n  print; .missing\n".to_owned();
+    let source = "namespace app\nfunction main\n  print; missing\n".to_owned();
     let failure = terrane_compiler::compile("owned.trn", source.clone()).unwrap_err();
     assert_eq!(failure.source.text(), source);
     assert_eq!(failure.source.path(), PathBuf::from("owned.trn").as_path());
-    assert!(failure.iter().any(|diagnostic| diagnostic.code == "S2014"));
+    assert!(failure.iter().any(|diagnostic| diagnostic.code == "S2013"));
 }
 
 #[test]
@@ -158,16 +183,16 @@ fn rejects_trailing_content_after_block_marker() {
 }
 
 #[test]
-fn rejects_unresolved_object() {
+fn rejects_unresolved_name() {
     let source = HELLO.replace(
         "print; >>\n    Hello from Terrane!\n\n    Tail strings make punctuation literal: >, #, \"quotes\".",
-        "print; .missing",
+        "print; missing",
     );
-    let diagnostics = terrane_compiler::compile("object.trn", source).unwrap_err();
+    let diagnostics = terrane_compiler::compile("name.trn", source).unwrap_err();
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "S2014")
+            .any(|diagnostic| diagnostic.code == "S2013")
     );
 }
 
@@ -234,12 +259,10 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
 fn lowers_scalar_membership_and_descriptor_identity_statically() {
     let source = concat!(
         "namespace descriptors\n",
-        "from /core/types import .int8\n",
+        "from /core/types import int8 as byte, int8 as other-byte\n",
         "function accepts; item int\n",
         "  parameter-member = item is a int\n",
         "function main\n",
-        "  byte = .int8\n",
-        "  other-byte = .int8\n",
         "  value = 1\n",
         "  member = value is a int\n",
         "  same-descriptor = byte is byte\n",
@@ -377,6 +400,7 @@ fn lowers_values_in_their_integer_destination_type() {
         "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(\
 terrane_string_support::length(&text) as i128);"
     ));
+    assert!(!compilation.rust.contains("let _ = &total;"));
     assert!(
         compilation
             .rust
@@ -388,7 +412,7 @@ terrane_string_support::length(&text) as i128);"
 fn lowers_fixed_width_arithmetic_through_checked_runtime_operations() {
     let source = concat!(
         "namespace fixed\n",
-        "from /core/types import .int8\n",
+        "from /core/types import int8\n",
         "function main\n",
         "  left int8 = 120\n",
         "  right int8 = 10\n",

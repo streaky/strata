@@ -1,6 +1,5 @@
 namespace descriptor-constructs-no-prelude
-target = int8
-same = target
+from /core/types import int8 as same
 function accepts int8; value int8
   return value
 function main

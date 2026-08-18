@@ -1,0 +1,6 @@
+namespace lexical-replacement
+function main
+  value int8 = 1
+  print; value
+  value int = 2
+  print; value

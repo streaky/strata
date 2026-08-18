@@ -1,0 +1,4 @@
+namespace hello
+from /core/output import missing
+function main
+  print; 'hello'

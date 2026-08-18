@@ -1,9 +1,7 @@
 namespace later-coercion-alias-argument
-from /core/output import .print
-from /core/types import .int8
-print = .print
+from /core/output import print
 
 function main
   value int = 100
   print; (value.coerce; tiny)
-tiny = .int8
+from /core/types import int8 as tiny

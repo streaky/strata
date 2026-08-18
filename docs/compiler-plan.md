@@ -334,7 +334,7 @@ The temporary semantic projection below the syntax tree remains deliberately lim
 Parser diagnostics own the stable `S1xxx` range:
 
 ```text
-S1001 unexpected layout token             S1017 malformed object lookup
+S1001 unexpected layout token             S1017 receiverless member access
 S1002 malformed namespace declaration     S1018 unclosed grouped expression
 S1003 missing binding name                S1019 missing expression
 S1004 missing binding initializer         S1020 malformed function type
@@ -395,6 +395,26 @@ assembly and cross-unit resolution. Semantic phases report the first failure in
 deterministic package and source order because subsequent resolution failures can depend
 on declarations or imports that the first failure prevented from assembling; manifest
 loading instead accumulates its independently discoverable diagnostics.
+
+Semantic diagnostics own the stable `S2xxx` range:
+
+```text
+S2001 package or manifest load failure       S2014 retired; do not reuse
+S2002 invalid namespace declaration count    S2015 missing package `main`
+S2003 anchored namespace declaration         S2016 multiple package `main` functions
+S2004 declaration without a name             S2017 compiler-owned namespace declaration
+S2005 duplicate namespace declaration        S2018 invalid source identifier
+S2006 malformed import                       S2019 reserved namespace segment
+S2007 namespace path above root              S2020 namespace-directory mismatch
+S2008 import without a name                  S2021 invalid namespace replacement
+S2009 unresolved imported name               S2022 constant reassignment
+S2010 inaccessible imported name             S2023 initializer self-reference
+S2011 import collision                       S2024 namespace initialization cycle
+S2012 duplicate lexical binding              S2025 public namespace variable
+S2013 unresolved source name                 S2026 namespace-variable confinement
+```
+
+Retired codes remain unavailable so a stable code never acquires a second meaning.
 
 ### Milestone 4 — Types, calls, and control-flow semantics
 
@@ -728,6 +748,18 @@ forms*. Both migrate the whole corpus, so running them back to back keeps the fi
 to two passes rather than interleaving it through later work. They are separate milestones
 because they are separate language changes with separate exit criteria, not because the
 migrations are independent.
+
+Implemented evidence: the compiler now assembles one symbol table per namespace and resolves
+imports, lexical names, namespace names, program globals, and prelude names through one lookup
+view. Leading-dot receiverless expressions fail with `S1017`; member dots remain receiver-only.
+Collision, visibility, shadowing, construct-import, and descriptor-import cases exercise the
+single view. `float` resolves to the canonical `float64` descriptor. Function bodies reject
+namespace-local variables and accept explicit globals, constants, constructs, and imports;
+namespace variables reject `public`. Plain assignment no longer aliases compile-time constructs,
+while same-scope local replacement is source-ordered, initializer-safe, and lowered as Rust
+shadowing. The conformance corpus, unit fixtures, generated-Rust goldens, and exploratory demos
+use the canonical spellings.
+
 
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
@@ -1241,26 +1273,17 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.7 are delivered. The 4.7 completeness audit corrections are also
-closed: numeric literal lowering, bare-name initializers, normalized and validated namespace
-discovery, empty-join receiver evaluation, manifest root validation, strict segment grammar,
-canonical demo paths, package-root build placement, auditable resolved-source metadata,
-bound-string-method rejection, path diagnostics, and conformance coverage all have focused
-regressions. The previously ambiguous minimal collection subset is explicitly deferred:
-`/core/collections` remains an empty reserved namespace until the iterator protocol and
-collections arrive in milestones 13 and 14.
+Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections and
+milestone 4.8 review remediation are closed: symbol storage, resolution, diagnostics,
+semantic types, lowering metadata, fixtures, goldens, examples, and surface documentation
+all use the single-view name model. Permanent run cases compile and execute annotated
+lexical replacement and same-type reassignment, while focused rejected cases preserve
+assignment-type compatibility at lexical and namespace scope.
 
-Three defects remain open, none of them namespace-path or lookup-model work. A program-global read
-anywhere other than a bare `print` argument emits the namespace-local storage name and fails to
-compile. `global x = x + 1` takes the same lock twice and deadlocks the compiled program, which
-`terrane check` does not catch. A binding declared inside a nested `if`, `for`, or `while` body is
-never added to the scope table, so no later statement resolves it; that one reproduces on `main` and
-predates this branch.
-
-The next work in order is milestone 4.8, followed by milestone 5. The two program-global defects are
-effectively prerequisites for 4.8 rather than parallel work: that milestone removes namespace
-variables from function-body resolution, which makes `global` the only way to share mutable state
-between functions, and today that path cannot be read in an expression or safely incremented.
+The next work in order is milestone 5. Its boundary is Rust IR, readable deterministic emission,
+and Cargo builds; later language features remain staged by their own milestones. The minimal
+collection subset remains explicitly deferred: `/core/collections` is an empty reserved namespace
+until iterator and collection support arrives in milestones 13 and 14.
 
 Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 

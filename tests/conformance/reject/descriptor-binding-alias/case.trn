@@ -1,0 +1,2 @@
+namespace descriptor-binding-alias
+byte = int8

@@ -1,2 +1,2 @@
 namespace two
-public .item = 2
+public constant item = 2

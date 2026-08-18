@@ -19,6 +19,10 @@ fn main() {
     println!("{}", terrane_scalar_support::scalar_text(&(accepts(terrane_int_support::Int::from(1_i128)))));
     println!("{}", terrane_scalar_support::scalar_text(&({  true })));
     println!("{}", terrane_scalar_support::scalar_text(&({  true })));
+    let value: f64 = 1.0;
+    println!("{}", terrane_scalar_support::scalar_text(&({ let _ = value; true })));
+    println!("{}", terrane_scalar_support::scalar_text(&({ let _ = value; true })));
+    println!("{}", terrane_scalar_support::scalar_text(&({  true })));
     println!("{}", terrane_scalar_support::scalar_text(&(same_type(terrane_int_support::Int::from(2_i128), terrane_int_support::Int::from(3_i128)))));
     println!("{}", terrane_scalar_support::scalar_text(&(different_type(terrane_int_support::Int::from(4_i128), String::from("five")))));
 }

@@ -46,11 +46,10 @@ fn contains(node: &terrane_compiler::syntax::SyntaxNode, kind: SyntaxKind) -> bo
 
 #[test]
 fn parses_lossless_declarations_and_legal_empty_blocks() {
-    let text = "namespace example/app\n.cache public constant count int = 1\n.trace public async throws function empty; value int\nfunction main\n  count = count + 1\n";
+    let text = "namespace example/app\npublic constant count int = 1\npublic async throws function empty; value int\nfunction main\n  count = count + 1\n";
     let tree = parse_source(text);
     assert!(contains(&tree.root, SyntaxKind::NamespaceDeclaration));
     assert!(contains(&tree.root, SyntaxKind::Binding));
-    assert!(contains(&tree.root, SyntaxKind::DeclarationModifier));
     assert!(contains(&tree.root, SyntaxKind::Visibility));
     assert!(contains(&tree.root, SyntaxKind::DeclarationQualifier));
     assert_eq!(
@@ -101,13 +100,13 @@ fn boolean_words_are_literals_not_names() {
 }
 
 #[test]
-fn calls_distinguish_object_lookup_zero_arguments_and_grouped_nesting() {
+fn calls_distinguish_names_zero_arguments_and_grouped_nesting() {
     let tree = parse_source(
-        ".print; 'hello'\n.thing\nresult = .thing;\nvalue = call; first, (convert; second)\n",
+        "print; 'hello'\nthing\nresult = thing;\nvalue = call; first, (convert; second)\n",
     );
     assert_eq!(tree.root.children[0].kind, SyntaxKind::CallExpression);
-    assert_eq!(tree.root.children[1].kind, SyntaxKind::ObjectName);
-    assert!(contains(&tree.root, SyntaxKind::ObjectName));
+    assert_eq!(tree.root.children[1].kind, SyntaxKind::Name);
+    assert!(contains(&tree.root, SyntaxKind::Name));
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert!(contains(&tree.root, SyntaxKind::GroupExpression));
     let source = SourceFile::new(
@@ -298,20 +297,18 @@ fn normalized_tree_retains_tokens_and_trivia() {
 #[test]
 fn normalized_import_tree_retains_anchors_and_aliases() {
     assert_eq!(
-        parse_source("from /core/output import .debug as .trace\n").normalized(),
+        parse_source("from /core/output import debug as trace\n").normalized(),
         concat!(
-            "CompilationUnit 0..42\n",
-            "  ImportDeclaration 0..41\n",
+            "CompilationUnit 0..40\n",
+            "  ImportDeclaration 0..39\n",
             "    NamespacePath 5..17\n",
             "      NamespaceAnchor 5..6\n",
             "      Name 6..10\n",
             "      Name 11..17\n",
-            "    ObjectImport 25..41\n",
-            "      ObjectName 25..31\n",
-            "        Name 26..31\n",
-            "      ImportAlias 32..41\n",
-            "        ObjectName 35..41\n",
-            "          Name 36..41\n",
+            "    ObjectImport 25..39\n",
+            "      Name 25..30\n",
+            "      ImportAlias 31..39\n",
+            "        Name 34..39\n",
             "tokens\n",
             "  Identifier 0..4 \"from\"\n",
             "  Operator 5..6 \"/\"\n",
@@ -319,19 +316,17 @@ fn normalized_import_tree_retains_anchors_and_aliases() {
             "  Operator 10..11 \"/\"\n",
             "  Identifier 11..17 \"output\"\n",
             "  Identifier 18..24 \"import\"\n",
-            "  Dot 25..26 \".\"\n",
-            "  Identifier 26..31 \"debug\"\n",
-            "  Identifier 32..34 \"as\"\n",
-            "  Dot 35..36 \".\"\n",
-            "  Identifier 36..41 \"trace\"\n",
-            "  Newline 41..42 \"\\n\"\n",
-            "  Eof 42..42 \"\"\n",
+            "  Identifier 25..30 \"debug\"\n",
+            "  Identifier 31..33 \"as\"\n",
+            "  Identifier 34..39 \"trace\"\n",
+            "  Newline 39..40 \"\\n\"\n",
+            "  Eof 40..40 \"\"\n",
             "trivia\n",
             "  Whitespace 4..5 \" \"\n",
             "  Whitespace 17..18 \" \"\n",
             "  Whitespace 24..25 \" \"\n",
-            "  Whitespace 31..32 \" \"\n",
-            "  Whitespace 34..35 \" \"\n",
+            "  Whitespace 30..31 \" \"\n",
+            "  Whitespace 33..34 \" \"\n",
         )
     );
 }
@@ -339,7 +334,7 @@ fn normalized_import_tree_retains_anchors_and_aliases() {
 #[test]
 fn parses_structural_import_forms_and_named_arguments() {
     let tree = parse_source(
-        "from /core/output import .print, .debug as .trace\nfrom ../sibling import .item\nimport with .sandboxed-import\nvalue = render; input, width = 80\n",
+        "from /core/output import print, debug as trace\nfrom ../sibling import item\nimport with sandboxed-import\nvalue = render; input, width = 80\n",
     );
     let import = &tree.root.children[0];
     assert_eq!(import.kind, SyntaxKind::ImportDeclaration);
@@ -356,10 +351,7 @@ fn parses_structural_import_forms_and_named_arguments() {
     assert_eq!(import.children[1].kind, SyntaxKind::ObjectImport);
     assert_eq!(import.children[2].kind, SyntaxKind::ObjectImport);
     assert_eq!(import.children[2].children[1].kind, SyntaxKind::ImportAlias);
-    assert_eq!(
-        tree.root.children[2].children[0].kind,
-        SyntaxKind::ObjectName
-    );
+    assert_eq!(tree.root.children[2].children[0].kind, SyntaxKind::Name);
     assert!(contains(&tree.root, SyntaxKind::CallExpression));
     assert_eq!(
         tree.root.children[3].children.last().unwrap().children[1]
@@ -371,7 +363,7 @@ fn parses_structural_import_forms_and_named_arguments() {
 
 #[test]
 fn two_token_import_binding_does_not_consume_structural_imports() {
-    let tree = parse_source("import value = 1\nfrom /core/output import .print\n");
+    let tree = parse_source("import value = 1\nfrom /core/output import print\n");
 
     assert_eq!(tree.root.children[0].kind, SyntaxKind::Binding);
     assert_eq!(tree.root.children[1].kind, SyntaxKind::ImportDeclaration);
@@ -380,7 +372,7 @@ fn two_token_import_binding_does_not_consume_structural_imports() {
 #[test]
 fn parses_slash_namespace_paths_and_rejects_whitespace_separators() {
     let tree = parse_source(
-        "namespace example/app\nfrom /core/output import .print\nfrom ../shared/config import .settings\n",
+        "namespace example/app\nfrom /core/output import print\nfrom ../shared/config import settings\n",
     );
     assert_eq!(tree.root.children.len(), 3);
     assert!(tree.root.children.iter().all(|node| {
@@ -391,8 +383,8 @@ fn parses_slash_namespace_paths_and_rejects_whitespace_separators() {
     }));
 
     rejected("namespace example app\n", "S1002");
-    rejected("from /core output import .print\n", "S1026");
-    rejected("from .. shared import .item\n", "S1026");
+    rejected("from /core output import print\n", "S1026");
+    rejected("from .. shared import item\n", "S1026");
 }
 
 #[test]
@@ -430,11 +422,9 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
     rejected("catch problem\n", "S1090");
     rejected("finally\n", "S1090");
     rejected("case value\n", "S1090");
-    rejected("from import .thing\n", "S1026");
-    rejected("import .thing\n", "S1027");
-    rejected("from /core/output import print\n", "S1026");
-    rejected("from /core/output import .print, , ]\n", "S1026");
-    rejected("import with anything at all\n", "S1027");
+    rejected("from import thing\n", "S1026");
+    rejected("from /core/output import print, , ]\n", "S1026");
+    rejected("import with anything at all\n", "S1025");
     rejected("class thing\n", "S1090");
 }
 

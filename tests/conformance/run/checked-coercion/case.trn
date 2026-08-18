@@ -1,10 +1,7 @@
 namespace checked-coercion
-from /core/types import .int8, .uint8, .none
-int8 = .int8
-tiny = .int8
-none = .none
+from /core/types import int8, int8 as tiny, uint8, none
 
-shared int = 100
+constant shared int = 100
 
 function convert int8; item int
   result int8 = 0
@@ -13,7 +10,6 @@ function convert int8; item int
   return result
 
 function helper
-  helper-tiny = .uint8
   print; 'helper'
 
 function main

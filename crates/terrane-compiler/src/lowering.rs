@@ -183,7 +183,7 @@ impl Emitter<'_> {
         (node.kind == SyntaxKind::Name)
             .then(|| {
                 self.package
-                    .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+                    .resolve_name_at(self.unit, node.span.start, self.text(node))
             })
             .flatten()
             .filter(|symbol| symbol.global && symbol.kind == SymbolKind::Binding)
@@ -241,11 +241,9 @@ impl Emitter<'_> {
         reason = "namespace initialization sequencing remains auditable as one lowering operation"
     )]
     fn namespace_binding(&mut self, node: &SyntaxNode) {
-        if Self::is_compiler_object_binding(node)
-            || node.children.iter().any(|child| {
-                child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
-            })
-        {
+        if node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier && self.text(child) == "global"
+        }) {
             return;
         }
         let Some(name_node) = node
@@ -258,7 +256,7 @@ impl Emitter<'_> {
         let source_name = self.text(name_node);
         let Some(symbol) =
             self.package
-                .resolve_ordinary_at(self.unit, name_node.span.start, source_name)
+                .resolve_name_at(self.unit, name_node.span.start, source_name)
         else {
             return;
         };
@@ -435,11 +433,7 @@ impl Emitter<'_> {
                     if value_type == Some(ValueType::Scalar(ScalarType::Int))
                         && right.kind == SyntaxKind::BinaryExpression
                     {
-                        value = value
-                            .strip_prefix('(')
-                            .and_then(|value| value.strip_suffix(')'))
-                            .unwrap_or(&value)
-                            .to_owned();
+                        value = Self::unwrapped_expression(value);
                     }
                     let target = self.expression(left);
                     self.line(&format!("{target} = {value};"));
@@ -487,22 +481,14 @@ impl Emitter<'_> {
             return;
         };
         let name = rust_name(self.text(name_node));
-        if Self::is_compiler_object_binding(node) {
-            return;
-        }
         let binding = self
             .unit
             .typed_bindings
             .iter()
             .find(|binding| binding.span == node.span);
-        if binding.is_some_and(|binding| matches!(binding.value_type, ValueType::TypeDescriptor(_)))
-        {
-            return;
-        }
         let ty = binding.map(|binding| match binding.value_type {
             ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
-            ValueType::TypeDescriptor(_) => "()".to_owned(),
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -510,6 +496,12 @@ impl Emitter<'_> {
             "analyzed initialized value binding must have a selected initializer"
         );
         let mutable = binding.is_some_and(|binding| binding.mutable);
+        if self
+            .package
+            .is_lexical_replacement(self.unit, node.span, self.text(name_node))
+        {
+            self.line(&format!("let _ = &{name};"));
+        }
         self.line_start();
         self.output.push_str("let ");
         if mutable {
@@ -520,20 +512,17 @@ impl Emitter<'_> {
             write!(self.output, ": {ty}").unwrap();
         }
         if let Some(initializer) = initializer {
-            let initializer = if let Some(binding) = binding {
+            let mut value = if let Some(binding) = binding {
                 self.expression_as(initializer, binding.value_type)
             } else {
                 self.expression(initializer)
             };
-            write!(self.output, " = {initializer}").unwrap();
+            if initializer.kind == SyntaxKind::BinaryExpression {
+                value = Self::unwrapped_expression(value);
+            }
+            write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
-    }
-
-    fn is_compiler_object_binding(node: &SyntaxNode) -> bool {
-        node.children
-            .last()
-            .is_some_and(|child| child.kind == SyntaxKind::ObjectName)
     }
 
     fn postfix(&mut self, node: &SyntaxNode) {
@@ -707,7 +696,7 @@ impl Emitter<'_> {
         match value_type {
             ValueType::Scalar(ScalarType::Int) => self.adaptive_expression(node),
             ValueType::Scalar(ScalarType::Float32)
-                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float)) =>
+                if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Float64)) =>
             {
                 format!("({}) as f32", self.expression(node))
             }
@@ -913,7 +902,7 @@ impl Emitter<'_> {
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
-                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float)),
+                text if text.contains('.') => Some(ValueType::Scalar(ScalarType::Float64)),
                 text if text.chars().all(|character| {
                     character.is_ascii_hexdigit() || matches!(character, '_' | 'x' | 'o' | 'b')
                 }) =>
@@ -1102,7 +1091,7 @@ impl Emitter<'_> {
                 .value_type(receiver)
                 .and_then(|value_type| match value_type {
                     ValueType::Scalar(value_type) => Some(format!("type:{value_type}")),
-                    ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => None,
+                    ValueType::ScalarOrNone(_) => None,
                 });
         }
         crate::semantics::descriptor_expression_type(self.package, self.unit, node)
@@ -1128,7 +1117,7 @@ impl Emitter<'_> {
         }
         let symbol =
             self.package
-                .resolve_ordinary_at(self.unit, callee.span.start, self.text(callee))?;
+                .resolve_name_at(self.unit, callee.span.start, self.text(callee))?;
         let span = symbol.declaration_span?;
         self.package
             .units
@@ -1146,9 +1135,9 @@ impl Emitter<'_> {
         {
             return local.clone();
         }
-        let Some(symbol) =
-            self.package
-                .resolve_ordinary_at(self.unit, node.span.start, source_name)
+        let Some(symbol) = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, source_name)
         else {
             return rust_name(source_name);
         };
@@ -1186,7 +1175,7 @@ impl Emitter<'_> {
 
     fn namespace_name(&self, node: &SyntaxNode) -> String {
         self.package
-            .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+            .resolve_name_at(self.unit, node.span.start, self.text(node))
             .and_then(|symbol| {
                 symbol
                     .declaration_span
@@ -1203,9 +1192,9 @@ impl Emitter<'_> {
         {
             return None;
         }
-        let symbol =
-            self.package
-                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
+        let symbol = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, self.text(node))?;
         if symbol.global {
             return None;
         }
@@ -1269,10 +1258,7 @@ impl Emitter<'_> {
                 continue;
             }
             if let Some(default) = parameter.children.last().filter(|child| {
-                !matches!(
-                    child.kind,
-                    SyntaxKind::Name | SyntaxKind::TypeExpression | SyntaxKind::ObjectName
-                )
+                !matches!(child.kind, SyntaxKind::Name | SyntaxKind::TypeExpression)
             }) {
                 let value = literal_or_text(&owner.source, default);
                 values[index] = Some(
@@ -1290,39 +1276,8 @@ impl Emitter<'_> {
         let SyntaxKind::Name = node.kind else {
             return false;
         };
-        let Some(symbol) =
-            self.package
-                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
-        else {
-            return false;
-        };
-        if symbol.identity == identity {
-            return true;
-        }
-        let Some(declaration) = symbol.declaration_span else {
-            return false;
-        };
-        let Some(owner) = self
-            .package
-            .units
-            .iter()
-            .find(|unit| unit.source.id() == declaration.file)
-        else {
-            return false;
-        };
-        let binding = find_node(&owner.tree.root, SyntaxKind::Binding, declaration)
-            .or_else(|| find_node(&owner.tree.root, SyntaxKind::Assignment, declaration));
-        let Some(object) = binding.and_then(|binding| {
-            binding
-                .children
-                .iter()
-                .find(|child| child.kind == SyntaxKind::ObjectName)
-        }) else {
-            return false;
-        };
-        let name = owner.source.text()[object.span.start..object.span.end].trim_start_matches('.');
         self.package
-            .resolve_object_at(owner, object.span.start, name)
+            .resolve_name_at(self.unit, node.span.start, self.text(node))
             .is_some_and(|symbol| symbol.identity == identity)
     }
 
@@ -1337,14 +1292,11 @@ impl Emitter<'_> {
             node = grouped;
         }
         let expression = self.expression(node);
-        if node.kind == SyntaxKind::BinaryExpression
-            && let Some(inner) = expression
-                .strip_prefix('(')
-                .and_then(|value| value.strip_suffix(')'))
-        {
-            return inner.to_owned();
+        if node.kind == SyntaxKind::BinaryExpression {
+            Self::unwrapped_expression(expression)
+        } else {
+            expression
         }
-        expression
     }
 
     fn line_start(&mut self) {
@@ -1492,7 +1444,6 @@ fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNo
                 && !matches!(
                     child.kind,
                     SyntaxKind::TypeExpression
-                        | SyntaxKind::DeclarationModifier
                         | SyntaxKind::Visibility
                         | SyntaxKind::DeclarationQualifier
                 )

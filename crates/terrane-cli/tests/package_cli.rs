@@ -26,8 +26,7 @@ impl TempPackage {
             path.join("app/main.trn"),
             concat!(
                 "namespace cli/app\n",
-                "from /core/output import .print\n",
-                "print = .print\n",
+                "from /core/output import print\n",
                 "function main\n",
                 "  print; 'manifest CLI'\n",
             ),
@@ -35,7 +34,7 @@ impl TempPackage {
         .unwrap();
         fs::write(
             path.join("support/support.trn"),
-            "namespace cli/support\npublic .value = 1\n",
+            "namespace cli/support\npublic constant value = 1\n",
         )
         .unwrap();
         Self(path)
