@@ -15,37 +15,37 @@ Terrane package
 ├── compiler-owned namespaces
 │   ├── /core
 │   │   ├── /core/output
-│   │   │   └── .print                         function
+│   │   │   └── print                          function
 │   │   ├── /core/types
-│   │   │   ├── .bool                         type descriptor
-│   │   │   ├── .int                          type descriptor
+│   │   │   ├── bool                           type descriptor
+│   │   │   ├── int                            type descriptor
 │   │   │   ├── signed fixed-width descriptors
-│   │   │   │   ├── .int8
-│   │   │   │   ├── .int16
-│   │   │   │   ├── .int32
-│   │   │   │   ├── .int64
-│   │   │   │   └── .int128
+│   │   │   │   ├── int8
+│   │   │   │   ├── int16
+│   │   │   │   ├── int32
+│   │   │   │   ├── int64
+│   │   │   │   └── int128
 │   │   │   ├── unsigned fixed-width descriptors
-│   │   │   │   ├── .uint8
-│   │   │   │   ├── .uint16
-│   │   │   │   ├── .uint32
-│   │   │   │   ├── .uint64
-│   │   │   │   └── .uint128
+│   │   │   │   ├── uint8
+│   │   │   │   ├── uint16
+│   │   │   │   ├── uint32
+│   │   │   │   ├── uint64
+│   │   │   │   └── uint128
 │   │   │   ├── floating-point descriptors
-│   │   │   │   ├── .float                    spelling of .float64
-│   │   │   │   ├── .float32                  canonical descriptor
-│   │   │   │   └── .float64                  canonical descriptor
-│   │   │   ├── .string                       type descriptor
-│   │   │   ├── .none                         type descriptor
-│   │   │   └── .bytes                        descriptor name only
+│   │   │   │   ├── float                     spelling of float64
+│   │   │   │   ├── float32                   canonical descriptor
+│   │   │   │   └── float64                   canonical descriptor
+│   │   │   ├── string                         type descriptor
+│   │   │   ├── none                           type descriptor
+│   │   │   └── bytes                          descriptor name only
 │   │   └── /core/errors
-│   │       ├── .error                         structural interface name only
-│   │       ├── .arithmetic-overflow           error object name only
-│   │       ├── .division-by-zero              error object name only
-│   │       ├── .integer-conversion-overflow   error object name only
-│   │       ├── .negative-shift-count          error object name only
-│   │       ├── .resource-error                error object name only
-│   │       └── .coercion-error                error object name only
+│   │       ├── error                          structural interface name only
+│   │       ├── arithmetic-overflow            error object name only
+│   │       ├── division-by-zero               error object name only
+│   │       ├── integer-conversion-overflow    error object name only
+│   │       ├── negative-shift-count           error object name only
+│   │       ├── resource-error                 error object name only
+│   │       └── coercion-error                 error object name only
 │   └── /core/collections                      empty namespace; name only
 ├── default prelude
 │   ├── print                                  binding to /core/output::print
@@ -77,7 +77,7 @@ Terrane package
 ```text
 bool value
 ├── property
-│   └── .type -> .bool
+│   └── .type -> bool
 ├── unary operation
 │   └── not bool -> bool
 ├── logical operations
@@ -87,7 +87,7 @@ bool value
 │   ├── bool == bool -> bool
 │   └── bool != bool -> bool
 └── descriptor relation
-    └── value is a .bool -> bool
+    └── value is a bool -> bool
 ```
 
 `and` and `or` short-circuit. A descriptor comparison through `.type` uses canonical descriptor identity.
@@ -99,7 +99,7 @@ bool value
 ```text
 int value
 ├── property
-│   └── .type -> .int
+│   └── .type -> int
 ├── unary operations
 │   ├── -int -> int
 │   └── ~int -> int
@@ -126,7 +126,7 @@ int value
 │   ├── .coerce; Destination -> Destination
 │   └── .coerce.checked; Destination -> Destination or none
 └── descriptor relation
-    └── value is a .int -> bool
+    └── value is an int -> bool
 ```
 
 For an `int` source, the destination may be `int` or any fixed-width integer descriptor. `.coerce.wrap` and `.coerce.saturate` require a fixed-width source and therefore are not available from `int`.
@@ -175,13 +175,13 @@ fixed-width integer value T
     └── value is a descriptor T -> bool
 ```
 
-All integer descriptors, including `.int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `.int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked. Overflow, division by zero, invalid shift counts, and failing exact coercions terminate with deterministic Terrane runtime failures.
+All integer descriptors, including `int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked; overflow is a runtime failure. `.coerce.checked` returns `T or none`; `.coerce.wrap` and `.coerce.saturate` return `T`.
 
 Whole-number constant expressions may initialize a typed fixed-width binding directly when their mathematical value is in range; this includes signed minima such as `minimum int8 = -128`. This contextual treatment applies only to binding initializers. Whole-number literals passed to fixed-width parameters or returned through fixed-width contracts remain `int` and require explicit coercion.
 
 ### Floating-point values
 
-Implemented types are `float32` and `float64`. `float` is the default-precision spelling of `float64` in this compiler version: both resolve to one canonical `.float64` descriptor and lower as binary64.
+Implemented types are `float32` and `float64`. `float` is the default-precision spelling of `float64` in this compiler version: both resolve to one canonical `float64` descriptor and lower as binary64.
 
 ```text
 floating-point value T
@@ -214,7 +214,7 @@ No float conversion methods are implemented.
 string value
 ├── properties
 │   ├── .length -> int        Unicode extended grapheme-cluster count
-│   └── .type -> .string
+│   └── .type -> string
 ├── methods
 │   ├── .concat; values... -> string
 │   └── .join; values... -> string
@@ -228,7 +228,7 @@ string value
 │   ├── string > string -> bool
 │   └── string >= string -> bool
 └── descriptor relation
-    └── value is a .string -> bool
+    └── value is a string -> bool
 ```
 
 `.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
@@ -238,29 +238,29 @@ string value
 ```text
 none value
 ├── property
-│   └── .type -> .none
+│   └── .type -> none
 └── descriptor relation
-    └── value is a .none -> bool
+    └── value is a none -> bool
 ```
 
 `none` is also the absent arm of `.coerce.checked`. No other operations on `none` are implemented.
 
 ### `bytes`
 
-`.bytes` is present in `/core/types` and the default prelude, but bytes literals, values, properties, methods, and operators are not implemented. It is therefore currently a reserved descriptor name rather than a usable implemented value type.
+`bytes` is present in `/core/types` and the default prelude, but bytes literals, values, properties, methods, and operators are not implemented. It is therefore currently a reserved descriptor name rather than a usable implemented value type.
 
 ## Type descriptor objects
 
 Every implemented scalar type has one canonical descriptor object:
 
 ```text
-.bool
-.int
-.int8  .int16  .int32  .int64  .int128
-.uint8 .uint16 .uint32 .uint64 .uint128
-.float32 .float64 (`float` resolves to `.float64`)
-.string
-.none
+bool
+int
+int8  int16  int32  int64  int128
+uint8 uint16 uint32 uint64 uint128
+float32 float64 (`float` resolves to `float64`)
+string
+none
 ```
 
 Descriptor behavior:

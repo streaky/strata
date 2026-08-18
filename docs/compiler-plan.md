@@ -334,7 +334,7 @@ The temporary semantic projection below the syntax tree remains deliberately lim
 Parser diagnostics own the stable `S1xxx` range:
 
 ```text
-S1001 unexpected layout token             S1017 malformed object lookup
+S1001 unexpected layout token             S1017 receiverless member access
 S1002 malformed namespace declaration     S1018 unclosed grouped expression
 S1003 missing binding name                S1019 missing expression
 S1004 missing binding initializer         S1020 malformed function type
@@ -731,7 +731,7 @@ migrations are independent.
 
 Implemented evidence: the compiler now assembles one symbol table per namespace and resolves
 imports, lexical names, namespace names, program globals, and prelude names through one lookup
-view. Leading-dot receiverless expressions fail with `S1019`; member dots remain receiver-only.
+view. Leading-dot receiverless expressions fail with `S1017`; member dots remain receiver-only.
 Collision, visibility, shadowing, construct-import, and descriptor-import cases exercise the
 single view. `float` resolves to the canonical `float64` descriptor. Function bodies reject
 namespace-local variables and accept explicit globals, constants, constructs, and imports;
@@ -1253,10 +1253,10 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections remain closed,
-and milestone 4.8 has removed the second namespace lookup view end to end: symbol storage,
-resolution, diagnostics, semantic types, lowering metadata, fixtures, goldens, examples, and
-surface documentation all use the single-view name model.
+Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections and the
+milestone 4.8 review remediation are closed: symbol storage, resolution, diagnostics,
+semantic types, lowering metadata, fixtures, goldens, examples, and surface documentation
+all use the single-view name model.
 
 The next work in order is milestone 5. Its boundary is Rust IR, readable deterministic emission,
 and Cargo builds; later language features remain staged by their own milestones. The minimal
