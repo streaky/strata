@@ -48,7 +48,7 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
     let entry_points = semantic
         .namespaces
         .values()
-        .filter_map(|namespace| namespace.ordinary.get("main"))
+        .filter_map(|namespace| namespace.symbols.get("main"))
         .filter(|symbol| symbol.kind == SymbolKind::Function)
         .collect::<Vec<_>>();
     let entry = match entry_points.as_slice() {

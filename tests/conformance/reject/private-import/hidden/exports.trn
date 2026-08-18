@@ -1,2 +1,2 @@
 namespace hidden
-private .secret = 1
+private constant secret = 1

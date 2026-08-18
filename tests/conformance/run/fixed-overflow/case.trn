@@ -1,5 +1,5 @@
 namespace fixed-overflow
-from /core/types import .int8
+from /core/types import int8
 function main
   left int8 = 120
   right int8 = 10

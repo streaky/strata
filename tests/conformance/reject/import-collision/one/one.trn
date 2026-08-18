@@ -1,2 +1,2 @@
 namespace one
-public .item = 1
+public constant item = 1

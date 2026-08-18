@@ -87,11 +87,11 @@ fn package_compilation_parses_every_discovered_unit() {
     );
     package.write(
         "hello/helpers/support.trn",
-        "namespace hello/helpers\nvalue = 1\n",
+        "namespace hello/helpers\nconstant value = 1\n",
     );
     package.write(
         "hello/main.trn",
-        "namespace hello\nfrom /core/output import .print\nprint = .print\nfunction main\n  print; >package pipeline\n",
+        "namespace hello\nfrom /core/output import print\nfunction main\n  print; >package pipeline\n",
     );
 
     let loaded = Package::load(&package.0).unwrap();
@@ -114,11 +114,11 @@ fn package_compilation_emits_functions_and_bindings_from_every_unit() {
     );
     package.write(
         "src/main.trn",
-        "namespace hello\nfrom /core/output import .print\nprint = .print\nfunction main\n  print; (helper;)\n",
+        "namespace hello\nfrom /core/output import print\nfunction main\n  print; (helper;)\n",
     );
     package.write(
         "src/support.trn",
-        "namespace hello\nvalue int = 41\nfunction helper int\n  return value + 1\n",
+        "namespace hello\nconstant value int = 41\nfunction helper int\n  return value + 1\n",
     );
 
     let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
@@ -147,11 +147,11 @@ fn package_entry_point_comes_from_resolved_function_declarations() {
     );
     package.write(
         "decoy/decoy.trn",
-        "namespace decoy\ntext = >>\n  function main\n",
+        "namespace decoy\nconstant text = >>\n  function main\n",
     );
     package.write(
         "actual/main.trn",
-        "namespace actual\nfrom /core/output import .print\nprint = .print\nfunction main\n  print; >real entry\n",
+        "namespace actual\nfrom /core/output import print\nfunction main\n  print; >real entry\n",
     );
 
     let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
@@ -169,8 +169,11 @@ fn package_requires_one_unambiguous_main_function() {
         "package.toml",
         "package = \"example.entry\"\n[namespaces]\nfirst = \"first\"\nsecond = \"second\"\n",
     );
-    package.write("first/first.trn", "namespace first\nvalue = 1\n");
-    package.write("second/second.trn", "namespace second\nvalue = 2\n");
+    package.write("first/first.trn", "namespace first\nconstant value = 1\n");
+    package.write(
+        "second/second.trn",
+        "namespace second\nconstant value = 2\n",
+    );
 
     let missing = compile_package(&Package::load(&package.0).unwrap()).unwrap_err();
     assert_eq!(missing.diagnostics[0].code, "S2015");
@@ -190,7 +193,7 @@ fn syntax_failure_in_non_main_unit_stops_package_compilation() {
     );
     package.write(
         "src/main.trn",
-        "namespace hello\nfrom /core/output import .print\nprint = .print\nfunction main\n  print; >unreachable\n",
+        "namespace hello\nfrom /core/output import print\nfunction main\n  print; >unreachable\n",
     );
     package.write("src/support.trn", "namespace hello\nvalue =\n");
 
@@ -251,21 +254,23 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
             "\"app/child\" = \"app/child\"\n",
         ),
     );
-    package.write("shared/exports.trn", "namespace shared\npublic .item = 1\n");
+    package.write(
+        "shared/exports.trn",
+        "namespace shared\npublic constant item = 1\n",
+    );
     package.write(
         "app/support/parent.trn",
-        "namespace app/support\npublic .parent = 1\n",
+        "namespace app/support\npublic constant parent = 1\n",
     );
     package.write(
         "app/child/consumer.trn",
         concat!(
             "namespace app/child\n",
-            "from /core/types import .int\n",
-            "int = .int\n",
-            "from /shared import .item\n",
-            "from ../support import .parent\n",
+            "from /core/types import int\n",
+            "from /shared import item\n",
+            "from ../support import parent\n",
             "function run; argument int\n",
-            "  from /core/output import .print as .local-print\n",
+            "  from /core/output import print as local-print\n",
             "  value = argument\n",
         ),
     );
@@ -281,16 +286,16 @@ fn manifest_package_drives_complete_namespace_and_scope_resolution() {
 
     assert_eq!(analyzed.identity, "namespace-contract");
     assert!(!analyzed.prelude);
-    assert!(analyzed.object("/app/child", "item").is_some());
-    assert!(analyzed.object("/app/child", "parent").is_some());
+    assert!(analyzed.symbol("/app/child", "item").is_some());
+    assert!(analyzed.symbol("/app/child", "parent").is_some());
     assert!(
         analyzed
-            .resolve_ordinary_at(consumer, body_offset, "argument")
+            .resolve_name_at(consumer, body_offset, "argument")
             .is_some()
     );
     assert!(
         analyzed
-            .resolve_object_at(consumer, body_offset, "local-print")
+            .resolve_name_at(consumer, body_offset, "local-print")
             .is_some()
     );
 }

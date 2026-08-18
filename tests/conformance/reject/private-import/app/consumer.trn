@@ -1,2 +1,2 @@
 namespace app
-from /hidden import .secret
+from /hidden import secret

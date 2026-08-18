@@ -32,18 +32,18 @@ fn assembles_namespaces_symmetrically_before_import_resolution() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("consumer.trn", "namespace app\nfrom /shared import .item\n"),
-            ("second.trn", "namespace shared\n.thing = 2\n"),
-            ("first.trn", "namespace shared\n.item = 1\n"),
+            ("consumer.trn", "namespace app\nfrom /shared import item\n"),
+            ("second.trn", "namespace shared\nconstant thing = 2\n"),
+            ("first.trn", "namespace shared\nconstant item = 1\n"),
         ],
     ))
     .unwrap();
 
     assert_eq!(
-        analyzed.object("/app", "item").unwrap().identity,
+        analyzed.symbol("/app", "item").unwrap().identity,
         "/shared::item"
     );
-    assert!(analyzed.object("/shared", "thing").is_some());
+    assert!(analyzed.symbol("/shared", "thing").is_some());
 }
 
 #[test]
@@ -52,14 +52,14 @@ fn namespace_diagnostics_use_source_spelling() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /missing/nested import .item\n",
+            "namespace app\nfrom /missing/nested import item\n",
         )],
     ))
     .unwrap_err();
 
     assert_eq!(
         failure.diagnostics[0].message,
-        "unresolved object `.item` in `/missing/nested`"
+        "unresolved name `item` in `/missing/nested`"
     );
 }
 
@@ -67,7 +67,10 @@ fn namespace_diagnostics_use_source_spelling() {
 fn compiler_owned_namespaces_cannot_be_extended() {
     let failure = analyze(&package(
         false,
-        &[("main.trn", "namespace core/output\npublic .injected = 1\n")],
+        &[(
+            "main.trn",
+            "namespace core/output\npublic constant injected = 1\n",
+        )],
     ))
     .unwrap_err();
 
@@ -82,37 +85,39 @@ fn resolves_exact_root_and_parent_namespace_anchors() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("exports.trn", "namespace parent/shared\n.item = 1\n"),
+            (
+                "exports.trn",
+                "namespace parent/shared\nconstant item = 1\n",
+            ),
             (
                 "root.trn",
-                "namespace root\nfrom /parent/shared import .item as .root-item\n",
+                "namespace root\nfrom /parent/shared import item as root-item\n",
             ),
             (
                 "child.trn",
-                "namespace parent/child\nfrom ../shared import .item as .parent-item\n",
+                "namespace parent/child\nfrom ../shared import item as parent-item\n",
             ),
         ],
     ))
     .unwrap();
 
-    assert!(analyzed.object("/root", "root-item").is_some());
-    assert!(analyzed.object("/parent/child", "parent-item").is_some());
+    assert!(analyzed.symbol("/root", "root-item").is_some());
+    assert!(analyzed.symbol("/parent/child", "parent-item").is_some());
 }
 
 #[test]
-fn imports_are_object_form_and_require_explicit_ordinary_binding() {
+fn imports_establish_ordinary_bindings_and_support_aliases() {
     let analyzed = analyze(&package(
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core/output import .print\nprinter = .print\n",
+            "namespace app\nfrom /core/output import print as printer\n",
         )],
     ))
     .unwrap();
 
-    assert!(analyzed.object("/app", "print").is_some());
-    assert!(analyzed.ordinary("/app", "print").is_none());
-    assert!(analyzed.ordinary("/app", "printer").is_some());
+    assert!(analyzed.symbol("/app", "print").is_none());
+    assert!(analyzed.symbol("/app", "printer").is_some());
 }
 
 #[test]
@@ -121,7 +126,7 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core/output import .print\nfrom /core/output import .print\n",
+            "namespace app\nfrom /core/output import print\nfrom /core/output import print\n",
         )],
     ));
     assert!(accepted.is_ok());
@@ -129,11 +134,11 @@ fn identical_reimport_is_idempotent_and_collisions_need_aliases() {
     let rejected = analyze(&package(
         false,
         &[
-            ("one.trn", "namespace one\n.item = 1\n"),
-            ("two.trn", "namespace two\n.item = 2\n"),
+            ("one.trn", "namespace one\nconstant item = 1\n"),
+            ("two.trn", "namespace two\nconstant item = 2\n"),
             (
                 "main.trn",
-                "namespace app\nfrom /one import .item\nfrom /two import .item\n",
+                "namespace app\nfrom /one import item\nfrom /two import item\n",
             ),
         ],
     ))
@@ -169,7 +174,7 @@ fn descriptor_construct_aliases_are_typed_without_the_prelude() {
         false,
         &[(
             "main.trn",
-            "namespace app\ntarget = int8\nsame = target\nfunction main\n  value int8 = 1\n  result bool = value is a same\n",
+            "namespace app\nconstant target = int8\nconstant same = target\nfunction main\n  value int8 = 1\n  result bool = value is a same\n",
         )],
     ))
     .unwrap();
@@ -190,7 +195,7 @@ fn descriptor_constructs_are_rejected_as_runtime_values() {
         "result = consume; target",
     ] {
         let source = format!(
-            "namespace app\nfrom /core/output import .print\nprint = .print\ntarget = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
+            "namespace app\nfrom /core/output import print\nconstant printer = print\nconstant target = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
         );
         let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "T0019", "{runtime_use}");
@@ -219,14 +224,14 @@ fn bootstrap_registry_contains_versioned_modules_and_fixed_width_types() {
         "int8", "int16", "int32", "int64", "int128", "uint8", "uint16", "uint32", "uint64",
         "uint128", "float32", "float64",
     ] {
-        assert!(analyzed.object("/core/types", name).is_some(), "{name}");
+        assert!(analyzed.symbol("/core/types", name).is_some(), "{name}");
     }
 }
 
 #[test]
 fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
     let analyzed = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
-    let errors = &analyzed.namespaces["/core/errors"].objects;
+    let errors = &analyzed.namespaces["/core/errors"].symbols;
 
     assert_eq!(
         errors.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -253,13 +258,13 @@ fn ordinary_import_binding_cannot_change_structural_imports() {
         false,
         &[(
             "main.trn",
-            "namespace app\nimport = 1\nfrom /core/output import .print\n",
+            "namespace app\nimport = 1\nfrom /core/output import print\n",
         )],
     ))
     .unwrap();
 
-    assert!(analyzed.ordinary("/app", "import").is_some());
-    assert!(analyzed.object("/app", "print").is_some());
+    assert!(analyzed.symbol("/app", "import").is_some());
+    assert!(analyzed.symbol("/app", "print").is_some());
 }
 
 #[test]
@@ -267,8 +272,8 @@ fn duplicate_declarations_and_private_imports_are_rejected() {
     let duplicate = analyze(&package(
         false,
         &[
-            ("one.trn", "namespace app\nvalue = 1\n"),
-            ("two.trn", "namespace app\nvalue = 2\n"),
+            ("one.trn", "namespace app\nconstant value = 1\n"),
+            ("two.trn", "namespace app\nconstant value = 2\n"),
         ],
     ))
     .unwrap_err();
@@ -277,10 +282,13 @@ fn duplicate_declarations_and_private_imports_are_rejected() {
     let private = analyze(&package(
         false,
         &[
-            ("exports.trn", "namespace hidden\nprivate .secret = 1\n"),
+            (
+                "exports.trn",
+                "namespace hidden\nprivate constant secret = 1\n",
+            ),
             (
                 "consumer.trn",
-                "namespace app\nfrom /hidden import .secret\n",
+                "namespace app\nfrom /hidden import secret\n",
             ),
         ],
     ))
@@ -293,18 +301,21 @@ fn global_replacement_is_distinct_from_namespace_local_assignment() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("one.trn", "namespace first\nglobal shared = 1\nlocal = 1\n"),
+            (
+                "one.trn",
+                "namespace first\nglobal shared = 1\nconstant local = 1\n",
+            ),
             (
                 "two.trn",
-                "namespace second\nglobal shared = 2\nlocal = 2\n",
+                "namespace second\nglobal shared = 2\nconstant local = 2\n",
             ),
         ],
     ))
     .unwrap();
 
-    assert!(analyzed.ordinary("/first", "local").is_some());
-    assert!(analyzed.ordinary("/second", "local").is_some());
-    assert!(analyzed.ordinary("/first", "shared").is_none());
+    assert!(analyzed.symbol("/first", "local").is_some());
+    assert!(analyzed.symbol("/second", "local").is_some());
+    assert!(analyzed.symbol("/first", "shared").is_none());
 }
 
 #[test]
@@ -313,7 +324,7 @@ fn namespace_local_bindings_may_shadow_program_globals() {
         false,
         &[
             ("global.trn", "namespace owner\nglobal shared = 1\n"),
-            ("local.trn", "namespace consumer\nshared = 2\n"),
+            ("local.trn", "namespace consumer\nconstant shared = 2\n"),
             ("peer.trn", "namespace peer\n"),
         ],
     ))
@@ -321,16 +332,13 @@ fn namespace_local_bindings_may_shadow_program_globals() {
 
     assert_eq!(
         analyzed
-            .resolve_ordinary("/consumer", "shared")
+            .resolve_name("/consumer", "shared")
             .unwrap()
             .namespace,
         "/consumer"
     );
     assert_eq!(
-        analyzed
-            .resolve_ordinary("/peer", "shared")
-            .unwrap()
-            .namespace,
+        analyzed.resolve_name("/peer", "shared").unwrap().namespace,
         "/owner"
     );
 }
@@ -338,24 +346,30 @@ fn namespace_local_bindings_may_shadow_program_globals() {
 #[test]
 fn plain_function_assignment_cannot_replace_namespace_bindings() {
     for source in [
-        "namespace app\ncounter int = 0\nfunction main\n  counter = 1\n",
-        "namespace app\nvalue int8 = 7\nfunction main\n  value = 16\n",
+        "namespace app\nconstant counter int = 0\nfunction main\n  counter = 1\n",
+        "namespace app\nconstant value int8 = 7\nfunction main\n  value = 16\n",
         "namespace app\nglobal counter int = 0\nfunction main\n  counter = 1\n",
         "namespace app\nvalue int8\nfunction main\n  value = 16\n",
     ] {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
         let diagnostic = &failure.diagnostics[0];
-        assert_eq!(diagnostic.code, "S2021", "{source}");
-        let name = if source.contains("value") {
-            "value"
+        if source.contains("\nconstant") {
+            assert_eq!(diagnostic.code, "S2022", "{source}");
         } else {
-            "counter"
-        };
-        assert_eq!(
-            diagnostic.help.as_deref(),
-            Some(format!("declare `global {name} ...` or assign it at namespace level").as_str()),
-            "{source}"
-        );
+            assert_eq!(diagnostic.code, "S2021", "{source}");
+            let name = if source.contains("value") {
+                "value"
+            } else {
+                "counter"
+            };
+            assert_eq!(
+                diagnostic.help.as_deref(),
+                Some(
+                    format!("declare `global {name} ...` or assign it at namespace level").as_str()
+                ),
+                "{source}"
+            );
+        }
     }
 }
 
@@ -365,7 +379,7 @@ fn local_binding_may_shadow_a_namespace_binding() {
         true,
         &[(
             "main.trn",
-            "namespace app\nvalue int8 = 7\nfunction main\n  value int8 = 12\n  value = 16\n",
+            "namespace app\nconstant value int8 = 7\nfunction main\n  value int8 = 12\n  value = 16\n",
         )],
     ))
     .unwrap();
@@ -376,7 +390,7 @@ fn constants_cannot_be_reassigned() {
     for source in [
         "namespace app\nfunction main\n  constant limit int = 10\n  limit = 11\n",
         "namespace app\nfunction main\n  constant limit int = 10\n  limit++\n",
-        "namespace app\nconstant limit int = 10\nlimit = 11\n",
+        "namespace app\nconstant limit int = 10\nfunction main\n  limit = 11\n",
         "namespace app\nconstant limit int = 10\nfunction main\n  limit = 11\n",
         "namespace app\nconstant limit int = 10\nfunction main\n  global limit int = 11\n",
         "namespace app\nfunction main\n  constant limit int = 10\n  global limit int = 11\n",
@@ -394,7 +408,7 @@ fn constants_cannot_be_reassigned() {
 #[test]
 fn binding_initializers_cannot_reference_the_binding_being_declared() {
     for source in [
-        "namespace app\nvalue int8 = value\nfunction main\n  print; value\n",
+        "namespace app\nconstant value int8 = value\nfunction main\n  print; value\n",
         "namespace app\nfunction main\n  value int8 = value\n  print; value\n",
     ] {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
@@ -412,9 +426,8 @@ fn binding_initializers_cannot_reference_the_binding_being_declared() {
 #[test]
 fn namespace_binding_initialization_cycles_are_rejected() {
     for source in [
-        "namespace app\na int = b\nb int = a\nfunction main\n  print; b\n",
-        "namespace app\na int = 0\nb int = 0\na = b + 1\nb = a + 1\nfunction main\n  print; b\n",
-        "namespace app\na int = read-b;\nb int = a\nfunction read-b int\n  return b\nfunction main\n  print; a\n",
+        "namespace app\nconstant a int = b\nconstant b int = a\nfunction main\n  print; b\n",
+        "namespace app\nconstant a int = read-b;\nconstant b int = a\nfunction read-b int\n  return b\nfunction main\n  print; a\n",
     ] {
         let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
         let diagnostic = &failure.diagnostics[0];
@@ -498,11 +511,11 @@ fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
         &[
             (
                 "parent.trn",
-                "namespace app\nparent-value = 1\nprotected inherited = 1\nprivate hidden = 1\n",
+                "namespace app\nconstant parent-value = 1\nprotected constant inherited = 1\nprivate constant hidden = 1\n",
             ),
             (
                 "child.trn",
-                "namespace app/child\nparent-value = 2\nglobal shared = 1\n",
+                "namespace app/child\nconstant parent-value = 2\nglobal shared = 1\n",
             ),
             ("peer.trn", "namespace peer\n"),
         ],
@@ -511,19 +524,15 @@ fn ordinary_lookup_uses_namespace_global_and_prelude_tiers() {
 
     assert_eq!(
         analyzed
-            .resolve_ordinary("/app/child", "parent-value")
+            .resolve_name("/app/child", "parent-value")
             .unwrap()
             .namespace,
         "/app/child"
     );
-    assert!(
-        analyzed
-            .resolve_ordinary("/app/child", "inherited")
-            .is_some()
-    );
-    assert!(analyzed.resolve_ordinary("/peer", "hidden").is_none());
-    assert!(analyzed.resolve_ordinary("/peer", "shared").is_some());
-    assert!(analyzed.resolve_ordinary("/peer", "print").is_some());
+    assert!(analyzed.resolve_name("/app/child", "inherited").is_some());
+    assert!(analyzed.resolve_name("/peer", "hidden").is_none());
+    assert!(analyzed.resolve_name("/peer", "shared").is_some());
+    assert!(analyzed.resolve_name("/peer", "print").is_some());
 }
 
 #[test]
@@ -531,11 +540,11 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
     let source = concat!(
         "namespace app\n",
         "function render; argument int\n",
-        "  from /core/output import .print as .local-print\n",
+        "  from /core/output import print as local-print\n",
         "  value = argument\n",
         "  if true\n",
         "    inner = value\n",
-        "    .local-print; inner\n",
+        "    local-print; inner\n",
     );
     let analyzed = analyze(&package(true, &[("main.trn", source)])).unwrap();
     let unit = &analyzed.units[0];
@@ -544,28 +553,28 @@ fn lexical_scopes_resolve_parameters_bindings_and_object_imports() {
 
     assert!(
         analyzed
-            .resolve_ordinary_at(unit, value_offset, "argument")
+            .resolve_name_at(unit, value_offset, "argument")
             .is_some()
     );
     assert!(
         analyzed
-            .resolve_ordinary_at(unit, inner_offset, "value")
+            .resolve_name_at(unit, inner_offset, "value")
             .is_some()
     );
     assert!(
         analyzed
-            .resolve_ordinary_at(unit, value_offset, "inner")
+            .resolve_name_at(unit, value_offset, "inner")
             .is_none()
     );
     assert!(
         analyzed
-            .resolve_object_at(unit, inner_offset, "local-print")
+            .resolve_name_at(unit, inner_offset, "local-print")
             .is_some()
     );
-    let inner_read = source.find(".local-print; inner").unwrap() + ".local-print; ".len();
+    let inner_read = source.find("local-print; inner").unwrap() + "local-print; ".len();
     assert!(
         analyzed
-            .resolve_ordinary_at(unit, inner_read, "inner")
+            .resolve_name_at(unit, inner_read, "inner")
             .is_some()
     );
 }
@@ -621,26 +630,29 @@ fn nested_global_declarations_populate_the_package_global_tier() {
 }
 
 #[test]
-fn nested_object_form_declarations_are_rejected_explicitly() {
+fn nested_dot_prefixed_declarations_are_rejected_syntactically() {
     let failure = analyze(&package(
         false,
         &[("main.trn", "namespace app\nfunction run\n  .thing = 1\n")],
     ))
     .unwrap_err();
 
-    assert_eq!(failure.diagnostics[0].code, "S2017");
+    assert_eq!(failure.diagnostics[0].code, "S1017");
 }
 
 #[test]
 fn imports_report_inaccessible_exports_consistently_at_every_scope() {
     for consumer in [
-        "namespace unrelated\nfrom /hidden import .item\n",
-        "namespace unrelated\nfunction run\n  from /hidden import .item\n",
+        "namespace unrelated\nfrom /hidden import item\n",
+        "namespace unrelated\nfunction run\n  from /hidden import item\n",
     ] {
         let failure = analyze(&package(
             false,
             &[
-                ("hidden.trn", "namespace hidden\nprotected .item = 1\n"),
+                (
+                    "hidden.trn",
+                    "namespace hidden\nprotected constant item = 1\n",
+                ),
                 ("consumer.trn", consumer),
             ],
         ))
@@ -655,13 +667,13 @@ fn imported_fixed_width_objects_remain_canonical_type_descriptors() {
         false,
         &[(
             "main.trn",
-            "namespace app\nfrom /core/types import .int8, .uint128, .float32\n",
+            "namespace app\nfrom /core/types import int8, uint128, float32\n",
         )],
     ))
     .unwrap();
 
     for name in ["int8", "uint128", "float32"] {
-        let descriptor = analyzed.object("/app", name).unwrap();
+        let descriptor = analyzed.symbol("/app", name).unwrap();
         assert_eq!(descriptor.kind, SymbolKind::TypeDescriptor);
         assert_eq!(descriptor.identity, format!("/core/types::{name}"));
         assert_eq!(
@@ -714,8 +726,8 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .uint8\n",
-                "byte = .uint8\n",
+                "from /core/types import uint8\n",
+                "byte = uint8\n",
                 "maximum byte = 255\n",
             ),
         )],
@@ -745,7 +757,7 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
 fn rejects_out_of_range_integer_constants_at_the_initializer() {
     let failure = analyze(&package(
         true,
-        &[("main.trn", "namespace app\nvalue int8 = 128\n")],
+        &[("main.trn", "namespace app\nconstant value int8 = 128\n")],
     ))
     .unwrap_err();
 
@@ -788,8 +800,8 @@ fn descriptor_aliases_resolve_function_contracts_in_source_order() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .uint8\n",
-                "byte = .uint8\n",
+                "from /core/types import uint8\n",
+                "byte = uint8\n",
                 "function identity byte; value byte\n",
                 "  return value\n",
             ),
@@ -807,10 +819,10 @@ fn descriptor_aliases_resolve_function_contracts_in_source_order() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .uint8\n",
+                "from /core/types import uint8\n",
                 "function identity byte; value byte\n",
                 "  return value\n",
-                "byte = .uint8\n",
+                "byte = uint8\n",
             ),
         )],
     ))
@@ -981,10 +993,7 @@ fn types_canonical_integer_coercion_family() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .int8, .int16, .uint8\n",
-                "int8 = .int8\n",
-                "int16 = .int16\n",
-                "uint8 = .uint8\n",
+                "from /core/types import int8, int16, uint8\n",
                 "function main\n",
                 "  value int = 300\n",
                 "  exact = value.coerce; int16\n",
@@ -1083,7 +1092,7 @@ fn rejects_nested_and_escaped_coercion_family_shapes() {
             &[(
                 "main.trn",
                 &format!(
-                    "namespace app\nfrom /core/types import .int8\nint8 = .int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
+                    "namespace app\nfrom /core/types import int8\nfunction main\n  value int = 1\n  converted = {expression}\n"
                 ),
             )],
         ))
@@ -1124,7 +1133,7 @@ fn validates_calls_inside_coercion_receivers() {
             &[(
                 "main.trn",
                 &format!(
-                    "namespace app\nfrom /core/types import .int8\nint8 = .int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
+                    "namespace app\nfrom /core/types import int8\nfunction observed int; item int\n  return item\nfunction main\n  converted = (observed; {arguments}).coerce; int8\n"
                 ),
             )],
         ))
@@ -1144,7 +1153,7 @@ fn infers_cross_unit_call_results_before_binding_types() {
             ),
             (
                 "main.trn",
-                "namespace app\nfrom /core/types import .uint8\nuint8 = .uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
+                "namespace app\nfrom /core/types import uint8\nfunction main\n  value = (helper;).coerce.wrap; uint8\n",
             ),
         ],
     ))
@@ -1168,8 +1177,8 @@ fn function_parameters_are_in_scope_during_binding_analysis() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .int8\n",
-                "tiny = .int8\n",
+                "from /core/types import int8\n",
+                "constant tiny = int8\n",
                 "function convert int8; item int\n",
                 "  result int8\n",
                 "  result = item.coerce; tiny\n",
@@ -1294,9 +1303,9 @@ fn identity_accepts_typed_scalars_and_canonical_descriptors() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import .int8\n",
+                "from /core/types import int8\n",
                 "function produce\n",
-                "byte = .int8\n",
+                "byte = int8\n",
                 "same-type = byte is byte\n",
                 "value = 1\n",
                 "same-value = value is value\n",
@@ -1418,7 +1427,7 @@ fn typed_call_checks_follow_callee_and_argument_scope() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "value = 1\n",
+                "constant value = 1\n",
                 "function consume; item int\n",
                 "function main\n",
                 "  consume = false\n",
@@ -1453,24 +1462,23 @@ fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/output import .print as .renderer\n",
+                "from /core/output import print as renderer\n",
                 "function consume; item\n",
                 "function main\n",
                 "  text = 'hello'\n",
                 "  text.clear;\n",
-                "  consume; .renderer\n",
-                "  .renderer;\n",
+                "  consume; renderer\n",
+                "  renderer;\n",
             ),
         )],
     ))
     .unwrap();
     let root = &analyzed.units[0].tree.root;
     assert!(contains_kind(root, SyntaxKind::MemberExpression));
-    assert!(contains_kind(root, SyntaxKind::ObjectName));
     assert_eq!(
         count_kind(root, SyntaxKind::CallExpression),
         3,
-        "member, ordinary, and dot-object calls remain explicit call nodes"
+        "member and ordinary calls remain explicit call nodes"
     );
 }
 
@@ -1646,10 +1654,13 @@ fn resolves_slash_separated_root_and_nested_parent_paths() {
     let analyzed = analyze(&package(
         false,
         &[
-            ("exports.trn", "namespace parent/shared\npublic .item = 1\n"),
+            (
+                "exports.trn",
+                "namespace parent/shared\npublic constant item = 1\n",
+            ),
             (
                 "consumer.trn",
-                "namespace parent/child/grandchild\nfrom ../../shared import .item\n",
+                "namespace parent/child/grandchild\nfrom ../../shared import item\n",
             ),
         ],
     ))
@@ -1657,7 +1668,7 @@ fn resolves_slash_separated_root_and_nested_parent_paths() {
 
     assert_eq!(
         analyzed
-            .object("/parent/child/grandchild", "item")
+            .symbol("/parent/child/grandchild", "item")
             .unwrap()
             .identity,
         "/parent/shared::item"

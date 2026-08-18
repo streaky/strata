@@ -1,5 +1,5 @@
 namespace descriptor-semantics
-from /core/types import .int8
+from /core/types import int8 as byte, int8 as other-byte
 function accepts bool; item int
   print; item
   return item is a int
@@ -12,8 +12,6 @@ function different-type bool; left int, right string
   print; right
   return left.type is right.type
 function main
-  byte = .int8
-  other-byte = .int8
   print; (accepts; 1)
   print; (byte is byte)
   print; (byte is other-byte)

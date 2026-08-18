@@ -1,6 +1,5 @@
 namespace milestone-representative
-from /core/types import .uint8
-byte = .uint8
+from /core/types import uint8 as byte
 
 function main
   heading = 'Terrane'.concat; ' ', 4, '.', 7

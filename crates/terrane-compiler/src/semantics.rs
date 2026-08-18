@@ -26,9 +26,9 @@ pub struct Symbol {
     pub identity: String,
     pub name: String,
     pub namespace: String,
-    pub object_form: bool,
     pub visibility: Visibility,
     pub global: bool,
+    pub constant: bool,
     pub kind: SymbolKind,
     pub declaration_span: Option<Span>,
 }
@@ -46,8 +46,7 @@ impl Symbol {
 
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
-    pub ordinary: BTreeMap<String, Symbol>,
-    pub objects: BTreeMap<String, Symbol>,
+    pub symbols: BTreeMap<String, Symbol>,
 }
 
 #[derive(Clone, Debug)]
@@ -231,8 +230,7 @@ fn visible_descriptor_aliases(
 pub struct LexicalScope {
     pub span: Span,
     pub parent: Option<usize>,
-    pub ordinary: BTreeMap<String, Symbol>,
-    pub objects: BTreeMap<String, Symbol>,
+    pub symbols: BTreeMap<String, Symbol>,
 }
 
 #[derive(Clone)]
@@ -411,21 +409,21 @@ fn populate_namespace_function_contracts(package: &mut SemanticPackage) {
 
 impl SemanticPackage {
     #[must_use]
-    pub fn ordinary(&self, namespace: &str, name: &str) -> Option<&Symbol> {
-        self.namespaces.get(namespace)?.ordinary.get(name)
+    pub fn symbol(&self, namespace: &str, name: &str) -> Option<&Symbol> {
+        self.namespaces.get(namespace)?.symbols.get(name)
     }
 
     #[must_use]
-    pub fn object(&self, namespace: &str, name: &str) -> Option<&Symbol> {
-        self.namespaces.get(namespace)?.objects.get(name)
-    }
-
-    #[must_use]
-    pub fn resolve_ordinary(&self, namespace: &str, name: &str) -> Option<&Symbol> {
+    pub fn resolve_name(&self, namespace: &str, name: &str) -> Option<&Symbol> {
         namespace_chain(namespace)
             .find_map(|path| {
-                self.ordinary(&path, name)
-                    .filter(|symbol| visible_from(symbol, namespace))
+                self.symbol(&path, name).filter(|symbol| {
+                    visible_from(symbol, namespace)
+                        && (symbol.kind != SymbolKind::Binding
+                            || symbol.constant
+                            || symbol.global
+                            || symbol.namespace == namespace)
+                })
             })
             .or_else(|| {
                 self.globals
@@ -436,35 +434,24 @@ impl SemanticPackage {
     }
 
     #[must_use]
-    pub fn resolve_object(&self, namespace: &str, name: &str) -> Option<&Symbol> {
-        namespace_chain(namespace).find_map(|path| {
-            self.object(&path, name)
-                .filter(|symbol| visible_from(symbol, namespace))
-        })
-    }
-
-    #[must_use]
-    pub fn resolve_ordinary_at<'a>(
+    pub fn resolve_name_at<'a>(
         &'a self,
         unit: &'a SemanticUnit,
         offset: usize,
         name: &str,
     ) -> Option<&'a Symbol> {
-        lexical_scope_chain(unit, offset)
-            .find_map(|scope| scope.ordinary.get(name))
-            .or_else(|| self.resolve_ordinary(&unit.namespace, name))
-    }
-
-    #[must_use]
-    pub fn resolve_object_at<'a>(
-        &'a self,
-        unit: &'a SemanticUnit,
-        offset: usize,
-        name: &str,
-    ) -> Option<&'a Symbol> {
-        lexical_scope_chain(unit, offset)
-            .find_map(|scope| scope.objects.get(name))
-            .or_else(|| self.resolve_object(&unit.namespace, name))
+        let mut scopes = lexical_scope_chain(unit, offset).peekable();
+        let inside_lexical_scope = scopes.peek().is_some();
+        scopes
+            .find_map(|scope| scope.symbols.get(name))
+            .or_else(|| {
+                self.resolve_name(&unit.namespace, name).filter(|symbol| {
+                    !inside_lexical_scope
+                        || symbol.kind != SymbolKind::Binding
+                        || symbol.constant
+                        || symbol.global
+                })
+            })
     }
 }
 
@@ -580,10 +567,9 @@ fn validate_declared_names(source: &SourceFile, tree: &SyntaxTree) -> Result<(),
         );
         if declared_children {
             for child in &node.children {
-                if matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName) {
+                if child.kind == SyntaxKind::Name {
                     let authored = node_text(source, child);
-                    let name = authored.trim_start_matches('.');
-                    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                    if authored.bytes().any(|byte| byte.is_ascii_uppercase()) {
                         let replacement = authored.to_ascii_lowercase();
                         return Err(Diagnostic::error(
                             "S2018",
@@ -631,20 +617,9 @@ fn collect_nested_declarations(
         if matches!(
             child.kind,
             SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::FunctionDeclaration
-        ) {
-            if let Some(declaration) = declaration_from_syntax(unit, child) {
-                if declaration.object_form {
-                    return Err(failure(
-                        &unit.source,
-                        "S2017",
-                        "object-form declarations inside lexical scopes are unsupported",
-                        child.span,
-                    ));
-                }
-                if declaration.global {
-                    collect_declaration(unit, child, namespaces, globals)?;
-                }
-            }
+        ) && declaration_from_syntax(unit, child).is_some_and(|declaration| declaration.global)
+        {
+            collect_declaration(unit, child, namespaces, globals)?;
         }
         collect_nested_declarations(unit, child, namespaces, globals)?;
     }
@@ -654,9 +629,10 @@ fn collect_nested_declarations(
 #[derive(Clone, Debug)]
 struct Declaration {
     name: String,
-    object_form: bool,
     visibility: Visibility,
+    explicit_visibility: bool,
     global: bool,
+    constant: bool,
     kind: SymbolKind,
 }
 
@@ -664,24 +640,25 @@ fn declaration_from_syntax(unit: &SemanticUnit, node: &SyntaxNode) -> Option<Dec
     let name_node = node
         .children
         .iter()
-        .find(|child| matches!(child.kind, SyntaxKind::Name | SyntaxKind::ObjectName))?;
-    let object_form = name_node.kind == SyntaxKind::ObjectName;
-    let name = node_text(&unit.source, name_node)
-        .trim_start_matches('.')
-        .to_owned();
-    let visibility = node
+        .find(|child| child.kind == SyntaxKind::Name)?;
+    let name = node_text(&unit.source, name_node).to_owned();
+    let visibility_node = node
         .children
         .iter()
-        .find(|child| child.kind == SyntaxKind::Visibility)
+        .find(|child| child.kind == SyntaxKind::Visibility);
+    let visibility = visibility_node
         .map(|child| node_text(&unit.source, child))
         .map_or(Visibility::Public, |visibility| match visibility {
             "private" => Visibility::Private,
             "protected" => Visibility::Protected,
             _ => Visibility::Public,
         });
-    let global = node.children.iter().any(|child| {
-        child.kind == SyntaxKind::DeclarationQualifier && node_text(&unit.source, child) == "global"
-    });
+    let qualifier = |expected| {
+        node.children.iter().any(|child| {
+            child.kind == SyntaxKind::DeclarationQualifier
+                && node_text(&unit.source, child) == expected
+        })
+    };
     let kind = if node.kind == SyntaxKind::FunctionDeclaration {
         SymbolKind::Function
     } else {
@@ -689,9 +666,10 @@ fn declaration_from_syntax(unit: &SemanticUnit, node: &SyntaxNode) -> Option<Dec
     };
     Some(Declaration {
         name,
-        object_form,
         visibility,
-        global,
+        explicit_visibility: visibility_node.is_some(),
+        global: qualifier("global"),
+        constant: qualifier("constant"),
         kind,
     })
 }
@@ -710,6 +688,24 @@ fn collect_declaration(
             node.span,
         )
     })?;
+    if node.kind == SyntaxKind::Assignment && globals.contains_key(&declaration.name) {
+        return Ok(());
+    }
+    if declaration.kind == SymbolKind::Binding
+        && !declaration.constant
+        && !declaration.global
+        && declaration.explicit_visibility
+    {
+        return Err(failure(
+            &unit.source,
+            "S2024",
+            format!(
+                "namespace variable `{}` cannot declare visibility",
+                declaration.name
+            ),
+            node.span,
+        ));
+    }
     let identity = if declaration.global {
         format!("global::{}", declaration.name)
     } else {
@@ -719,9 +715,9 @@ fn collect_declaration(
         identity,
         name: declaration.name.clone(),
         namespace: unit.namespace.clone(),
-        object_form: declaration.object_form,
         visibility: declaration.visibility,
         global: declaration.global,
+        constant: declaration.constant,
         kind: declaration.kind,
         declaration_span: Some(node.span),
     };
@@ -729,14 +725,10 @@ fn collect_declaration(
         globals.insert(declaration.name, symbol);
         return Ok(());
     }
-    let namespace = namespaces
+    let table = &mut namespaces
         .get_mut(&unit.namespace)
-        .expect("every source-unit namespace is assembled before declarations");
-    let table = if declaration.object_form {
-        &mut namespace.objects
-    } else {
-        &mut namespace.ordinary
-    };
+        .expect("every source-unit namespace is assembled before declarations")
+        .symbols;
     if node.kind == SyntaxKind::Assignment
         && table.get(&declaration.name).is_some_and(|existing| {
             existing
@@ -783,26 +775,26 @@ fn imports_from_syntax(
             path.span,
         )
     })?;
-    let objects = node
+    let imports = node
         .children
         .iter()
         .filter(|child| child.kind == SyntaxKind::ObjectImport);
     let mut result = Vec::new();
-    for object in objects {
-        let imported_node = object
+    for import_node in imports {
+        let imported_node = import_node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::ObjectName)
+            .find(|child| child.kind == SyntaxKind::Name)
             .ok_or_else(|| {
                 failure(
                     &unit.source,
                     "S2008",
-                    "imports bind object-form names; use an explicit ordinary binding",
-                    object.span,
+                    "import has no name",
+                    import_node.span,
                 )
             })?;
-        let imported = node_text(&unit.source, imported_node).trim_start_matches('.');
-        let alias = object
+        let imported = node_text(&unit.source, imported_node);
+        let alias = import_node
             .children
             .iter()
             .find(|child| child.kind == SyntaxKind::ImportAlias)
@@ -810,18 +802,16 @@ fn imports_from_syntax(
                 alias
                     .children
                     .iter()
-                    .find(|child| child.kind == SyntaxKind::ObjectName)
+                    .find(|child| child.kind == SyntaxKind::Name)
             })
-            .map_or(imported, |alias| {
-                node_text(&unit.source, alias).trim_start_matches('.')
-            });
+            .map_or(imported, |alias| node_text(&unit.source, alias));
         result.push(Import {
             source: unit.source.clone(),
             namespace: unit.namespace.clone(),
             target: target.clone(),
             object: imported.to_owned(),
             alias: alias.to_owned(),
-            span: object.span,
+            span: import_node.span,
         });
     }
     Ok(result)
@@ -832,15 +822,12 @@ fn imported_object(
 ) -> Result<Symbol, SemanticFailure> {
     let export = namespaces
         .get(&import.target)
-        .and_then(|namespace| namespace.objects.get(&import.object))
+        .and_then(|namespace| namespace.symbols.get(&import.object))
         .ok_or_else(|| {
             failure(
                 &import.source,
                 "S2009",
-                format!(
-                    "unresolved object `.{}` in `{}`",
-                    import.object, import.target
-                ),
+                format!("unresolved name `{}` in `{}`", import.object, import.target),
                 import.span,
             )
         })?;
@@ -848,7 +835,7 @@ fn imported_object(
         return Err(failure(
             &import.source,
             "S2010",
-            format!("object `.{}` is inaccessible", import.object),
+            format!("name `{}` is inaccessible", import.object),
             import.span,
         ));
     }
@@ -864,21 +851,18 @@ fn resolve_imports(
         let destination = namespaces
             .get_mut(&import.namespace)
             .expect("every import destination is a preassembled source-unit namespace");
-        if let Some(existing) = destination.objects.get(&import.alias) {
+        if let Some(existing) = destination.symbols.get(&import.alias) {
             if existing.identity == export.identity {
                 continue;
             }
             return Err(failure(
                 &import.source,
                 "S2011",
-                format!(
-                    "object-form import `.{}` collides; use an alias",
-                    import.alias
-                ),
+                format!("import `{}` collides; use an alias", import.alias),
                 import.span,
             ));
         }
-        destination.objects.insert(import.alias, export);
+        destination.symbols.insert(import.alias, export);
     }
     Ok(())
 }
@@ -893,7 +877,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
             SyntaxKind::Name => {
                 let name = node_text(&unit.source, node);
                 if package
-                    .resolve_ordinary_at(unit, node.span.start, name)
+                    .resolve_name_at(unit, node.span.start, name)
                     .is_none()
                     && !package.descriptor_constructs.contains_key(name)
                 {
@@ -908,7 +892,7 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
             SyntaxKind::ObjectName => {
                 let name = node_text(&unit.source, node).trim_start_matches('.');
                 if package
-                    .resolve_object_at(unit, node.span.start, name)
+                    .resolve_name_at(unit, node.span.start, name)
                     .is_none()
                 {
                     return Err(failure(
@@ -1013,7 +997,7 @@ fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), Se
     ) {
         if node.kind == SyntaxKind::Name {
             if let Some(symbol) =
-                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+                package.resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
                 && let Some(span) = symbol.declaration_span
             {
                 if symbol.kind == SymbolKind::Binding && !symbol.global {
@@ -1136,7 +1120,7 @@ fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), Se
                     span,
                 ));
             }
-            if !declaration.global && !declaration.object_form {
+            if !declaration.global {
                 edges.entry(key(node.span)).or_default().extend(reads);
             }
         }
@@ -1149,9 +1133,6 @@ fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), Se
             let Some(declaration) = declaration_from_syntax(unit, node) else {
                 continue;
             };
-            if declaration.object_form {
-                continue;
-            }
             let name = node
                 .children
                 .iter()
@@ -1178,8 +1159,7 @@ fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), Se
                     ],
                 });
             }
-            let Some(target) =
-                package.resolve_ordinary_at(unit, name.span.start, &declaration.name)
+            let Some(target) = package.resolve_name_at(unit, name.span.start, &declaration.name)
             else {
                 continue;
             };
@@ -1332,7 +1312,7 @@ fn validate_call_nodes<'a>(
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
         && let Some(symbol) =
-            package.resolve_ordinary_at(unit, callee.span.start, node_text(&unit.source, callee))
+            package.resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))
         && symbol.kind == SymbolKind::Function
         && let Some(declaration_span) = symbol.declaration_span
         && let Some(contract) = contracts.get(&(
@@ -1490,7 +1470,7 @@ fn resolved_call_type(
         return None;
     }
     let symbol =
-        package.resolve_ordinary_at(unit, callee.span.start, node_text(&unit.source, callee))?;
+        package.resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))?;
     let declaration = symbol.declaration_span?;
     contracts
         .get(&(declaration.file, declaration.start, declaration.end))?
@@ -1627,11 +1607,23 @@ fn call_site_bindings(
 
 fn descriptor_construct_alias_history(
     package: &SemanticPackage,
+    unit: &SemanticUnit,
 ) -> BTreeMap<String, Vec<DescriptorAlias>> {
-    package
+    let mut aliases = package
         .descriptor_constructs
         .iter()
         .filter_map(|(name, symbol)| Some((name.clone(), symbol.descriptor_type()?)))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(namespace) = package.namespaces.get(&unit.namespace) {
+        aliases.extend(
+            namespace
+                .symbols
+                .iter()
+                .filter_map(|(name, symbol)| Some((name.clone(), symbol.descriptor_type()?))),
+        );
+    }
+    aliases
+        .into_iter()
         .map(|(name, value_type)| {
             (
                 name,
@@ -1648,7 +1640,7 @@ fn descriptor_construct_alias_history(
 fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
     for index in 0..package.units.len() {
         let unit = &package.units[index];
-        let mut alias_history = descriptor_construct_alias_history(package);
+        let mut alias_history = descriptor_construct_alias_history(package, unit);
         let mut functions = Vec::new();
         collect_type_declarations(
             package,
@@ -1744,7 +1736,7 @@ pub(crate) fn descriptor_expression_type(
             .descriptor_alias_at(name, node.span.start)
             .or_else(|| package.descriptor_constructs.get(name)?.descriptor_type()),
         SyntaxKind::ObjectName => package
-            .resolve_object_at(unit, node.span.start, name)
+            .resolve_name_at(unit, node.span.start, name)
             .and_then(Symbol::descriptor_type),
         _ => None,
     }
@@ -1794,7 +1786,7 @@ fn descriptor_alias(
         .trim_start_matches('.');
     let value_type = match initializer.kind {
         SyntaxKind::ObjectName => package
-            .resolve_object_at(unit, initializer.span.start, descriptor_name)
+            .resolve_name_at(unit, initializer.span.start, descriptor_name)
             .and_then(Symbol::descriptor_type),
         SyntaxKind::Name => {
             visible_descriptor_aliases(aliases, unit.source.id(), initializer.span.start)
@@ -2017,7 +2009,7 @@ fn analyze_binding_node(
             .descriptor_alias_at(descriptor_name, initializer.span.start)
             .or_else(|| {
                 package
-                    .resolve_object_at(unit, initializer.span.start, descriptor_name)
+                    .resolve_name_at(unit, initializer.span.start, descriptor_name)
                     .and_then(Symbol::descriptor_type)
             });
         if let Some(ty) = descriptor_type {
@@ -2653,8 +2645,7 @@ fn add_lexical_scope(
     scopes.push(LexicalScope {
         span: node.span,
         parent,
-        ordinary: BTreeMap::new(),
-        objects: BTreeMap::new(),
+        symbols: BTreeMap::new(),
     });
     if node.kind == SyntaxKind::Block {
         populate_scope(unit, namespaces, globals, scopes, index, node)?;
@@ -2715,7 +2706,6 @@ fn populate_node(
     match node.kind {
         SyntaxKind::Binding => {
             if let Some(declaration) = declaration_from_syntax(unit, node)
-                && !declaration.object_form
                 && !declaration.global
             {
                 insert_local(unit, scopes, index, declaration.name, node.span)?;
@@ -2742,8 +2732,7 @@ fn populate_node(
             scopes.push(LexicalScope {
                 span: node.span,
                 parent: Some(index),
-                ordinary: BTreeMap::new(),
-                objects: BTreeMap::new(),
+                symbols: BTreeMap::new(),
             });
             if let Some(first) = node.children.first() {
                 if first.kind == SyntaxKind::ForTarget {
@@ -2821,10 +2810,7 @@ fn populate_assignment(
     let Some(declaration) = declaration_from_syntax(unit, node) else {
         return Ok(());
     };
-    if declaration.object_form
-        || declaration.global
-        || local_binding_exists(scopes, index, &declaration.name)
-    {
+    if declaration.global || local_binding_exists(scopes, index, &declaration.name) {
         return Ok(());
     }
     let namespace_binding = globals
@@ -2834,7 +2820,7 @@ fn populate_assignment(
             namespace_chain(&unit.namespace).find_map(|path| {
                 namespaces
                     .get(&path)
-                    .and_then(|scope| scope.ordinary.get(&declaration.name))
+                    .and_then(|scope| scope.symbols.get(&declaration.name))
                     .filter(|symbol| symbol.kind == SymbolKind::Binding)
             })
         });
@@ -3326,21 +3312,18 @@ fn populate_imports(
 ) -> Result<(), SemanticFailure> {
     for import in imports_from_syntax(unit, node)? {
         let export = imported_object(&import, namespaces)?;
-        if let Some(existing) = scopes[index].objects.get(&import.alias) {
+        if let Some(existing) = scopes[index].symbols.get(&import.alias) {
             if existing.identity == export.identity {
                 continue;
             }
             return Err(failure(
                 &unit.source,
                 "S2011",
-                format!(
-                    "object-form import `.{}` collides; use an alias",
-                    import.alias
-                ),
+                format!("import `{}` collides; use an alias", import.alias),
                 import.span,
             ));
         }
-        scopes[index].objects.insert(import.alias, export);
+        scopes[index].symbols.insert(import.alias, export);
     }
     Ok(())
 }
@@ -3348,7 +3331,7 @@ fn populate_imports(
 fn local_binding_exists(scopes: &[LexicalScope], mut index: usize, name: &str) -> bool {
     loop {
         let scope = &scopes[index];
-        if scope.ordinary.contains_key(name) {
+        if scope.symbols.contains_key(name) {
             return true;
         }
         let Some(parent) = scope.parent else {
@@ -3366,7 +3349,7 @@ fn insert_local(
     span: Span,
 ) -> Result<(), SemanticFailure> {
     let scope = &mut scopes[index];
-    if scope.ordinary.contains_key(&name) {
+    if scope.symbols.contains_key(&name) {
         return Err(failure(
             &unit.source,
             "S2012",
@@ -3374,15 +3357,15 @@ fn insert_local(
             span,
         ));
     }
-    scope.ordinary.insert(
+    scope.symbols.insert(
         name.clone(),
         Symbol {
             identity: format!("{}::scope{index}::{name}", unit.namespace),
             name,
             namespace: unit.namespace.clone(),
-            object_form: false,
             visibility: Visibility::Private,
             global: false,
+            constant: false,
             kind: SymbolKind::Binding,
             declaration_span: Some(span),
         },
@@ -3454,9 +3437,9 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     identity: identity.to_owned(),
                     name: name.to_owned(),
                     namespace: namespace.to_owned(),
-                    object_form: false,
                     visibility: Visibility::Public,
                     global: false,
+                    constant: true,
                     kind: if name == "print" {
                         SymbolKind::Binding
                     } else {
@@ -3480,9 +3463,9 @@ fn bootstrap_descriptor_constructs() -> BTreeMap<String, Symbol> {
                     identity: format!("/core/types::{name}"),
                     name,
                     namespace: "/core/types".to_owned(),
-                    object_form: false,
                     visibility: Visibility::Public,
                     global: false,
+                    constant: true,
                     kind: SymbolKind::TypeDescriptor,
                     declaration_span: None,
                 },
@@ -3516,7 +3499,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "/core/types".to_owned(),
         namespace_with_objects(
             "/core/types",
-            types.iter().map(String::as_str),
+            types.iter().map(|name| name.as_str()),
             SymbolKind::TypeDescriptor,
         ),
     );
@@ -3531,7 +3514,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         ],
         SymbolKind::ErrorObject,
     );
-    errors.objects.insert(
+    errors.symbols.insert(
         "error".to_owned(),
         compiler_owned_object("/core/errors", "error", SymbolKind::Interface),
     );
@@ -3574,11 +3557,8 @@ fn validate_constant_reassignment(package: &SemanticPackage) -> Result<(), Seman
                 .children
                 .iter()
                 .find(|child| child.kind == SyntaxKind::Name)
-            && let Some(symbol) = package.resolve_ordinary_at(
-                unit,
-                target.span.start,
-                node_text(&unit.source, target),
-            )
+            && let Some(symbol) =
+                package.resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
             && symbol
                 .declaration_span
                 .is_some_and(|span| declaration_is_constant(package, span))
@@ -3667,7 +3647,7 @@ fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), 
         } else if node.kind == SyntaxKind::PostfixExpression
             && let Some(target) = node.children.first()
             && package
-                .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+                .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
                 .is_some_and(|symbol| symbol.global)
         {
             writes.insert(node_text(&unit.source, target).to_owned());
@@ -3705,11 +3685,8 @@ fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), 
         }
         if node.kind == SyntaxKind::PostfixExpression
             && let Some(target) = node.children.first()
-            && let Some(symbol) = package.resolve_ordinary_at(
-                unit,
-                target.span.start,
-                node_text(&unit.source, target),
-            )
+            && let Some(symbol) =
+                package.resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
             && symbol.global
         {
             let name = node_text(&unit.source, target);
@@ -3726,7 +3703,7 @@ fn validate_global_definite_assignment(package: &SemanticPackage) -> Result<(), 
         }
         if node.kind == SyntaxKind::Name
             && let Some(symbol) =
-                package.resolve_ordinary_at(unit, node.span.start, node_text(&unit.source, node))
+                package.resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
             && symbol.global
         {
             let name = node_text(&unit.source, node);
@@ -3851,7 +3828,7 @@ fn first_write_to<'a>(
         && let Some(target) = node.children.first()
         && target.kind == SyntaxKind::Name
         && package
-            .resolve_ordinary_at(unit, target.span.start, node_text(&unit.source, target))
+            .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
             .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
     {
         return Some(target);
@@ -3932,7 +3909,7 @@ pub(crate) fn binding_span_is_mutated(
                 && node.children.first().is_some_and(|target| {
                     target.kind == SyntaxKind::Name
                         && package
-                            .resolve_ordinary_at(
+                            .resolve_name_at(
                                 unit,
                                 target.span.start,
                                 node_text(&unit.source, target),
@@ -3956,14 +3933,11 @@ fn namespace_with_objects<'a>(
     names: impl IntoIterator<Item = &'a str>,
     kind: SymbolKind,
 ) -> Namespace {
-    let objects = names
+    let symbols = names
         .into_iter()
         .map(|name| (name.to_owned(), compiler_owned_object(path, name, kind)))
         .collect();
-    Namespace {
-        ordinary: BTreeMap::new(),
-        objects,
-    }
+    Namespace { symbols }
 }
 
 fn compiler_owned_object(path: &str, name: &str, kind: SymbolKind) -> Symbol {
@@ -3971,9 +3945,9 @@ fn compiler_owned_object(path: &str, name: &str, kind: SymbolKind) -> Symbol {
         identity: format!("{path}::{name}"),
         name: name.to_owned(),
         namespace: path.to_owned(),
-        object_form: true,
         visibility: Visibility::Public,
         global: false,
+        constant: true,
         kind,
         declaration_span: None,
     }

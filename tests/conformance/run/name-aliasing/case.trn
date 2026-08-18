@@ -1,6 +1,6 @@
 namespace name-aliasing
-original = 'namespace'
-alias = original
+constant original = 'namespace'
+constant alias = original
 function main
   local = 'function'
   copy = local

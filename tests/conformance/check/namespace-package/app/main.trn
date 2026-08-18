@@ -1,5 +1,4 @@
 namespace app
-from /core/output import .print
-print = .print
+from /core/output import print
 function main
   print; > namespace package

@@ -1,7 +1,5 @@
 namespace numeric-literals
-from /core/types import .int8, .uint8
-signed = .int8
-unsigned = .uint8
+from /core/types import int8 as signed, uint8 as unsigned
 function main
   adaptive = 0x10
   single float32 = 1.5

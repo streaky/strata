@@ -236,10 +236,10 @@ impl Parser<'_> {
     fn parse_object_import(&mut self) -> SyntaxNode {
         let start = self.position;
         let mut children = Vec::new();
-        children.push(self.parse_object_name("S1026", "expected an object name"));
+        children.push(self.parse_import_name("S1026", "expected an imported name"));
         if self.eat_text("as") {
             let alias_start = self.position.saturating_sub(1);
-            let alias = self.parse_object_name("S1026", "expected an object alias after `as`");
+            let alias = self.parse_import_name("S1026", "expected an import alias after `as`");
             children.push(self.node(
                 SyntaxKind::ImportAlias,
                 alias_start,
@@ -254,7 +254,7 @@ impl Parser<'_> {
         let start = self.position;
         self.bump();
         self.expect_text("with", "S1027", "expected `with` after `import`");
-        let importer = self.parse_object_name("S1027", "expected an importer object after `with`");
+        let importer = self.parse_import_name("S1027", "expected an importer name after `with`");
         self.node(
             SyntaxKind::ImportSelection,
             start,
@@ -263,20 +263,15 @@ impl Parser<'_> {
         )
     }
 
-    fn parse_object_name(&mut self, code: &'static str, message: &str) -> SyntaxNode {
+    fn parse_import_name(&mut self, code: &'static str, message: &str) -> SyntaxNode {
         let start = self.position;
-        if !self.eat(TokenKind::Dot) {
+        if self.at(TokenKind::Identifier) {
+            self.leaf(SyntaxKind::Name)
+        } else {
             self.error_here(code, message);
             if !self.at_line_end() {
                 self.bump();
             }
-            return self.node(SyntaxKind::Error, start, self.position, Vec::new());
-        }
-        if self.at(TokenKind::Identifier) {
-            let name = self.leaf(SyntaxKind::Name);
-            self.node(SyntaxKind::ObjectName, start, self.position, vec![name])
-        } else {
-            self.error_here(code, message);
             self.node(SyntaxKind::Error, start, self.position, Vec::new())
         }
     }
@@ -303,7 +298,13 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             children.push(self.leaf(SyntaxKind::Name));
         } else if self.at(TokenKind::Dot) && self.peek_kind(1) == Some(TokenKind::Identifier) {
-            children.push(self.parse_object_name("S1003", "expected an object binding name"));
+            self.error_here_with_help(
+                "S1017",
+                "member access requires a receiver before `.`",
+                "remove the leading `.` from the declaration name",
+            );
+            self.bump();
+            self.bump();
         } else {
             self.error_here("S1003", "expected a binding name");
         }
@@ -785,14 +786,16 @@ impl Parser<'_> {
             | TokenKind::BlockString => self.leaf(SyntaxKind::Literal),
             TokenKind::Dot => {
                 let start = self.position;
+                self.error_here_with_help(
+                    "S1017",
+                    "member access requires a receiver before `.`",
+                    "write `value.member` with an explicit receiver",
+                );
                 self.bump();
                 if self.at(TokenKind::Identifier) {
-                    let name = self.leaf(SyntaxKind::Name);
-                    self.node(SyntaxKind::ObjectName, start, self.position, vec![name])
-                } else {
-                    self.error_here("S1017", "expected an object name after `.`");
-                    self.node(SyntaxKind::Error, start, self.position, Vec::new())
+                    self.bump();
                 }
+                self.node(SyntaxKind::Error, start, self.position, Vec::new())
             }
             TokenKind::OpenParen => {
                 let start = self.position;
@@ -992,7 +995,13 @@ impl Parser<'_> {
         let mut modifiers = Vec::new();
         while self.at(TokenKind::Dot) {
             let start = self.position;
-            let object = self.parse_object_name("S1029", "expected a declaration modifier name");
+            self.bump();
+            let object = if self.at(TokenKind::Identifier) {
+                self.leaf(SyntaxKind::Name)
+            } else {
+                self.error_here("S1029", "expected a declaration modifier name");
+                self.node(SyntaxKind::Error, start, self.position, Vec::new())
+            };
             modifiers.push(self.node(
                 SyntaxKind::DeclarationModifier,
                 start,

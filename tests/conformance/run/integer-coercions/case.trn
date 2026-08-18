@@ -1,7 +1,5 @@
 namespace integer-coercions
-from /core/types import .int8, .uint8
-int8 = .int8
-uint8 = .uint8
+from /core/types import int8, uint8
 
 function main
   value int = 300

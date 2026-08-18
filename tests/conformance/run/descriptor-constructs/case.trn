@@ -1,6 +1,6 @@
 namespace descriptor-constructs
-target = int
-same = target
+constant target = int
+constant same = target
 function main
   value int = 1
   print; value is a target

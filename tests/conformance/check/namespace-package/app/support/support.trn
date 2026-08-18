@@ -1,2 +1,2 @@
 namespace app/support
-public .value = 1
+public constant value = 1

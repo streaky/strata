@@ -96,7 +96,7 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
     ));
     fs::write(
         &invalid_path,
-        "namespace invalid\nfunction main\n  .missing;\n",
+        "namespace invalid\nfunction main\n  missing;\n",
     )
     .unwrap();
     let invalid = Command::new(binary)
@@ -108,6 +108,6 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
     assert!(
         String::from_utf8(invalid.stderr)
             .unwrap()
-            .contains("unresolved object `.missing`")
+            .contains("unresolved name `missing`")
     );
 }

@@ -183,7 +183,7 @@ impl Emitter<'_> {
         (node.kind == SyntaxKind::Name)
             .then(|| {
                 self.package
-                    .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+                    .resolve_name_at(self.unit, node.span.start, self.text(node))
             })
             .flatten()
             .filter(|symbol| symbol.global && symbol.kind == SymbolKind::Binding)
@@ -258,7 +258,7 @@ impl Emitter<'_> {
         let source_name = self.text(name_node);
         let Some(symbol) =
             self.package
-                .resolve_ordinary_at(self.unit, name_node.span.start, source_name)
+                .resolve_name_at(self.unit, name_node.span.start, source_name)
         else {
             return;
         };
@@ -1128,7 +1128,7 @@ impl Emitter<'_> {
         }
         let symbol =
             self.package
-                .resolve_ordinary_at(self.unit, callee.span.start, self.text(callee))?;
+                .resolve_name_at(self.unit, callee.span.start, self.text(callee))?;
         let span = symbol.declaration_span?;
         self.package
             .units
@@ -1146,9 +1146,9 @@ impl Emitter<'_> {
         {
             return local.clone();
         }
-        let Some(symbol) =
-            self.package
-                .resolve_ordinary_at(self.unit, node.span.start, source_name)
+        let Some(symbol) = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, source_name)
         else {
             return rust_name(source_name);
         };
@@ -1186,7 +1186,7 @@ impl Emitter<'_> {
 
     fn namespace_name(&self, node: &SyntaxNode) -> String {
         self.package
-            .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+            .resolve_name_at(self.unit, node.span.start, self.text(node))
             .and_then(|symbol| {
                 symbol
                     .declaration_span
@@ -1203,9 +1203,9 @@ impl Emitter<'_> {
         {
             return None;
         }
-        let symbol =
-            self.package
-                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))?;
+        let symbol = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, self.text(node))?;
         if symbol.global {
             return None;
         }
@@ -1292,7 +1292,7 @@ impl Emitter<'_> {
         };
         let Some(symbol) =
             self.package
-                .resolve_ordinary_at(self.unit, node.span.start, self.text(node))
+                .resolve_name_at(self.unit, node.span.start, self.text(node))
         else {
             return false;
         };
@@ -1322,7 +1322,7 @@ impl Emitter<'_> {
         };
         let name = owner.source.text()[object.span.start..object.span.end].trim_start_matches('.');
         self.package
-            .resolve_object_at(owner, object.span.start, name)
+            .resolve_name_at(owner, object.span.start, name)
             .is_some_and(|symbol| symbol.identity == identity)
     }
 
