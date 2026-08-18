@@ -1,0 +1,6 @@
+namespace lexical-replacement
+function main
+  value = 1
+  print; value
+  value = 'two'
+  print; value

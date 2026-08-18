@@ -65,7 +65,6 @@ pub struct SemanticPackage {
 pub enum ValueType {
     Scalar(ScalarType),
     ScalarOrNone(ScalarType),
-    TypeDescriptor(ScalarType),
 }
 
 impl std::fmt::Display for ValueType {
@@ -73,7 +72,6 @@ impl std::fmt::Display for ValueType {
         match self {
             Self::Scalar(ty) => ty.fmt(formatter),
             Self::ScalarOrNone(ty) => write!(formatter, "{ty}|none"),
-            Self::TypeDescriptor(ty) => write!(formatter, "type descriptor `{ty}`"),
         }
     }
 }
@@ -1707,9 +1705,6 @@ fn validate_descriptor_value_node(
             || node.kind == SyntaxKind::ImportDeclaration
             || (node.kind == SyntaxKind::TypeMembershipExpression && index == 1)
             || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) && index == 0)
-            || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
-                && index + 1 == node.children.len()
-                && descriptor_expression_type(package, unit, child).is_some())
             || (node.kind == SyntaxKind::BinaryExpression
                 && node.children.len() == 2
                 && node_text(&unit.source, node)[node.children[0].span.end - node.span.start
@@ -1853,7 +1848,7 @@ fn collect_typed_bindings(
     }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         let prior_len = visible_bindings.len();
-        analyze_binding_node(package, unit, node, visible_bindings)?;
+        analyze_binding_node(unit, node, visible_bindings)?;
         bindings.extend_from_slice(&visible_bindings[prior_len..]);
     }
     for child in &node.children {
@@ -1969,7 +1964,6 @@ fn resolve_scalar_type(
 }
 
 fn analyze_binding_node(
-    package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
     bindings: &mut Vec<TypedBinding>,
@@ -2000,34 +1994,14 @@ fn analyze_binding_node(
             )
     });
 
-    if declared.is_none()
-        && let Some(initializer) = initializer
-        && matches!(initializer.kind, SyntaxKind::Name | SyntaxKind::ObjectName)
-    {
-        let descriptor_name = node_text(&unit.source, initializer)
-            .trim()
-            .trim_start_matches('.');
-        let descriptor_type = unit
-            .descriptor_alias_at(descriptor_name, initializer.span.start)
-            .or_else(|| {
-                package
-                    .resolve_name_at(unit, initializer.span.start, descriptor_name)
-                    .and_then(Symbol::descriptor_type)
-            });
-        if let Some(ty) = descriptor_type {
-            bindings.push(TypedBinding {
-                name,
-                span: node.span,
-                value_type: ValueType::TypeDescriptor(ty),
-                mutable: false,
-            });
-            return Ok(());
-        }
-    }
-
     if node.kind == SyntaxKind::Assignment
         && declared.is_none()
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
+        && (find_node_by_span(&unit.tree.root, previous.span)
+            .and_then(binding_initializer)
+            .is_none()
+            || lexical_scope_index_at(unit, previous.span.start)
+                != lexical_scope_index_at(unit, node.span.start))
         && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
         && let Some(actual) = infer_value_type(unit, initializer, bindings)?
@@ -3364,14 +3338,17 @@ fn insert_local(
     Ok(())
 }
 
-fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item = &LexicalScope> {
-    let mut current = unit
-        .scopes
+fn lexical_scope_index_at(unit: &SemanticUnit, offset: usize) -> Option<usize> {
+    unit.scopes
         .iter()
         .enumerate()
         .filter(|(_, scope)| scope.span.start <= offset && offset < scope.span.end)
         .min_by_key(|(_, scope)| scope.span.end - scope.span.start)
-        .map(|(index, _)| index);
+        .map(|(index, _)| index)
+}
+
+fn lexical_scope_chain(unit: &SemanticUnit, offset: usize) -> impl Iterator<Item = &LexicalScope> {
+    let mut current = lexical_scope_index_at(unit, offset);
     std::iter::from_fn(move || {
         let index = current?;
         let scope = &unit.scopes[index];
@@ -3897,6 +3874,10 @@ pub(crate) fn binding_span_is_mutated(
                 node.kind,
                 SyntaxKind::Assignment | SyntaxKind::PostfixExpression
             ) && node.span != declaration_span
+                && !unit
+                    .typed_bindings
+                    .iter()
+                    .any(|binding| binding.span == node.span)
                 && node.children.first().is_some_and(|target| {
                     target.kind == SyntaxKind::Name
                         && package

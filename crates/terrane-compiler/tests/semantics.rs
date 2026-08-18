@@ -179,39 +179,29 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
 }
 
 #[test]
-fn descriptor_construct_aliases_are_typed_without_the_prelude() {
-    let analyzed = analyze(&package(
-        false,
-        &[(
-            "main.trn",
-            "namespace app\nconstant target = int8\nconstant same = target\nfunction main\n  value int8 = 1\n  result bool = value is a same\n",
-        )],
-    ))
-    .unwrap();
-    let unit = &analyzed.units[0];
-    for name in ["target", "same"] {
-        assert!(unit.typed_bindings.iter().any(|binding| {
-            binding.name == name
-                && binding.value_type
-                    == terrane_compiler::semantics::ValueType::TypeDescriptor(ScalarType::Int8)
-        }));
+fn descriptor_constructs_cannot_be_renamed_by_value_bindings() {
+    for declaration in ["byte = int8", "constant byte = int8"] {
+        let source = format!("namespace app\n{declaration}\n");
+        let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "T0019", "{declaration}");
+        assert_eq!(
+            failure.diagnostics[0].message,
+            "type descriptor `int8` is a compile-time construct and cannot be used as a runtime value",
+            "{declaration}"
+        );
     }
 }
 #[test]
 fn descriptor_constructs_are_rejected_as_runtime_values() {
-    for runtime_use in [
-        "print; target",
-        "result = target + 1",
-        "result = consume; target",
-    ] {
+    for runtime_use in ["print; int8", "result = int8 + 1", "result = consume; int8"] {
         let source = format!(
-            "namespace app\nfrom /core/output import print\nconstant printer = print\nconstant target = int8\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
+            "namespace app\nfrom /core/output import print\nfunction consume int; value int\n  return value\nfunction main\n  {runtime_use}\n"
         );
         let failure = analyze(&package(false, &[("main.trn", &source)])).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "T0019", "{runtime_use}");
         assert_eq!(
             failure.diagnostics[0].primary.unwrap().start,
-            source.rfind("target").unwrap()
+            source.rfind("int8").unwrap()
         );
     }
 }
@@ -786,8 +776,7 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import uint8\n",
-                "byte = uint8\n",
+                "from /core/types import uint8 as byte\n",
                 "maximum byte = 255\n",
             ),
         )],
@@ -795,14 +784,6 @@ fn imported_descriptor_aliases_drive_explicit_binding_types() {
     .unwrap();
 
     let bindings = &analyzed.units[0].typed_bindings;
-    assert_eq!(
-        bindings
-            .iter()
-            .find(|binding| binding.name == "byte")
-            .unwrap()
-            .value_type,
-        ValueType::TypeDescriptor(ScalarType::Uint8)
-    );
     assert_eq!(
         bindings
             .iter()
@@ -853,15 +834,14 @@ fn records_typed_parameters_defaults_and_return_contracts() {
 }
 
 #[test]
-fn descriptor_aliases_resolve_function_contracts_in_source_order() {
+fn imported_descriptor_aliases_resolve_function_contracts() {
     let analyzed = analyze(&package(
         false,
         &[(
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import uint8\n",
-                "byte = uint8\n",
+                "from /core/types import uint8 as byte\n",
                 "function identity byte; value byte\n",
                 "  return value\n",
             ),
@@ -1006,20 +986,42 @@ fn collection_for_targets_are_typed_only_inside_the_loop_body() {
 }
 
 #[test]
-fn rejects_implicit_cross_type_reassignment() {
-    let failure = analyze(&package(
+fn ordinary_value_bindings_replace_earlier_lexical_bindings() {
+    let analyzed = analyze(&package(
         true,
         &[(
             "main.trn",
-            "namespace app\nfunction main\n  value int = 1\n  value = true\n",
+            "namespace app\nfunction main\n  value = 1\n  before = value\n  value = true\n  after = value\n",
         )],
     ))
-    .unwrap_err();
-
-    assert_eq!(failure.diagnostics[0].code, "T0002");
+    .unwrap();
+    let bindings = &analyzed.units[0].typed_bindings;
     assert_eq!(
-        failure.diagnostics[0].message,
-        "cannot assign `bool` to `value` of type `int`"
+        bindings
+            .iter()
+            .filter(|binding| binding.name == "value")
+            .map(|binding| binding.value_type)
+            .collect::<Vec<_>>(),
+        [
+            ValueType::Scalar(ScalarType::Int),
+            ValueType::Scalar(ScalarType::Bool)
+        ]
+    );
+    assert_eq!(
+        bindings
+            .iter()
+            .find(|binding| binding.name == "before")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Int)
+    );
+    assert_eq!(
+        bindings
+            .iter()
+            .find(|binding| binding.name == "after")
+            .unwrap()
+            .value_type,
+        ValueType::Scalar(ScalarType::Bool)
     );
 }
 
@@ -1237,8 +1239,7 @@ fn function_parameters_are_in_scope_during_binding_analysis() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import int8\n",
-                "constant tiny = int8\n",
+                "from /core/types import int8 as tiny\n",
                 "function convert int8; item int\n",
                 "  result int8\n",
                 "  result = item.coerce; tiny\n",
@@ -1363,9 +1364,8 @@ fn identity_accepts_typed_scalars_and_canonical_descriptors() {
             "main.trn",
             concat!(
                 "namespace app\n",
-                "from /core/types import int8\n",
+                "from /core/types import int8 as byte\n",
                 "function produce\n",
-                "byte = int8\n",
                 "same-type = byte is byte\n",
                 "value = 1\n",
                 "same-value = value is value\n",
@@ -1664,7 +1664,8 @@ fn records_mutability_against_resolved_binding_identity() {
                 "value = 1\n",
                 "function main\n",
                 "  value int = 2\n",
-                "  value = 3\n",
+                "  if true\n",
+                "    value = 3\n",
             ),
         )],
     ))

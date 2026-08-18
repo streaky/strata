@@ -1,6 +1,5 @@
 namespace descriptor-constructs
-constant target = int
-constant same = target
+from /core/types import int as target, int as same
 function main
   value int = 1
   print; value is a target

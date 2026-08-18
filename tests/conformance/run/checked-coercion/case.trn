@@ -10,7 +10,6 @@ function convert int8; item int
   return result
 
 function helper
-  helper-tiny = uint8
   print; 'helper'
 
 function main

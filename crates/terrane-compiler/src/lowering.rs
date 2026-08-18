@@ -495,14 +495,9 @@ impl Emitter<'_> {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == node.span);
-        if binding.is_some_and(|binding| matches!(binding.value_type, ValueType::TypeDescriptor(_)))
-        {
-            return;
-        }
         let ty = binding.map(|binding| match binding.value_type {
             ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
             ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
-            ValueType::TypeDescriptor(_) => "()".to_owned(),
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -510,6 +505,11 @@ impl Emitter<'_> {
             "analyzed initialized value binding must have a selected initializer"
         );
         let mutable = binding.is_some_and(|binding| binding.mutable);
+        if self.unit.typed_bindings.iter().any(|previous| {
+            previous.name == self.text(name_node) && previous.span.start < node.span.start
+        }) {
+            self.line(&format!("let _ = &{name};"));
+        }
         self.line_start();
         self.output.push_str("let ");
         if mutable {
@@ -520,12 +520,19 @@ impl Emitter<'_> {
             write!(self.output, ": {ty}").unwrap();
         }
         if let Some(initializer) = initializer {
-            let initializer = if let Some(binding) = binding {
+            let mut value = if let Some(binding) = binding {
                 self.expression_as(initializer, binding.value_type)
             } else {
                 self.expression(initializer)
             };
-            write!(self.output, " = {initializer}").unwrap();
+            if initializer.kind == SyntaxKind::BinaryExpression {
+                value = value
+                    .strip_prefix('(')
+                    .and_then(|value| value.strip_suffix(')'))
+                    .unwrap_or(&value)
+                    .to_owned();
+            }
+            write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
     }
@@ -1102,7 +1109,7 @@ impl Emitter<'_> {
                 .value_type(receiver)
                 .and_then(|value_type| match value_type {
                     ValueType::Scalar(value_type) => Some(format!("type:{value_type}")),
-                    ValueType::ScalarOrNone(_) | ValueType::TypeDescriptor(_) => None,
+                    ValueType::ScalarOrNone(_) => None,
                 });
         }
         crate::semantics::descriptor_expression_type(self.package, self.unit, node)
