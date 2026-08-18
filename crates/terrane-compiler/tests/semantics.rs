@@ -375,7 +375,10 @@ fn plain_function_assignment_cannot_replace_namespace_bindings() {
             assert_eq!(
                 diagnostic.help.as_deref(),
                 Some(
-                    format!("declare `global {name} ...` or assign it at namespace level").as_str()
+                    format!(
+                        "pass `{name}` as a parameter and return changes, or declare it `constant` if it never varies"
+                    )
+                    .as_str()
                 ),
                 "{source}"
             );
@@ -393,6 +396,53 @@ fn local_binding_may_shadow_a_namespace_binding() {
         )],
     ))
     .unwrap();
+}
+
+#[test]
+fn namespace_variables_stay_at_their_own_namespace_tier() {
+    for sources in [
+        vec![(
+            "main.trn",
+            "namespace app\nvalue int = 1\nfunction main\n  print; value\n",
+        )],
+        vec![
+            ("parent.trn", "namespace app\nvalue int = 1\n"),
+            (
+                "child.trn",
+                "namespace app/child\nfunction main\n  print; value\n",
+            ),
+        ],
+    ] {
+        let failure = analyze(&package(true, &sources)).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "S2013");
+        assert_eq!(failure.diagnostics[0].message, "unresolved name `value`");
+    }
+
+    analyze(&package(
+        true,
+        &[(
+            "main.trn",
+            "namespace app\nvalue int = 1\nconstant copied int = value\nfunction main\n  print; copied\n",
+        )],
+    ))
+    .unwrap();
+}
+
+#[test]
+fn namespace_variables_reject_visibility_markers() {
+    for source in [
+        "namespace app\npublic value int = 1\n",
+        "namespace app\nprivate value int = 1\n",
+        "namespace app\nprotected value int = 1\n",
+    ] {
+        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2024", "{source}");
+        assert_eq!(
+            diagnostic.message, "namespace variable `value` cannot declare visibility",
+            "{source}"
+        );
+    }
 }
 
 #[test]
@@ -462,7 +512,7 @@ fn plain_namespace_assignment_cannot_target_a_program_global() {
     );
     assert_eq!(
         diagnostic.help.as_deref(),
-        Some("use `global counter = ...`")
+        Some("pass changing values through parameters and returns instead")
     );
 }
 

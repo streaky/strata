@@ -1,0 +1,2 @@
+namespace public-namespace-variable
+public value int = 1

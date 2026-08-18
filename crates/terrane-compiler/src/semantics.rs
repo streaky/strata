@@ -1155,7 +1155,9 @@ fn validate_initializer_dependencies(package: &SemanticPackage) -> Result<(), Se
                             ),
                             name.span,
                         )
-                        .with_help(format!("use `global {} = ...`", declaration.name)),
+                        .with_help(
+                            "pass changing values through parameters and returns instead",
+                        ),
                     ],
                 });
             }
@@ -2845,7 +2847,7 @@ fn populate_assignment(
                     name.span,
                 )
                 .with_help(format!(
-                    "declare `global {} ...` or assign it at namespace level",
+                    "pass `{}` as a parameter and return changes, or declare it `constant` if it never varies",
                     declaration.name
                 )),
             ],
