@@ -404,8 +404,17 @@ fn namespace_variables_stay_at_their_own_namespace_tier() {
         ],
     ] {
         let failure = analyze(&package(true, &sources)).unwrap_err();
-        assert_eq!(failure.diagnostics[0].code, "S2013");
-        assert_eq!(failure.diagnostics[0].message, "unresolved name `value`");
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "S2026");
+        assert_eq!(
+            diagnostic.message,
+            "namespace variable `value` cannot cross a function boundary"
+        );
+        assert!(diagnostic.help.as_deref().is_some_and(|help| {
+            help.contains("pass `value` as a parameter")
+                && help.contains("return it from a function")
+                && help.contains("declare it `global`")
+        }));
     }
 
     analyze(&package(
@@ -419,20 +428,49 @@ fn namespace_variables_stay_at_their_own_namespace_tier() {
 }
 
 #[test]
-fn namespace_variables_reject_visibility_markers() {
-    for source in [
-        "namespace app\npublic value int = 1\n",
-        "namespace app\nprivate value int = 1\n",
-        "namespace app\nprotected value int = 1\n",
-    ] {
-        let failure = analyze(&package(true, &[("main.trn", source)])).unwrap_err();
-        let diagnostic = &failure.diagnostics[0];
-        assert_eq!(diagnostic.code, "S2024", "{source}");
-        assert_eq!(
-            diagnostic.message, "namespace variable `value` cannot declare visibility",
-            "{source}"
-        );
+fn namespace_variables_reject_only_public_visibility() {
+    let failure = analyze(&package(
+        true,
+        &[("main.trn", "namespace app\npublic value int = 1\n")],
+    ))
+    .unwrap_err();
+    let diagnostic = &failure.diagnostics[0];
+    assert_eq!(diagnostic.code, "S2025");
+    assert_eq!(
+        diagnostic.message,
+        "namespace variable `value` cannot be public"
+    );
+
+    for visibility in ["private", "protected"] {
+        analyze(&package(
+            true,
+            &[(
+                "main.trn",
+                &format!("namespace app\n{visibility} value int = 1\n"),
+            )],
+        ))
+        .unwrap();
     }
+}
+
+#[test]
+fn namespace_variables_cannot_be_imported_across_the_boundary() {
+    let failure = analyze(&package(
+        true,
+        &[
+            ("state.trn", "namespace state\nvalue int = 1\n"),
+            (
+                "main.trn",
+                "namespace app\nfrom /state import value\nfunction main\n  print; value\n",
+            ),
+        ],
+    ))
+    .unwrap_err();
+    assert_eq!(failure.diagnostics[0].code, "S2026");
+    assert_eq!(
+        failure.diagnostics[0].message,
+        "namespace variable `value` cannot cross a function boundary"
+    );
 }
 
 #[test]

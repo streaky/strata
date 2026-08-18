@@ -15,19 +15,43 @@ fn hello_lowers_deterministically() {
 }
 
 #[test]
-fn inferred_local_first_assignment_lowers_as_a_declaration() {
+fn inferred_local_reassignment_lowers_as_assignment() {
     let source = "namespace inferred\nfunction main\n  total = 5\n  total = total + 1\n";
     let compilation = terrane_compiler::compile("inferred.trn", source.to_owned()).unwrap();
 
-    assert!(
-        compilation.rust.contains(
-            "let total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
-        )
-    );
-    assert!(compilation.rust.contains("let _ = &total;"));
     assert!(compilation.rust.contains(
-        "let total: terrane_int_support::Int = total.clone() + terrane_int_support::Int::from(1_i128);"
+        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
     ));
+    assert!(!compilation.rust.contains("let _ = &total;"));
+    assert!(
+        compilation
+            .rust
+            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
+    );
+}
+
+#[test]
+fn annotated_replacement_lowers_as_source_ordered_shadowing() {
+    let source = concat!(
+        "namespace replacement\n",
+        "from /core/types import int8\n",
+        "function main\n",
+        "  value int8 = 12\n",
+        "  value int = value.coerce; int\n",
+        "  print; value\n",
+        "function second\n",
+        "  value int8 = 7\n",
+        "  print; value\n",
+        "function blocks\n",
+        "  if true\n",
+        "    value int8 = 1\n",
+        "    value int = value.coerce; int\n",
+        "  if true\n",
+        "    value int8 = 2\n",
+    );
+    let compilation = terrane_compiler::compile("replacement.trn", source.to_owned()).unwrap();
+
+    assert_eq!(compilation.rust.matches("let _ = &value;").count(), 2);
 }
 
 #[test]
@@ -373,13 +397,15 @@ fn lowers_values_in_their_integer_destination_type() {
             .contains("return terrane_int_support::Int::from(41_i128);")
     );
     assert!(compilation.rust.contains(
-        "let total: terrane_int_support::Int = terrane_int_support::Int::from(\
+        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(\
 terrane_string_support::length(&text) as i128);"
     ));
-    assert!(compilation.rust.contains("let _ = &total;"));
-    assert!(compilation.rust.contains(
-        "let total: terrane_int_support::Int = total.clone() + terrane_int_support::Int::from(1_i128);"
-    ));
+    assert!(!compilation.rust.contains("let _ = &total;"));
+    assert!(
+        compilation
+            .rust
+            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
+    );
 }
 
 #[test]
