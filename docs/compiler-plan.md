@@ -729,6 +729,18 @@ to two passes rather than interleaving it through later work. They are separate 
 because they are separate language changes with separate exit criteria, not because the
 migrations are independent.
 
+Implemented evidence: the compiler now assembles one symbol table per namespace and resolves
+imports, lexical names, namespace names, program globals, and prelude names through one lookup
+view. Leading-dot receiverless expressions fail with `S1019`; member dots remain receiver-only.
+Collision, visibility, shadowing, construct-import, and descriptor-import cases exercise the
+single view. `float` resolves to the canonical `float64` descriptor. Function bodies reject
+namespace-local variables and accept explicit globals, constants, constructs, and imports;
+namespace variables reject `public`. Plain assignment no longer aliases compile-time constructs,
+while same-scope local replacement is source-ordered, initializer-safe, and lowered as Rust
+shadowing. The conformance corpus, unit fixtures, generated-Rust goldens, and exploratory demos
+use the canonical spellings.
+
+
 ### Milestone 5 — Rust IR, readable emission, and Cargo builds
 
 Deliver:
@@ -1241,26 +1253,15 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.7 are delivered. The 4.7 completeness audit corrections are also
-closed: numeric literal lowering, bare-name initializers, normalized and validated namespace
-discovery, empty-join receiver evaluation, manifest root validation, strict segment grammar,
-canonical demo paths, package-root build placement, auditable resolved-source metadata,
-bound-string-method rejection, path diagnostics, and conformance coverage all have focused
-regressions. The previously ambiguous minimal collection subset is explicitly deferred:
-`/core/collections` remains an empty reserved namespace until the iterator protocol and
-collections arrive in milestones 13 and 14.
+Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections remain closed,
+and milestone 4.8 has removed the second namespace lookup view end to end: symbol storage,
+resolution, diagnostics, semantic types, lowering metadata, fixtures, goldens, examples, and
+surface documentation all use the single-view name model.
 
-Three defects remain open, none of them namespace-path or lookup-model work. A program-global read
-anywhere other than a bare `print` argument emits the namespace-local storage name and fails to
-compile. `global x = x + 1` takes the same lock twice and deadlocks the compiled program, which
-`terrane check` does not catch. A binding declared inside a nested `if`, `for`, or `while` body is
-never added to the scope table, so no later statement resolves it; that one reproduces on `main` and
-predates this branch.
-
-The next work in order is milestone 4.8, followed by milestone 5. The two program-global defects are
-effectively prerequisites for 4.8 rather than parallel work: that milestone removes namespace
-variables from function-body resolution, which makes `global` the only way to share mutable state
-between functions, and today that path cannot be read in an expression or safely incremented.
+The next work in order is milestone 5. Its boundary is Rust IR, readable deterministic emission,
+and Cargo builds; later language features remain staged by their own milestones. The minimal
+collection subset remains explicitly deferred: `/core/collections` is an empty reserved namespace
+until iterator and collection support arrives in milestones 13 and 14.
 
 Every item above is implementation; no design question is open. The `coerce` versus `parse` boundary is settled: `coerce` is the complete built-in conversion surface and never takes options, `parse` always requires a callback and is typed by that callback's declared return, and base-N interpretation is the separate `radix` operation attached by receiver. Milestone 7 additionally delivers `parse` under its version-one restriction that the callback be a statically resolvable function name, and the `radix` pair.
 

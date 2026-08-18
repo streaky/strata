@@ -1660,13 +1660,7 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         let unit = &package.units[index];
         let mut visible_bindings = Vec::new();
         let mut bindings = Vec::new();
-        collect_typed_bindings(
-            package,
-            unit,
-            &unit.tree.root,
-            &mut visible_bindings,
-            &mut bindings,
-        )?;
+        collect_typed_bindings(unit, &unit.tree.root, &mut visible_bindings, &mut bindings)?;
         package.units[index].typed_bindings = bindings;
     }
     Ok(())
@@ -1803,7 +1797,6 @@ fn descriptor_alias(
 }
 
 fn collect_typed_bindings(
-    package: &SemanticPackage,
     unit: &SemanticUnit,
     node: &SyntaxNode,
     visible_bindings: &mut Vec<TypedBinding>,
@@ -1825,7 +1818,7 @@ fn collect_typed_bindings(
             })
         }));
         for child in &node.children {
-            collect_typed_bindings(package, unit, child, &mut function_bindings, bindings)?;
+            collect_typed_bindings(unit, child, &mut function_bindings, bindings)?;
         }
         return Ok(());
     }
@@ -1834,7 +1827,7 @@ fn collect_typed_bindings(
         && target.kind == SyntaxKind::ForTarget
         && let Some(name) = target.children.first()
     {
-        collect_typed_bindings(package, unit, collection, visible_bindings, bindings)?;
+        collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
@@ -1843,7 +1836,7 @@ fn collect_typed_bindings(
         };
         let mut loop_bindings = visible_bindings.clone();
         loop_bindings.push(loop_binding);
-        collect_typed_bindings(package, unit, block, &mut loop_bindings, bindings)?;
+        collect_typed_bindings(unit, block, &mut loop_bindings, bindings)?;
         return Ok(());
     }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
@@ -1852,7 +1845,7 @@ fn collect_typed_bindings(
         bindings.extend_from_slice(&visible_bindings[prior_len..]);
     }
     for child in &node.children {
-        collect_typed_bindings(package, unit, child, visible_bindings, bindings)?;
+        collect_typed_bindings(unit, child, visible_bindings, bindings)?;
     }
     Ok(())
 }
@@ -3467,7 +3460,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "/core/types".to_owned(),
         namespace_with_objects(
             "/core/types",
-            types.iter().map(|name| name.as_str()),
+            types.iter().map(std::string::String::as_str),
             SymbolKind::TypeDescriptor,
         ),
     );

@@ -19,14 +19,15 @@ fn inferred_local_first_assignment_lowers_as_a_declaration() {
     let source = "namespace inferred\nfunction main\n  total = 5\n  total = total + 1\n";
     let compilation = terrane_compiler::compile("inferred.trn", source.to_owned()).unwrap();
 
-    assert!(compilation.rust.contains(
-        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
-    ));
     assert!(
-        compilation
-            .rust
-            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
+        compilation.rust.contains(
+            "let total: terrane_int_support::Int = terrane_int_support::Int::from(5_i128);"
+        )
     );
+    assert!(compilation.rust.contains("let _ = &total;"));
+    assert!(compilation.rust.contains(
+        "let total: terrane_int_support::Int = total.clone() + terrane_int_support::Int::from(1_i128);"
+    ));
 }
 
 #[test]
@@ -234,12 +235,10 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
 fn lowers_scalar_membership_and_descriptor_identity_statically() {
     let source = concat!(
         "namespace descriptors\n",
-        "from /core/types import int8\n",
+        "from /core/types import int8 as byte, int8 as other-byte\n",
         "function accepts; item int\n",
         "  parameter-member = item is a int\n",
         "function main\n",
-        "  byte = int8\n",
-        "  other-byte = int8\n",
         "  value = 1\n",
         "  member = value is a int\n",
         "  same-descriptor = byte is byte\n",
@@ -374,14 +373,13 @@ fn lowers_values_in_their_integer_destination_type() {
             .contains("return terrane_int_support::Int::from(41_i128);")
     );
     assert!(compilation.rust.contains(
-        "let mut total: terrane_int_support::Int = terrane_int_support::Int::from(\
+        "let total: terrane_int_support::Int = terrane_int_support::Int::from(\
 terrane_string_support::length(&text) as i128);"
     ));
-    assert!(
-        compilation
-            .rust
-            .contains("total = total.clone() + terrane_int_support::Int::from(1_i128);")
-    );
+    assert!(compilation.rust.contains("let _ = &total;"));
+    assert!(compilation.rust.contains(
+        "let total: terrane_int_support::Int = total.clone() + terrane_int_support::Int::from(1_i128);"
+    ));
 }
 
 #[test]

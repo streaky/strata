@@ -1,8 +1,8 @@
 namespace linux/kernel/fork
 
 use system linux-kernel
-from /linux/kernel import .per-cpu, .cacheline-aligned, .cacheline-aligned-in-smp, .weak, .inline, .always-inline, .noinline, .syscall, .latent-entropy, .init
-from /core/collections import .range
+from /linux/kernel import per-cpu, cacheline-aligned, cacheline-aligned-in-smp, weak, inline, always-inline, noinline, syscall, latent-entropy, init
+from /core/collections import range
 
 /*
  * Native Terrane stress-test translation of Linux kernel/fork.c.
@@ -56,18 +56,18 @@ global nr-threads int = 0            // The idle threads do not count..
 private global max-threads int = 0   // tunable limit on nr_threads
 
 private function named-array-index array-entry of const-string; index int, spelling const-string
-    return .array-entry; index=index, value=spelling
+    return array-entry; index=index, value=spelling
 
 private constant resident-page-types array of const-string =
-    .array;
+    array;
         named-array-index; mm-filepages, "MM_FILEPAGES"
         named-array-index; mm-anonpages, "MM_ANONPAGES"
         named-array-index; mm-swapents, "MM_SWAPENTS"
         named-array-index; mm-shmempages, "MM_SHMEMPAGES"
 
-.per-cpu global process-counts unsigned-long = 0
+per-cpu global process-counts unsigned-long = 0
 
-.cacheline-aligned global tasklist-lock rwlock = define-rwlock;
+cacheline-aligned global tasklist-lock rwlock = define-rwlock;
 
 when build; config-prove-rcu
     function lockdep-tasklist-lock-is-held int
@@ -84,16 +84,16 @@ function nr-processes int
 
     return total
 
-.weak function arch-release-task-struct void; tsk task-struct
+weak function arch-release-task-struct void; tsk task-struct
     return
 
 private global task-struct-cachep kmem-cache|none = none
 
-.inline private function alloc-task-struct-node task-struct|none; node int
+inline private function alloc-task-struct-node task-struct|none; node int
     unsafe
         return kmem-cache-alloc-node; task-struct-cachep, gfp-kernel, node
 
-.inline private function free-task-struct void; tsk task-struct
+inline private function free-task-struct void; tsk task-struct
     unsafe
         kmem-cache-free; task-struct-cachep, tsk
 
@@ -104,8 +104,8 @@ when build; config-vmap-stack
      */
     constant nr-cached-stacks int = 2
 
-    .per-cpu private global cached-stacks array of vm-struct|none, nr-cached-stacks =
-        .array;
+    per-cpu private global cached-stacks array of vm-struct|none, nr-cached-stacks =
+        array;
             none
             none
 
@@ -137,7 +137,7 @@ when build; config-vmap-stack
             if node != numa-no-node and numa-node-id; != node
                 return none
 
-            for i in (.range; 0, nr-cached-stacks)
+            for i in (range; 0, nr-cached-stacks)
                 vm-area = this-cpu-xchg; cached-stacks[i], none
                 if vm-area
                     return vm-area
@@ -161,12 +161,12 @@ when build; config-vmap-stack
         try
             nid = numa-node-id;
             if node-state; nid, n-memory
-                for i in (.range; 0, vm-area.nr-pages)
+                for i in (range; 0, vm-area.nr-pages)
                     page page = vm-area.pages[i]
                     if page-to-nid; page != nid
                         return false
 
-            for i in (.range; 0, nr-cached-stacks)
+            for i in (range; 0, nr-cached-stacks)
                 tmp vm-struct|none = none
 
                 if this-cpu-try-cmpxchg; cached-stacks[i], ref tmp, vm-area
@@ -203,7 +203,7 @@ when build; config-vmap-stack
             cached-vm-stack-areas = per-cpu-ptr; cached-stacks, cpu
 
 
-        for i in (.range; 0, nr-cached-stacks)
+        for i in (range; 0, nr-cached-stacks)
             vm-area vm-struct|none = cached-vm-stack-areas[i]
 
             if not vm-area
@@ -221,7 +221,7 @@ when build; config-vmap-stack
 
         bug-on; vm-area.nr-pages != thread-size / page-size
 
-        for i in (.range; 0, thread-size / page-size)
+        for i in (range; 0, thread-size / page-size)
             ret = memcg-kmem-charge-page; vm-area.pages[i], gfp-kernel, 0
             if ret
                 goto err
@@ -230,7 +230,7 @@ when build; config-vmap-stack
         return 0
 
         label err
-        for i in (.range; 0, nr-charged)
+        for i in (range; 0, nr-charged)
             memcg-kmem-uncharge-page; vm-area.pages[i], 0
         return ret
 
@@ -402,7 +402,7 @@ function account-kernel-stack void; tsk ref task-struct, account int
     if is-enabled; config-vmap-stack
         vm-area ref vm-struct = task-stack-vm-area; tsk
 
-        for i in (.range; 0, thread-size / page-size)
+        for i in (range; 0, thread-size / page-size)
             mod-lruvec-page-state; vm-area.pages[i], nr-kernel-stack-kb, account * (page-size / 1024)
     else
         stack raw-address of opaque = task-stack-page; tsk
@@ -418,7 +418,7 @@ function exit-task-stack-account void; tsk ref task-struct
         vm-area ref vm-struct
 
         vm-area = task-stack-vm-area; tsk
-        for i in (.range; 0, thread-size / page-size)
+        for i in (range; 0, thread-size / page-size)
             memcg-kmem-uncharge-page; vm-area.pages[i], 0
 
 function release-task-stack void; tsk ref task-struct
@@ -534,7 +534,7 @@ function check-mm void; mm ref mm-struct
 
     build-bug-on-msg; (array-size; resident-page-types) != nr-mm-counters, "Please make sure 'struct resident_page_types[]' is updated as well"
 
-    for i in (.range; 0, nr-mm-counters)
+    for i in (range; 0, nr-mm-counters)
         x long = percpu-counter-sum; ref mm.rss-stat[i]
 
         if unlikely; x != 0
@@ -766,7 +766,7 @@ function fork-init void
     init-task.signal.rlim[rlimit-nproc].rlim-max = max-threads / 2
     init-task.signal.rlim[rlimit-sigpending] = init-task.signal.rlim[rlimit-nproc]
 
-    for i in (.range; 0, ucount-counts)
+    for i in (range; 0, ucount-counts)
         init-user-ns.ucount-max[i] = max-threads / 2
 
     set-userns-rlimit-max; ref init-user-ns, ucount-rlimit-nproc, rlim-infinity
@@ -904,11 +904,11 @@ private function dup-task-struct ref task-struct; orig ref task-struct, node int
     free-task-struct; tsk
     return none
 
-.cacheline-aligned-in-smp private global mmlist-lock spinlock = define-spinlock;
+cacheline-aligned-in-smp private global mmlist-lock spinlock = define-spinlock;
 
 private global coredump-filter unsigned-long = mmf-dump-filter-default
 
-.init private function coredump-filter-setup int; s ref char
+init private function coredump-filter-setup int; s ref char
     if kstrtoul; s, 0, ref coredump-filter
         return 0
     coredump-filter = coredump-filter << mmf-dump-filter-shift
@@ -922,7 +922,7 @@ private function mm-init-aio void; mm ref mm-struct
         spin-lock-init; ref mm.ioctx-lock
         mm.ioctx-table = none
 
-.always-inline private function mm-clear-owner void; mm ref mm-struct, p ref task-struct
+always-inline private function mm-clear-owner void; mm ref mm-struct, p ref task-struct
     when build; memcg
         if mm.owner == p
             write-once; ref mm.owner, none
@@ -1045,7 +1045,7 @@ function mm-alloc ref mm-struct
 
 export-symbol-if-kunit; mm-alloc
 
-.inline private function mmput-internal void; mm ref mm-struct
+inline private function mmput-internal void; mm ref mm-struct
     vm-bug-on; (atomic-read; ref mm.mm-users)
 
     uprobe-clear-state; mm
@@ -1632,7 +1632,7 @@ private function copy-seccomp void; p task-struct
 
 // fork.c lines 1809-1998
 
-.syscall function set-tid-address int; tidptr user-ref of int
+syscall function set-tid-address int; tidptr user-ref of int
     current.clear-child-tid = tidptr
 
     return task-pid-vnr; current
@@ -1644,18 +1644,18 @@ private function rt-mutex-init-task void; p ref task-struct
         p.pi-top-task = none
         p.pi-blocked-on = none
 
-.inline private function init-task-pid-links void; task ref task-struct
+inline private function init-task-pid-links void; task ref task-struct
 
-    for type in (.range; pidtype-pid, pidtype-max)
+    for type in (range; pidtype-pid, pidtype-max)
         init-hlist-node; ref task.pid-links[type]
 
-.inline private function init-task-pid void; task ref task-struct, type pid-type, pid ref pid
+inline private function init-task-pid void; task ref task-struct, type pid-type, pid ref pid
     if type == pidtype-pid
         task.thread-pid = pid
     else
         task.signal.pids[type] = pid
 
-.inline private function rcu-copy-process void; p ref task-struct
+inline private function rcu-copy-process void; p ref task-struct
     when build; preempt-rcu
         p.rcu-read-lock-nesting = 0
         p.rcu-read-unlock-special.s = 0
@@ -1746,7 +1746,7 @@ private function delayed-free-task-rcu void; rhp ref rcu-head
 
     free-task; tsk
 
-.always-inline private function delayed-free-task void; tsk ref task-struct
+always-inline private function delayed-free-task void; tsk ref task-struct
     if is-enabled; config-memcg
         call-rcu; ref tsk.rcu, ref delayed-free-task-rcu
     else
@@ -1774,7 +1774,7 @@ when build; rv
         unsafe
             memset; ref p.rv, 0, (size-of; p.rv)
 else
-    .inline private function rv-task-fork void; p ref task-struct
+    inline private function rv-task-fork void; p ref task-struct
         return
 
 private function need-futex-hash-allocate-default bool; clone-flags u64
@@ -1788,7 +1788,7 @@ private function need-futex-hash-allocate-default bool; clone-flags u64
 // It copies the registers and all the appropriate
 // parts of the process environment, as specified by the clone
 // flags. The actual kick-off is left to the caller.
-.latent-entropy function copy-process ref task-struct; pid ref pid, trace int, node int, args ref kernel-clone-args
+latent-entropy function copy-process ref task-struct; pid ref pid, trace int, node int, args ref kernel-clone-args
 
 // fork.c lines 1999-2694
     pidfd int = -1
@@ -2430,9 +2430,9 @@ private function need-futex-hash-allocate-default bool; clone-flags u64
     spin-unlock-irq; ref current.sighand.siglock
     return err-ptr; retval
 
-.inline private function init-idle-pids void; idle task-struct
+inline private function init-idle-pids void; idle task-struct
 
-    for type in (.range; pidtype-pid, pidtype-max)
+    for type in (range; pidtype-pid, pidtype-max)
         init-hlist-node; ref idle.pid-links[type] /* not really needed */
         init-task-pid; idle, type, ref init-struct-pid
 
@@ -2440,9 +2440,9 @@ private function idle-dummy int; dummy opaque
     /* This function is never called */
     return 0
 
-.init function fork-idle task-struct; cpu int
+init function fork-idle task-struct; cpu int
     task task-struct
-    args kernel-clone-args = .kernel-clone-args;
+    args kernel-clone-args = kernel-clone-args;
         flags=clone-vm,
         fn=ref idle-dummy,
         fn-arg=none,
@@ -2466,7 +2466,7 @@ function create-io-thread task-struct; fn (function int; value opaque), arg opaq
     flags unsigned-long =
         clone-fs | clone-files | clone-sighand | clone-thread |
         clone-io | clone-vm | clone-untraced
-    args kernel-clone-args = .kernel-clone-args;
+    args kernel-clone-args = kernel-clone-args;
         flags=flags,
         fn=fn,
         fn-arg=arg,
@@ -2581,7 +2581,7 @@ function kernel-clone pid-t; args kernel-clone-args
  * Create a kernel thread.
  */
 function kernel-thread pid-t; fn function from c-pointer of opaque to int, arg c-pointer of opaque, name borrowed-ref of const-char, flags unsigned-long
-    args kernel-clone-args = .kernel-clone-args;
+    args kernel-clone-args = kernel-clone-args;
         flags=((flags | clone-vm | clone-untraced) & ~csignal)
         exit-signal=(flags & csignal)
         fn=fn
@@ -2595,7 +2595,7 @@ function kernel-thread pid-t; fn function from c-pointer of opaque to int, arg c
  * Create a user mode thread.
  */
 function user-mode-thread pid-t; fn function from c-pointer of opaque to int, arg c-pointer of opaque, flags unsigned-long
-    args kernel-clone-args = .kernel-clone-args;
+    args kernel-clone-args = kernel-clone-args;
         flags=((flags | clone-vm | clone-untraced) & ~csignal)
         exit-signal=(flags & csignal)
         fn=fn
@@ -2604,9 +2604,9 @@ function user-mode-thread pid-t; fn function from c-pointer of opaque to int, ar
     return kernel-clone; ref args
 
 when build; arch-want-sys-fork
-    .syscall function fork long;
+    syscall function fork long;
         when build; config-mmu
-            args kernel-clone-args = .kernel-clone-args;
+            args kernel-clone-args = kernel-clone-args;
                 exit-signal=sigchld
 
             return kernel-clone; ref args
@@ -2615,8 +2615,8 @@ when build; arch-want-sys-fork
             return -einval
 
 when build; arch-want-sys-vfork
-    .syscall function vfork long;
-        args kernel-clone-args = .kernel-clone-args;
+    syscall function vfork long;
+        args kernel-clone-args = kernel-clone-args;
             flags=(clone-vfork | clone-vm)
             exit-signal=sigchld
 
@@ -2624,8 +2624,8 @@ when build; arch-want-sys-vfork
 
 when build; arch-want-sys-clone
     when build; config-clone-backwards
-        .syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, tls unsigned-long, child-tidptr user-ref of int
-            args kernel-clone-args = .kernel-clone-args;
+        syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, tls unsigned-long, child-tidptr user-ref of int
+            args kernel-clone-args = kernel-clone-args;
                 flags=((lower-32-bits; clone-flags) & ~csignal)
                 pidfd=parent-tidptr
                 child-tid=child-tidptr
@@ -2637,8 +2637,8 @@ when build; arch-want-sys-clone
             return kernel-clone; ref args
     else
         when build; config-clone-backwards2
-            .syscall function clone long; newsp unsigned-long, clone-flags unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
-                args kernel-clone-args = .kernel-clone-args;
+            syscall function clone long; newsp unsigned-long, clone-flags unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                args kernel-clone-args = kernel-clone-args;
                     flags=((lower-32-bits; clone-flags) & ~csignal)
                     pidfd=parent-tidptr
                     child-tid=child-tidptr
@@ -2650,8 +2650,8 @@ when build; arch-want-sys-clone
                 return kernel-clone; ref args
         else
             when build; config-clone-backwards3
-                .syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, stack-size int, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
-                    args kernel-clone-args = .kernel-clone-args;
+                syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, stack-size int, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                    args kernel-clone-args = kernel-clone-args;
                         flags=((lower-32-bits; clone-flags) & ~csignal)
                         pidfd=parent-tidptr
                         child-tid=child-tidptr
@@ -2662,8 +2662,8 @@ when build; arch-want-sys-clone
 
                     return kernel-clone; ref args
             else
-                .syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
-                    args kernel-clone-args = .kernel-clone-args;
+                syscall function clone long; clone-flags unsigned-long, newsp unsigned-long, parent-tidptr user-ref of int, child-tidptr user-ref of int, tls unsigned-long
+                    args kernel-clone-args = kernel-clone-args;
                         flags=((lower-32-bits; clone-flags) & ~csignal)
                         pidfd=parent-tidptr
                         child-tid=child-tidptr
@@ -2674,7 +2674,7 @@ when build; arch-want-sys-clone
 
                     return kernel-clone; ref args
 
-.noinline private function copy-clone-args-from-user int; kargs kernel-clone-args, uargs user-ref of clone-args, usize size-t
+noinline private function copy-clone-args-from-user int; kargs kernel-clone-args, uargs user-ref of clone-args, usize size-t
     err int
     args clone-args
     kset-tid ref pid-t = kargs.set-tid
@@ -2715,7 +2715,7 @@ when build; arch-want-sys-clone
         return -einval
 
     unsafe
-        kargs = .kernel-clone-args;
+        kargs = kernel-clone-args;
             flags=args.flags
             pidfd=(u64-to-user-ptr; args.pidfd)
             child-tid=(u64-to-user-ptr; args.child-tid)
@@ -2746,7 +2746,7 @@ when build; arch-want-sys-clone
  * In addition, set the stack direction for userspace since it's easy for us to
  * determine.
  */
-.inline private function clone3-stack-valid bool; kargs kernel-clone-args
+inline private function clone3-stack-valid bool; kargs kernel-clone-args
     if kargs.stack == 0
         if kargs.stack-size > 0
             return false
@@ -2803,11 +2803,11 @@ private function clone3-args-valid bool; kargs kernel-clone-args
  * Return: On success, a positive PID for the child process.
  *         On error, a negative errno number.
  */
-.syscall function clone3 long; uargs user-ref of clone-args, size size-t
+syscall function clone3 long; uargs user-ref of clone-args, size size-t
     err int
 
     kargs kernel-clone-args
-    set-tid array of pid-t = .array; length=max-pid-ns-level
+    set-tid array of pid-t = array; length=max-pid-ns-level
 
     when build; arch-broken-sys-clone3
         build-warning; "clone3() entry point is missing, please fix"
@@ -2870,7 +2870,7 @@ private function sighand-ctor void; data borrowed-ref of opaque
     spin-lock-init; ref sighand.siglock
     init-waitqueue-head; ref sighand.signalfd-wqh
 
-.init function mm-cache-init void;
+init function mm-cache-init void;
     mm-size unsigned-int
 
     /*
@@ -2891,7 +2891,7 @@ private function sighand-ctor void; data borrowed-ref of opaque
             sizeof-field; mm-struct, saved-auxv,
             none
 
-.init function proc-caches-init void;
+init function proc-caches-init void;
     unsafe
         sighand-cachep = kmem-cache-create;
             "sighand_cache",
@@ -3133,7 +3133,7 @@ function ksys-unshare int; unshare-flags unsigned-long
     label bad-unshare-out
     return err
 
-.syscall function unshare long; unshare-flags unsigned-long
+syscall function unshare long; unshare-flags unsigned-long
     return (ksys-unshare; unshare-flags)
 
 /*
@@ -3180,15 +3180,15 @@ private function sysctl-max-threads int; table borrowed-ref of ctl-table, write 
     return 0
 
 private constant fork-sysctl-table array of ctl-table =
-    .array;
-        .ctl-table;
+    array;
+        ctl-table;
             procname = "threads-max"
             data = none
             maxlen = (size-of; int)
             mode = 0o644
             proc-handler = ref sysctl-max-threads
 
-.init private function init-fork-sysctl int;
+init private function init-fork-sysctl int;
     register-sysctl-init; "kernel", ref fork-sysctl-table
     return 0
 

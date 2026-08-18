@@ -32,9 +32,9 @@ Terrane package
 │   │   │   │   ├── .uint64
 │   │   │   │   └── .uint128
 │   │   │   ├── floating-point descriptors
-│   │   │   │   ├── .float
-│   │   │   │   ├── .float32
-│   │   │   │   └── .float64
+│   │   │   │   ├── .float                    spelling of .float64
+│   │   │   │   ├── .float32                  canonical descriptor
+│   │   │   │   └── .float64                  canonical descriptor
 │   │   │   ├── .string                       type descriptor
 │   │   │   ├── .none                         type descriptor
 │   │   │   └── .bytes                        descriptor name only
@@ -48,19 +48,20 @@ Terrane package
 │   │       └── .coercion-error                error object name only
 │   └── /core/collections                      empty namespace; name only
 ├── default prelude
-│   ├── print                                  ordinary binding to /core/output::.print
-│   ├── bool                                   type name for /core/types::.bool
-│   ├── int                                    type name for /core/types::.int
-│   ├── float                                  type name for /core/types::.float
-│   ├── string                                 type name for /core/types::.string
-│   ├── bytes                                  type name for /core/types::.bytes
-│   └── none                                   type name for /core/types::.none
+│   ├── print                                  binding to /core/output::print
+│   ├── bool                                   type name for /core/types::bool
+│   ├── int                                    type name for /core/types::int
+│   ├── float                                  type spelling for /core/types::float64
+│   ├── string                                 type name for /core/types::string
+│   ├── bytes                                  type name for /core/types::bytes
+│   └── none                                   type name for /core/types::none
 └── source-declared package surface
     ├── namespace                              hierarchical object container
-    │   ├── binding                            ordinary value
-    │   ├── function                           ordinary callable value
-    │   ├── nested namespace                   object-form name
-    │   └── import                             selected names or namespace alias
+    │   ├── variable                           namespace-local value
+    │   ├── constant                           namespace-local or program-global value
+    │   ├── function                           callable value
+    │   ├── nested namespace                   hierarchical name
+    │   └── import                             selected names or namespace binding
     ├── function
     │   ├── parameter                          positional or named
     │   ├── optional parameter                 has a default expression
@@ -180,7 +181,7 @@ Whole-number constant expressions may initialize a typed fixed-width binding dir
 
 ### Floating-point values
 
-Implemented types are `float`, `float32`, and `float64`. `float` currently lowers as binary64, as does `float64`; they remain distinct canonical Terrane descriptors.
+Implemented types are `float32` and `float64`. `float` is the default-precision spelling of `float64` in this compiler version: both resolve to one canonical `.float64` descriptor and lower as binary64.
 
 ```text
 floating-point value T
@@ -257,7 +258,7 @@ Every implemented scalar type has one canonical descriptor object:
 .int
 .int8  .int16  .int32  .int64  .int128
 .uint8 .uint16 .uint32 .uint64 .uint128
-.float .float32 .float64
+.float32 .float64 (`float` resolves to `.float64`)
 .string
 .none
 ```
@@ -286,7 +287,7 @@ value is a D
 
 both compare its resolved canonical Terrane type with `D`. Scalar values themselves are identity-less: `is` between ordinary scalar values is false even when their values and types are equal. Operand expressions are still evaluated for their effects.
 
-A source binding that holds a descriptor preserves that descriptor's canonical identity. Imported descriptors do the same.
+Descriptor constructs are not runtime values and cannot be assigned to source bindings. An explicit import may bind a canonical descriptor under another name without creating a new descriptor.
 
 ## Functions
 
@@ -295,7 +296,7 @@ A source binding that holds a descriptor preserves that descriptor's canonical i
 Canonical object and default-prelude spellings:
 
 ```text
-/core/output::.print
+/core/output::print
 print
 ```
 
@@ -337,36 +338,19 @@ The compiler checks duplicate, unknown, missing, and excess arguments, and rejec
 
 ## Source object and name model
 
-Terrane has separate ordinary-name and object-form lookup domains.
+Terrane resolves every bare name through one ordered view:
 
 ```text
-ordinary form: name
-object form:   .name
-member form:   value.name
-qualified:     namespace::.name
+lexical scope -> namespace -> program-global -> default prelude
 ```
 
-Implemented object-form entities are:
+The first matching name may denote a value, function, canonical descriptor, namespace, or imported entity. There is no leading-dot object form: `.` appears only between a receiver and a member, as in `value.name`. Namespace qualification uses `namespace::name`.
 
-- namespace objects;
-- canonical scalar type descriptors;
-- the compiler-reserved core error names;
-- object-form namespace imports/aliases.
+Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace bindings, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented.
 
-Implemented ordinary entities are:
+A top-level plain assignment creates a namespace variable. Functions cannot read or write namespace variables across that boundary; mutable state must cross as an explicit `global`, parameter, or return value. Namespace variables cannot be `public`.
 
-- bindings;
-- functions;
-- parameters;
-- loop targets;
-- imported ordinary names;
-- `.print` after object-form resolution.
-
-Namespaces form a package-wide tree assembled before reference resolution. Paths use `/` between canonical lowercase segments, with root `/` and parent `..` anchoring. Authored manifests bound sorted recursive source discovery through namespace-root-to-directory mappings, and every discovered declaration is checked against its longest-prefix directory correspondence. Generated Cargo projects live under the package root, and `terrane-build.toml` records the resolved package-relative source set. Direct `.trn` input remains an exempt implicit one-unit package. Selected imports, namespace aliases, visibility, lexical shadowing, program globals, and explicit `global`/`constant` binding rules are implemented. They affect how objects and functions are found; they do not add runtime members to those objects.
-
-`constant` declarations are non-rebindable at every supported identity tier. Parameters and
-`for` targets may be reassigned as lexical value bindings; generated Rust marks them mutable only
-when semantic write analysis finds a reassignment.
+`constant` declarations are non-rebindable at every supported identity tier. In one lexical scope, an ordinary assignment to an already initialized local creates a replacement binding; its initializer sees the earlier binding, and its inferred type may change. Assignment to an uninitialized local, an enclosing-scope binding, a parameter, or a `for` target remains mutation. Generated Rust marks only genuinely mutated storage mutable.
 
 ## Properties and methods index
 
@@ -394,14 +378,14 @@ No other value properties or methods are recognized by the current semantic/lowe
 These names exist so the namespace and resolution model has stable canonical identities. They must not be mistaken for completed runtime behavior. The `.error` name is classified as a structural interface and the remaining `/core/errors` names as error objects, but fields, inheritance, constructors, catchability, and runtime instances remain unimplemented:
 
 ```text
-/core/types::.bytes
-/core/errors::.error
-/core/errors::.arithmetic-overflow
-/core/errors::.division-by-zero
-/core/errors::.integer-conversion-overflow
-/core/errors::.negative-shift-count
-/core/errors::.resource-error
-/core/errors::.coercion-error
+/core/types::bytes
+/core/errors::error
+/core/errors::arithmetic-overflow
+/core/errors::division-by-zero
+/core/errors::integer-conversion-overflow
+/core/errors::negative-shift-count
+/core/errors::resource-error
+/core/errors::coercion-error
 /core/collections
 ```
 
