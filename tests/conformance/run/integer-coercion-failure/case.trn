@@ -3,4 +3,5 @@ from /core/types import int8
 
 function main
   value int = 128
-  value.coerce; int8
+  narrow int8 = value
+  print; narrow

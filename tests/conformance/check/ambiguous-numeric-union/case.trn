@@ -1,0 +1,4 @@
+namespace ambiguous-numeric-union
+from /core/types import int8, int32
+function main
+  value int8|int32 = 5

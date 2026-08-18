@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 
 use num_bigint::BigInt;
-use num_traits::ToPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 
 /// Exact Terrane `int`, normalized to the smallest representation after every operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +20,14 @@ pub enum ArithmeticError {
     IntegerConversionOverflow,
     NegativeShiftCount,
     ShiftCountTooLarge,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatRounding {
+    TiesEven,
+    Floor,
+    Ceiling,
+    Truncate,
 }
 
 impl fmt::Display for ArithmeticError {
@@ -664,6 +672,12 @@ unsigned_destinations!(
     (u128, to_u128),
 );
 
+/// Materializes any fixed-width integer as an adaptive integer.
+#[must_use]
+pub fn adaptive(value: &impl IntegerSource) -> Int {
+    Int::from_big(value.integer_value())
+}
+
 /// Performs an exact integer coercion.
 ///
 /// # Errors
@@ -672,6 +686,79 @@ unsigned_destinations!(
 /// outside the destination type.
 pub fn coerce<T: IntegerDestination>(value: &impl IntegerSource) -> Result<T, ArithmeticError> {
     T::checked_from_big(&value.integer_value()).ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Converts an adaptive integer to `f64` only when the floating value preserves it exactly.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for an inexact value.
+pub fn exact_f64(value: &Int) -> Result<f64, ArithmeticError> {
+    let integer = value.integer_value();
+    let converted = integer
+        .to_f64()
+        .ok_or(ArithmeticError::IntegerConversionOverflow)?;
+    (BigInt::from_f64(converted).as_ref() == Some(&integer))
+        .then_some(converted)
+        .ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Converts an adaptive integer to `f32` only when the floating value preserves it exactly.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for an inexact value.
+pub fn exact_f32(value: &Int) -> Result<f32, ArithmeticError> {
+    let integer = value.integer_value();
+    let converted = integer
+        .to_f32()
+        .ok_or(ArithmeticError::IntegerConversionOverflow)?;
+    (BigInt::from_f32(converted).as_ref() == Some(&integer))
+        .then_some(converted)
+        .ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Rounds a finite floating value using the selected source-language mode.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for NaN or infinity.
+pub fn rounded_f64(value: f64, mode: FloatRounding) -> Result<Int, ArithmeticError> {
+    let rounded = match mode {
+        FloatRounding::TiesEven => value.round_ties_even(),
+        FloatRounding::Floor => value.floor(),
+        FloatRounding::Ceiling => value.ceil(),
+        FloatRounding::Truncate => value.trunc(),
+    };
+    BigInt::from_f64(rounded)
+        .map(Int::from_big)
+        .ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Rounds a finite `f32` value using the selected source-language mode.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for NaN or infinity.
+pub fn rounded_f32(value: f32, mode: FloatRounding) -> Result<Int, ArithmeticError> {
+    rounded_f64(f64::from(value), mode)
+}
+
+/// Converts a floating value to an adaptive integer when it is finite and integral.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_int_f64(value: f64) -> Result<Int, ArithmeticError> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(ArithmeticError::IntegerConversionOverflow);
+    }
+    BigInt::from_f64(value)
+        .map(Int::from_big)
+        .ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Converts an `f32` value to an adaptive integer when it is finite and integral.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_int_f32(value: f32) -> Result<Int, ArithmeticError> {
+    exact_int_f64(f64::from(value))
 }
 
 /// Performs a non-failing checked integer coercion.

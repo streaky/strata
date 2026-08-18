@@ -170,6 +170,13 @@ pub struct SemanticFailure {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ContextualConstant {
+    Integer(BigInt),
+    Float32(f32),
+    Float64(f64),
+}
+
 #[derive(Clone, Debug)]
 pub struct SemanticUnit {
     pub source: SourceFile,
@@ -1543,7 +1550,7 @@ fn validate_resolved_assignment(
     else {
         return Ok(());
     };
-    validate_value_assignment(&unit.source, name, expected, actual, initializer)
+    validate_numeric_destination(&unit.source, name, expected, actual, initializer, "T0002")
 }
 
 fn resolved_call_type(
@@ -1635,18 +1642,15 @@ fn validate_call_arguments(
         }
         if let Some(expected) = parameter.value_type {
             let value = argument.children.last().unwrap_or(argument);
-            if let Some(actual) = infer_value_type(unit, value, bindings)?
-                && actual != ValueType::Scalar(expected)
-            {
-                return Err(failure(
+            if let Some(actual) = infer_value_type(unit, value, bindings)? {
+                validate_numeric_destination(
                     &unit.source,
+                    &parameter.name,
+                    expected,
+                    actual,
+                    value,
                     "T0012",
-                    format!(
-                        "argument for parameter `{}` has type `{actual}`, expected `{expected}`",
-                        parameter.name
-                    ),
-                    value.span,
-                ));
+                )?;
             }
         }
     }
@@ -1772,6 +1776,20 @@ fn validate_descriptor_value_node(
     node: &SyntaxNode,
     descriptor_context: bool,
 ) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::TypeMembershipExpression
+        && let Some(descriptor) = node.children.get(1)
+        && descriptor_expression_type(package, unit, descriptor).is_none()
+    {
+        return Err(failure(
+            &unit.source,
+            "T0001",
+            format!(
+                "`{}` does not resolve to a scalar type descriptor",
+                node_text(&unit.source, descriptor).trim()
+            ),
+            descriptor.span,
+        ));
+    }
     if !descriptor_context
         && node.kind == SyntaxKind::Name
         && descriptor_expression_type(package, unit, node).is_some()
@@ -1817,9 +1835,14 @@ pub(crate) fn descriptor_expression_type(
 ) -> Option<ScalarType> {
     let name = node_text(&unit.source, node).trim();
     match node.kind {
-        SyntaxKind::Name => unit
+        SyntaxKind::Name | SyntaxKind::TypeExpression => unit
             .descriptor_alias_at(name, node.span.start)
-            .or_else(|| package.descriptor_constructs.get(name)?.descriptor_type()),
+            .or_else(|| package.descriptor_constructs.get(name)?.descriptor_type())
+            .or_else(|| {
+                node.children
+                    .first()
+                    .and_then(|child| descriptor_expression_type(package, unit, child))
+            }),
         _ => None,
     }
 }
@@ -1986,26 +2009,15 @@ fn analyze_function_contract(
                     parameter.span,
                 ));
             }
-            if let (Some(expected), Some(default)) = (value_type, default)
-                && let Some(actual) = infer_literal_type(unit, default)
-                && actual != expected
-            {
-                if actual == ScalarType::Int
-                    && expected.is_integer()
-                    && let Some(value) = constant_integer(unit, default)
-                {
-                    check_integer_range(&unit.source, expected, &value, default.span)?;
-                } else {
-                    return Err(failure(
-                        &unit.source,
-                        "T0006",
-                        format!(
-                            "default for parameter `{}` has type `{actual}`, expected `{expected}`",
-                            node_text(&unit.source, parameter_name)
-                        ),
-                        default.span,
-                    ));
-                }
+            if let (Some(expected), Some(default)) = (value_type, default) {
+                validate_numeric_destination(
+                    &unit.source,
+                    node_text(&unit.source, parameter_name),
+                    expected,
+                    infer_value_type(unit, default, &[])?.unwrap_or(ValueType::Scalar(expected)),
+                    default,
+                    "T0006",
+                )?;
             }
             parameters.push(ParameterContract {
                 name: node_text(&unit.source, parameter_name).to_owned(),
@@ -2074,7 +2086,7 @@ fn analyze_binding_node(
         && let Some(initializer) = initializer
         && let Some(actual) = infer_value_type(unit, initializer, bindings)?
     {
-        validate_value_assignment(&unit.source, &name, expected, actual, initializer)?;
+        validate_numeric_destination(&unit.source, &name, expected, actual, initializer, "T0002")?;
         return Ok(());
     }
     let inferred = initializer
@@ -2083,7 +2095,11 @@ fn analyze_binding_node(
         .flatten();
     let value_type = if let Some(type_node) = declared {
         let type_name = node_text(&unit.source, type_node).trim();
-        let Some(ty) = unit.descriptor_alias_at(type_name, type_node.span.start) else {
+        let ty = if let Some(ty) = unit.descriptor_alias_at(type_name, type_node.span.start) {
+            ty
+        } else if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
+            select_union_destination(unit, type_node, initializer, inferred)?
+        } else {
             return Err(failure(
                 &unit.source,
                 "T0001",
@@ -2095,7 +2111,7 @@ fn analyze_binding_node(
             && inferred != ValueType::Scalar(ty)
             && let Some(initializer) = initializer
         {
-            validate_value_assignment(&unit.source, &name, ty, inferred, initializer)?;
+            validate_numeric_destination(&unit.source, &name, ty, inferred, initializer, "T0002")?;
         }
         ValueType::Scalar(ty)
     } else if let Some(inferred) = inferred {
@@ -2113,41 +2129,137 @@ fn analyze_binding_node(
     Ok(())
 }
 
-fn validate_value_assignment(
+fn select_union_destination(
+    unit: &SemanticUnit,
+    type_node: &SyntaxNode,
+    value: &SyntaxNode,
+    actual: ValueType,
+) -> Result<ScalarType, SemanticFailure> {
+    let names = node_text(&unit.source, type_node)
+        .split('|')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if names.len() < 2 {
+        return Err(failure(
+            &unit.source,
+            "T0001",
+            format!(
+                "`{}` does not resolve to a scalar type descriptor",
+                node_text(&unit.source, type_node).trim()
+            ),
+            type_node.span,
+        ));
+    }
+    let mut candidates = Vec::with_capacity(names.len());
+    for name in names {
+        let Some(candidate) = unit.descriptor_alias_at(name, type_node.span.start) else {
+            return Err(failure(
+                &unit.source,
+                "T0001",
+                format!("`{name}` does not resolve to a scalar type descriptor"),
+                type_node.span,
+            ));
+        };
+        candidates.push(candidate);
+    }
+    let is_constant = candidates
+        .iter()
+        .any(|candidate| contextual_constant(&unit.source, value, *candidate).is_some());
+    if !is_constant
+        && let ValueType::Scalar(actual) = actual
+        && candidates.contains(&actual)
+    {
+        return Ok(actual);
+    }
+    let admitted = candidates
+        .into_iter()
+        .filter(|candidate| {
+            if let Some(result) = contextual_constant(&unit.source, value, *candidate) {
+                return result.is_ok();
+            }
+            matches!(actual, ValueType::Scalar(actual) if is_numeric(actual) && is_numeric(*candidate))
+        })
+        .collect::<Vec<_>>();
+    match admitted.as_slice() {
+        [candidate] => Ok(*candidate),
+        [] => Err(failure(
+            &unit.source,
+            "T0002",
+            "value is not admitted by any union destination arm",
+            value.span,
+        )),
+        candidates => Err(failure(
+            &unit.source,
+            "T0002",
+            format!(
+                "numeric destination is ambiguous between {}",
+                candidates
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            value.span,
+        )),
+    }
+}
+
+fn validate_numeric_destination(
     source: &SourceFile,
     name: &str,
     expected: ScalarType,
     actual: ValueType,
     value: &SyntaxNode,
+    mismatch_code: &'static str,
 ) -> Result<(), SemanticFailure> {
-    if let ValueType::Scalar(actual) = actual {
-        if actual == expected {
-            return Ok(());
-        }
-        if actual == ScalarType::Int
-            && expected.is_integer()
-            && let Some(integer) = constant_integer_from_source(source, value)
-        {
-            return check_integer_range(source, expected, &integer, value.span);
-        }
-        if actual == ScalarType::Float64
-            && expected == ScalarType::Float32
-            && infer_literal_type_from_source(source, value) == Some(ScalarType::Float64)
-        {
-            return Ok(());
-        }
+    let ValueType::Scalar(actual) = actual else {
+        return Err(failure(
+            source,
+            mismatch_code,
+            destination_mismatch_message(mismatch_code, name, expected, actual),
+            value.span,
+        ));
+    };
+    if actual == expected {
+        return Ok(());
+    }
+    if is_numeric(expected)
+        && contextual_constant(source, value, expected)
+            .transpose()?
+            .is_some()
+    {
+        return Ok(());
+    }
+    if is_numeric(actual) && is_numeric(expected) {
+        return Ok(());
     }
     Err(failure(
         source,
-        "T0002",
-        format!("cannot assign `{actual}` to `{name}` of type `{expected}`"),
+        mismatch_code,
+        destination_mismatch_message(mismatch_code, name, expected, ValueType::Scalar(actual)),
         value.span,
     ))
 }
 
-fn constant_integer_from_source(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
-    parse_integer_source_text(source, node)
+fn destination_mismatch_message(
+    code: &str,
+    name: &str,
+    expected: ScalarType,
+    actual: ValueType,
+) -> String {
+    match code {
+        "T0012" => {
+            format!("argument for parameter `{name}` has type `{actual}`, expected `{expected}`")
+        }
+        "T0015" => format!("function `{name}` must return `{expected}`"),
+        _ => format!("cannot assign `{actual}` to `{name}` of type `{expected}`"),
+    }
 }
+
+const fn is_numeric(ty: ScalarType) -> bool {
+    ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
+}
+
 fn infer_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2250,7 +2362,23 @@ fn infer_member_value_type(
             node.span,
         ));
     }
-    if node_text(&unit.source, member) != "length" {
+    let member_name = node_text(&unit.source, member);
+    let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if matches!(member_name, "round" | "floor" | "ceiling" | "truncate") {
+        if matches!(
+            receiver_type,
+            Some(ValueType::Scalar(ScalarType::Float32 | ScalarType::Float64))
+        ) {
+            return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+        }
+        return Err(failure(
+            &unit.source,
+            "T0013",
+            format!("`.{member_name}` requires a floating receiver"),
+            receiver.span,
+        ));
+    }
+    if member_name != "length" {
         return Ok(None);
     }
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
@@ -2510,6 +2638,37 @@ fn infer_binary_type(
     if operator == "is" {
         return Ok(ValueType::Scalar(ScalarType::Bool));
     }
+    let comparison = matches!(operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
+    let contextual_numeric = matches!(
+        operator,
+        "+" | "-" | "*" | "/" | "%" | "&" | "^" | "|" | "==" | "!=" | "<" | "<=" | ">" | ">="
+    );
+    if contextual_numeric
+        && let Some(ValueType::Scalar(left_type)) = left
+        && is_numeric(left_type)
+        && contextual_constant(&unit.source, right_node, left_type)
+            .transpose()?
+            .is_some()
+    {
+        return Ok(ValueType::Scalar(if comparison {
+            ScalarType::Bool
+        } else {
+            left_type
+        }));
+    }
+    if contextual_numeric
+        && let Some(ValueType::Scalar(right_type)) = right
+        && is_numeric(right_type)
+        && contextual_constant(&unit.source, left_node, right_type)
+            .transpose()?
+            .is_some()
+    {
+        return Ok(ValueType::Scalar(if comparison {
+            ScalarType::Bool
+        } else {
+            right_type
+        }));
+    }
     let (Some(ValueType::Scalar(left)), Some(ValueType::Scalar(right))) = (left, right) else {
         return Err(operator_failure(
             unit,
@@ -2518,6 +2677,9 @@ fn infer_binary_type(
         ));
     };
     let same = left == right;
+    if contextual_numeric && left != right && left.is_integer() && right.is_integer() {
+        return Ok(ValueType::Scalar(promoted_integer_type(left, right)));
+    }
     let numeric =
         |ty: ScalarType| ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64);
     let result = match operator {
@@ -2571,8 +2733,179 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
     }
 }
 
-fn constant_integer(unit: &SemanticUnit, node: &SyntaxNode) -> Option<BigInt> {
-    parse_integer_source_text(&unit.source, node)
+pub(crate) fn contextual_constant(
+    source: &SourceFile,
+    node: &SyntaxNode,
+    destination: ScalarType,
+) -> Option<Result<ContextualConstant, SemanticFailure>> {
+    if !is_numeric(destination) {
+        return None;
+    }
+    contextual_constant_value(source, node, destination).map(|result| {
+        result.and_then(|value| {
+            if let ContextualConstant::Integer(integer) = &value {
+                check_integer_range(source, destination, integer, node.span)?;
+            }
+            Ok(value)
+        })
+    })
+}
+
+fn contextual_constant_value(
+    source: &SourceFile,
+    node: &SyntaxNode,
+    destination: ScalarType,
+) -> Option<Result<ContextualConstant, SemanticFailure>> {
+    let result = match node.kind {
+        SyntaxKind::GroupExpression => {
+            return node
+                .children
+                .first()
+                .and_then(|child| contextual_constant_value(source, child, destination));
+        }
+        SyntaxKind::UnaryExpression => {
+            let operand = node.children.last()?;
+            let value = contextual_constant_value(source, operand, destination)?;
+            value.map(|value| match value {
+                ContextualConstant::Integer(value) => ContextualConstant::Integer(-value),
+                ContextualConstant::Float32(value) => ContextualConstant::Float32(-value),
+                ContextualConstant::Float64(value) => ContextualConstant::Float64(-value),
+            })
+        }
+        SyntaxKind::BinaryExpression => {
+            let [left, right] = node.children.as_slice() else {
+                return None;
+            };
+            let operator = source.text()[left.span.end..right.span.start].trim();
+            let left = contextual_constant_value(source, left, destination)?;
+            let right = contextual_constant_value(source, right, destination)?;
+            match (left, right) {
+                (Ok(ContextualConstant::Integer(left)), Ok(ContextualConstant::Integer(right))) => {
+                    fold_integer_constant(source, node.span, operator, left, right)
+                }
+                (Ok(ContextualConstant::Float32(left)), Ok(ContextualConstant::Float32(right))) => {
+                    Ok(ContextualConstant::Float32(fold_float32_constant(
+                        operator, left, right,
+                    )))
+                }
+                (Ok(ContextualConstant::Float64(left)), Ok(ContextualConstant::Float64(right))) => {
+                    Ok(ContextualConstant::Float64(fold_float64_constant(
+                        operator, left, right,
+                    )))
+                }
+                (Err(error), _) | (_, Err(error)) => Err(error),
+                _ => return None,
+            }
+        }
+        SyntaxKind::Literal
+            if infer_literal_type_from_source(source, node).is_some_and(is_numeric) =>
+        {
+            contextual_literal(source, node, destination)
+        }
+        _ => return None,
+    };
+    Some(result)
+}
+
+fn contextual_literal(
+    source: &SourceFile,
+    node: &SyntaxNode,
+    destination: ScalarType,
+) -> Result<ContextualConstant, SemanticFailure> {
+    let text = node_text(source, node).replace('_', "");
+    if destination.is_integer() {
+        let value = if text.contains('.') {
+            let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+            if !fraction.chars().all(|digit| digit == '0') {
+                return Err(failure(
+                    source,
+                    "T0003",
+                    format!("constant `{text}` is not an exact `{destination}` value"),
+                    node.span,
+                ));
+            }
+            BigInt::parse_bytes(whole.as_bytes(), 10).expect("validated decimal integer constant")
+        } else {
+            parse_integer_source_text(source, node).expect("validated integer constant")
+        };
+        Ok(ContextualConstant::Integer(value))
+    } else if destination == ScalarType::Float32 {
+        let value = text.parse::<f32>().expect("validated float constant");
+        Ok(ContextualConstant::Float32(value))
+    } else {
+        let value = text.parse::<f64>().expect("validated float constant");
+        Ok(ContextualConstant::Float64(value))
+    }
+}
+
+fn fold_integer_constant(
+    source: &SourceFile,
+    span: Span,
+    operator: &str,
+    left: BigInt,
+    right: BigInt,
+) -> Result<ContextualConstant, SemanticFailure> {
+    let value = match operator {
+        "+" => left + right,
+        "-" => left - right,
+        "*" => left * right,
+        "/" if right != BigInt::from(0_u8) => {
+            let quotient = &left / &right;
+            let remainder = &left % &right;
+            if remainder < BigInt::from(0_u8) {
+                if right < BigInt::from(0_u8) {
+                    quotient + 1
+                } else {
+                    quotient - 1
+                }
+            } else {
+                quotient
+            }
+        }
+        "%" if right != BigInt::from(0_u8) => {
+            let remainder = &left % &right;
+            if remainder < BigInt::from(0_u8) {
+                if right < BigInt::from(0_u8) {
+                    remainder - right
+                } else {
+                    remainder + right
+                }
+            } else {
+                remainder
+            }
+        }
+        _ => {
+            return Err(failure(
+                source,
+                "T0011",
+                "invalid constant arithmetic",
+                span,
+            ));
+        }
+    };
+    Ok(ContextualConstant::Integer(value))
+}
+
+fn fold_float32_constant(operator: &str, left: f32, right: f32) -> f32 {
+    match operator {
+        "+" => left + right,
+        "-" => left - right,
+        "*" => left * right,
+        "/" => left / right,
+        "%" => left % right,
+        _ => unreachable!("validated constant floating operator"),
+    }
+}
+
+fn fold_float64_constant(operator: &str, left: f64, right: f64) -> f64 {
+    match operator {
+        "+" => left + right,
+        "-" => left - right,
+        "*" => left * right,
+        "/" => left / right,
+        "%" => left % right,
+        _ => unreachable!("validated constant floating operator"),
+    }
 }
 
 fn parse_integer_source_text(source: &SourceFile, node: &SyntaxNode) -> Option<BigInt> {
@@ -2642,6 +2975,51 @@ fn integer_bounds(bits: usize, signed: bool) -> (BigInt, BigInt) {
         (-&magnitude, magnitude - 1)
     } else {
         (BigInt::from(0_u8), (BigInt::from(1_u8) << bits) - 1)
+    }
+}
+
+fn promoted_integer_type(left: ScalarType, right: ScalarType) -> ScalarType {
+    if left == ScalarType::Int || right == ScalarType::Int {
+        return ScalarType::Int;
+    }
+    let left_bounds = scalar_integer_bounds(left).expect("integer operand has bounds");
+    let right_bounds = scalar_integer_bounds(right).expect("integer operand has bounds");
+    [
+        ScalarType::Int8,
+        ScalarType::Uint8,
+        ScalarType::Int16,
+        ScalarType::Uint16,
+        ScalarType::Int32,
+        ScalarType::Uint32,
+        ScalarType::Int64,
+        ScalarType::Uint64,
+        ScalarType::Int128,
+        ScalarType::Uint128,
+    ]
+    .into_iter()
+    .find(|candidate| {
+        let bounds = scalar_integer_bounds(*candidate).expect("fixed integer has bounds");
+        bounds.0 <= left_bounds.0
+            && bounds.0 <= right_bounds.0
+            && bounds.1 >= left_bounds.1
+            && bounds.1 >= right_bounds.1
+    })
+    .unwrap_or(ScalarType::Int)
+}
+
+fn scalar_integer_bounds(ty: ScalarType) -> Option<(BigInt, BigInt)> {
+    match ty {
+        ScalarType::Int8 => Some(integer_bounds(8, true)),
+        ScalarType::Int16 => Some(integer_bounds(16, true)),
+        ScalarType::Int32 => Some(integer_bounds(32, true)),
+        ScalarType::Int64 => Some(integer_bounds(64, true)),
+        ScalarType::Int128 => Some(integer_bounds(128, true)),
+        ScalarType::Uint8 => Some(integer_bounds(8, false)),
+        ScalarType::Uint16 => Some(integer_bounds(16, false)),
+        ScalarType::Uint32 => Some(integer_bounds(32, false)),
+        ScalarType::Uint64 => Some(integer_bounds(64, false)),
+        ScalarType::Uint128 => Some(integer_bounds(128, false)),
+        _ => None,
     }
 }
 
@@ -3351,17 +3729,22 @@ fn validate_return(
             statement.span,
         )),
         (Some(expected), Some(value)) => {
-            let actual = infer_value_type(unit, value, bindings)?;
-            if actual == Some(ValueType::Scalar(expected)) {
-                Ok(())
-            } else {
-                Err(failure(
+            let Some(actual) = infer_value_type(unit, value, bindings)? else {
+                return Err(failure(
                     &unit.source,
                     "T0015",
                     format!("function `{}` must return `{expected}`", contract.name),
                     value.span,
-                ))
-            }
+                ));
+            };
+            validate_numeric_destination(
+                &unit.source,
+                &contract.name,
+                expected,
+                actual,
+                value,
+                "T0015",
+            )
         }
     }
 }

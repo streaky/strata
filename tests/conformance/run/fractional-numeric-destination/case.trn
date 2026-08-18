@@ -1,0 +1,5 @@
+namespace fractional-numeric-destination
+function main
+  ratio float = 4.2
+  count int = ratio
+  print; count
