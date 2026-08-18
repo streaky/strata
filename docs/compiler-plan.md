@@ -1351,17 +1351,21 @@ Each decision should leave behind executable accepted/rejected cases. Do not use
 
 ## 12. Immediate implementation backlog
 
-Milestones 0 through 4.8 are delivered. The 4.7 completeness audit corrections and
-milestone 4.8 review remediation are closed: symbol storage, resolution, diagnostics,
-semantic types, lowering metadata, fixtures, goldens, examples, and surface documentation
-all use the single-view name model. Permanent run cases compile and execute annotated
-lexical replacement and same-type reassignment, while focused rejected cases preserve
-assignment-type compatibility at lexical and namespace scope.
+Milestones 0 through 4.9 are delivered. Milestone 4.9 adds destination-context constant
+evaluation for typed bindings and assignments, parameter defaults, declared arguments, and
+declared returns; exact integer folding uses unbounded intermediates while floating folding
+uses destination precision. Typed numeric destinations now perform exact widening without a
+failure path and checked conversion otherwise, including integer/floating crossings. Numeric
+operand context, concrete integer promotion, floating rounding members, and constant-aware
+`is a` membership share the same admissibility rules; unresolved membership descriptors now
+fail at their source span.
 
-The next work in order is milestone 4.9, which implements the numeric destination and contextual
-constant rules now settled in the specification. Milestone 5 follows, with its boundary at Rust IR,
-readable deterministic emission, and Cargo builds; later language features remain staged by their own
-milestones. The minimal
+Permanent conformance cases compile and run contextual return literals, grouped constant
+arithmetic, exact fixed/adaptive/floating crossings, fractional conversion failure, rounding,
+and admissible/inadmissible numeric membership. Reviewed goldens show bare fixed-width return
+literals, direct contextual materialisation, unchecked widening, and explicit checked
+conversion paths. Milestone 5 follows, with its boundary at Rust IR, readable deterministic
+emission, and Cargo builds; later language features remain staged by their own milestones. The minimal
 collection subset remains explicitly deferred: `/core/collections` is an empty reserved namespace
 until iterator and collection support arrives in milestones 13 and 14.
 

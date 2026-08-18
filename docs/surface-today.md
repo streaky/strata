@@ -177,7 +177,9 @@ fixed-width integer value T
 
 All integer descriptors, including `int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked; overflow is a runtime failure. `.coerce.checked` returns `T or none`; `.coerce.wrap` and `.coerce.saturate` return `T`.
 
-Whole-number constant expressions may initialize a typed fixed-width binding directly when their mathematical value is in range; this includes signed minima such as `minimum int8 = -128`. This contextual treatment applies only to binding initializers. Whole-number literals passed to fixed-width parameters or returned through fixed-width contracts remain `int` and require explicit coercion.
+Declared numeric binding, assignment, parameter-default, argument, and return destinations now admit numeric values exactly or fail with `integer-conversion-overflow`. Range-contained fixed-width widening emits only a representation change; other typed numeric pairs retain a runtime representability check. Integer values of different concrete types promote to the smallest implemented integer type containing both source ranges, or to `int`. For a numeric union binding destination, an exact typed arm wins; otherwise the value must be admitted by exactly one arm, and ambiguous constants are rejected.
+
+Numeric constant expressions are evaluated in their destination context. Integer destinations use exact unbounded intermediates and check only the final result; floating destinations evaluate at destination precision. This applies to typed bindings and assignments, parameter defaults, declared arguments, and declared returns. A constant used with a typed numeric operand takes that operand's type, except for shift counts.
 
 ### Floating-point values
 
@@ -202,6 +204,11 @@ floating-point value T
 │   ├── T <= T -> bool
 │   ├── T > T -> bool
 │   └── T >= T -> bool
+├── integer rounding properties
+│   ├── .round -> int          ties to even
+│   ├── .floor -> int
+│   ├── .ceiling -> int
+│   └── .truncate -> int
 └── descriptor relation
     └── value is a descriptor T -> bool
 ```
