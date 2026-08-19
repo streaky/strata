@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 terrane-compiler = { path = "../terrane-compiler" }
+serde_json = "1"
 
 [lints]
 workspace = true

@@ -106,14 +106,12 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     let crate_dir = generated_crate_path(&package.root, &compilation.rust)?;
     write_generated_crate(&crate_dir, &compilation.rust_files, &package.units)?;
     let cargo_command = if command == "check" { "check" } else { "build" };
-    let status = Command::new("cargo")
-        .args([cargo_command, "--quiet", "--manifest-path"])
-        .arg(crate_dir.join("Cargo.toml"))
-        .status()
-        .map_err(|error| CliFailure::backend(format!("failed to start Cargo: {error}")))?;
-    if !status.success() {
-        return Err(CliFailure::backend(format!("Cargo {cargo_command} failed")));
-    }
+    run_cargo(
+        cargo_command,
+        &crate_dir,
+        &compilation.rust_files,
+        &package.units,
+    )?;
     if command == "check" {
         return Ok(ExitCode::SUCCESS);
     }
@@ -132,6 +130,92 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         })?;
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
+    ))
+}
+
+fn run_cargo(
+    command: &str,
+    crate_dir: &Path,
+    rust_files: &[terrane_compiler::rust_ir::RenderedFile],
+    units: &[terrane_compiler::SourceUnit],
+) -> Result<(), CliFailure> {
+    let output = Command::new("cargo")
+        .args([
+            command,
+            "--quiet",
+            "--message-format=json",
+            "--manifest-path",
+        ])
+        .arg(crate_dir.join("Cargo.toml"))
+        .output()
+        .map_err(|error| CliFailure::backend(format!("failed to start Cargo: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["reason"] != "compiler-message"
+            || message["message"]["level"] != "error"
+        {
+            continue;
+        }
+        let raw = message["message"]["rendered"]
+            .as_str()
+            .unwrap_or("rustc reported a generated-code error");
+        for span in message["message"]["spans"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|span| span["is_primary"].as_bool().unwrap_or(false))
+        {
+            let Some(file_name) = span["file_name"].as_str() else {
+                continue;
+            };
+            let Some(file) = rust_files
+                .iter()
+                .find(|file| Path::new(file_name).ends_with(&file.path))
+            else {
+                continue;
+            };
+            let byte_start = span["byte_start"].as_u64().unwrap_or(0) as usize;
+            let Some(association) = file.associations.iter().find(|association| {
+                association.generated_start <= byte_start
+                    && byte_start <= association.generated_end
+            }) else {
+                continue;
+            };
+            let Some(source) = units
+                .iter()
+                .find(|unit| unit.source.id() == association.source.file)
+                .map(|unit| &unit.source)
+            else {
+                continue;
+            };
+            let diagnostic = terrane_compiler::Diagnostic::error(
+                "S9003",
+                "generated Rust failed backend validation",
+                association.source,
+            );
+            return Err(CliFailure {
+                code: 5,
+                message: format!(
+                    "{}note: raw rustc diagnostic:\n{raw}",
+                    diagnostic.render(source)
+                ),
+            });
+        }
+        return Err(CliFailure::backend(format!(
+            "Cargo {command} failed\nnote: raw rustc diagnostic:\n{raw}"
+        )));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(CliFailure::diagnostic(
+        PathBuf::from("<toolchain>"),
+        "S9001",
+        format!("Cargo {command} failed: {}", stderr.trim()),
+        4,
     ))
 }
 
@@ -266,4 +350,57 @@ fn usage() -> String {
      commands:\n  check  validate and compile generated Rust\n  rust   print generated Rust\n  \
      build  compile a native executable\n  run    compile and execute the program"
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terrane_compiler::{
+        SourceFile, SourceUnit, Span,
+        rust_ir::{RenderedFile, SourceAssociation},
+    };
+
+    #[test]
+    fn backend_error_projects_to_terrane_source_and_retains_rustc() {
+        let directory = std::env::temp_dir().join(format!(
+            "terrane-backend-diagnostic-{}",
+            std::process::id()
+        ));
+        if directory.exists() {
+            fs::remove_dir_all(&directory).unwrap();
+        }
+        fs::create_dir_all(directory.join("src")).unwrap();
+        fs::write(
+            directory.join("Cargo.toml"),
+            "[package]\nname = \"broken\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n",
+        )
+        .unwrap();
+        let generated = "fn main() { missing_backend_name(); }\n";
+        fs::write(directory.join("src/main.rs"), generated).unwrap();
+        let rust_files = vec![RenderedFile {
+            path: "src/main.rs".to_owned(),
+            contents: generated.to_owned(),
+            associations: vec![SourceAssociation {
+                generated_start: 0,
+                generated_end: generated.len(),
+                source: Span::new(0, 0, 14),
+            }],
+        }];
+        let units = vec![SourceUnit {
+            relative_path: PathBuf::from("case.trn"),
+            source: SourceFile::new(
+                0,
+                PathBuf::from("case.trn"),
+                "function main\n".to_owned(),
+            ),
+            expected_namespace: None,
+        }];
+
+        let failure = run_cargo("check", &directory, &rust_files, &units).unwrap_err();
+        assert_eq!(failure.code, 5);
+        assert!(failure.message.contains("case.trn:1:1: error[S9003]"));
+        assert!(failure.message.contains("raw rustc diagnostic"));
+        assert!(failure.message.contains("missing_backend_name"));
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
