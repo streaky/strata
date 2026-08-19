@@ -107,9 +107,8 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     let crate_dir = generated_crate_path(&package.root, &compilation.rust_files)?;
     write_generated_crate(&crate_dir, &compilation.rust_files, &package.units)?;
     let target_dir = package.root.join(".trn/cache/target");
-    let cargo_command = if command == "check" { "check" } else { "build" };
-    run_cargo(
-        cargo_command,
+    let executable = prepare_artifact(
+        command,
         &crate_dir,
         &target_dir,
         &compilation.rust_files,
@@ -118,10 +117,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     if command == "check" {
         return Ok(ExitCode::SUCCESS);
     }
-    let executable = target_dir
-        .join("debug/terrane_program")
-        .canonicalize()
-        .map_err(|error| CliFailure::backend(format!("cannot locate built program: {error}")))?;
+    let executable = executable.expect("build and run prepare an executable");
     if command == "build" {
         println!("{}", executable.display());
         return Ok(ExitCode::SUCCESS);
@@ -137,6 +133,48 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
     ))
+}
+
+fn prepare_artifact(
+    command: &str,
+    crate_dir: &Path,
+    target_dir: &Path,
+    rust_files: &[terrane_compiler::rust_ir::RenderedFile],
+    units: &[terrane_compiler::SourceUnit],
+) -> Result<Option<PathBuf>, CliFailure> {
+    if command == "check" {
+        let stamp = crate_dir.join("artifacts/check-success");
+        if !stamp.is_file() {
+            run_cargo("check", crate_dir, target_dir, rust_files, units)?;
+            fs::create_dir_all(stamp.parent().expect("artifact stamp has a parent")).map_err(
+                |error| CliFailure::backend(format!("cannot create artifact cache: {error}")),
+            )?;
+            fs::write(&stamp, []).map_err(|error| {
+                CliFailure::backend(format!("cannot record checked artifact: {error}"))
+            })?;
+        }
+        return Ok(None);
+    }
+    let executable = executable_path(&crate_dir.join("artifacts"));
+    if !executable.is_file() {
+        run_cargo("build", crate_dir, target_dir, rust_files, units)?;
+        let built = executable_path(&target_dir.join("debug"));
+        fs::create_dir_all(executable.parent().expect("cached executable has a parent")).map_err(
+            |error| CliFailure::backend(format!("cannot create artifact cache: {error}")),
+        )?;
+        fs::copy(&built, &executable)
+            .map_err(|error| CliFailure::backend(format!("cannot cache built program: {error}")))?;
+    }
+    executable
+        .canonicalize()
+        .map(Some)
+        .map_err(|error| CliFailure::backend(format!("cannot locate built program: {error}")))
+}
+
+fn executable_path(directory: &Path) -> PathBuf {
+    let mut path = directory.join("terrane_program");
+    path.set_extension(std::env::consts::EXE_EXTENSION);
+    path
 }
 
 fn print_rust(compilation: &terrane_compiler::Compilation) {
@@ -261,9 +299,18 @@ fn generated_crate_path(
     let mut hash = Sha256::new();
     hash.update(b"terrane-generated-crate-v2\0");
     hash.update(terrane_compiler::VERSION.as_bytes());
-    hash.update(b"\0target=");
-    hash.update(std::env::var("CARGO_BUILD_TARGET").unwrap_or_default());
-    hash.update(b"\0profile=debug\0");
+    for variable in [
+        "CARGO_BUILD_TARGET",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTC",
+        "RUSTFLAGS",
+    ] {
+        hash.update(variable.as_bytes());
+        hash.update(b"=");
+        hash.update(std::env::var(variable).unwrap_or_default());
+        hash.update(b"\0");
+    }
+    hash.update(b"profile=debug\0");
     for file in rust_files {
         hash.update(file.path.as_bytes());
         hash.update(b"\0");

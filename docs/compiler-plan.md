@@ -870,10 +870,14 @@ Implemented evidence: lowering now produces an explicit deterministic Rust IR wh
 authored units from the entrypoint, uses injective source-name encoding, and exposes the complete
 rendered file set to the CLI. Generated projects contain stable authored paths, copied
 content-addressed support crates, manifests, compiler/source metadata, and a build identity covering
-compiler version, source and support content, target, profile, and command-relevant options.
-`check`, `build`, and `run` share captured Cargo execution, while `rust` renders the authored output
-for inspection. Pipeline tests pin byte identity and generated file layout; compile/run conformance
-cases validate the generated crates with warnings denied.
+compiler version, source and support content, target, profile, and command-relevant environment.
+Successful checks and native executables are retained under that identity, so repeated package
+checks, builds, and runs reuse the package artifact without depending on the shared Cargo target
+directory. `check`, `build`, and `run` share captured Cargo execution when an artifact is absent;
+`rust` renders the authored output plus explicit authored-module and vendored-support path lists for
+inspection. Pipeline and CLI tests pin byte identity, generated authored and support files, artifact
+reuse, and generated file layout; compile/run conformance cases validate the generated crates with
+warnings denied.
 
 ### Milestone 6 — Source diagnostics across Rust
 
