@@ -1,0 +1,6 @@
+namespace exact-constant-membership
+from /core/types import int8, float32
+function main
+  print; 127 is a int8
+  print; 128 is a int8
+  print; 1.5 is a float32

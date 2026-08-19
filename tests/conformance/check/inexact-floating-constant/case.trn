@@ -1,0 +1,4 @@
+namespace inexact-floating-constant
+from /core/types import float64
+function main
+  value float64 = 9007199254740993

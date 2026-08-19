@@ -1,0 +1,4 @@
+namespace invalid-rounding-receiver
+function main
+  count int = 5
+  print; (count.round)

@@ -1,0 +1,4 @@
+namespace nonfinite-floating-constant
+from /core/types import float64
+function main
+  boom float64 = (1.0 / 0.0)

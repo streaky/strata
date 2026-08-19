@@ -1,0 +1,6 @@
+namespace union-parameter-unsupported
+from /core/types import int8, int32
+function choose; value int8 | int32
+  print; value
+function main
+  choose; 1

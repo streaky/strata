@@ -1,0 +1,1 @@
+.integer-conversion-overflow: value NaN of type float64 cannot arrive exactly as float32: the floating value is not exactly representable

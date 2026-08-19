@@ -5,6 +5,6 @@ fn main() {
     let value: i8 = 1;
     println!("{}", terrane_scalar_support::scalar_text(&(value)));
     let _ = &value;
-    let value: terrane_int_support::Int = terrane_int_support::Int::from(2_i128);
+    let value: i64 = 2;
     println!("{}", terrane_scalar_support::scalar_text(&(value)));
 }

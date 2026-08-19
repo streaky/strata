@@ -1,0 +1,4 @@
+namespace contextual-constant-range
+from /core/types import int8
+function bounded int8
+  return (1000 - 800)

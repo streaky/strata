@@ -5,8 +5,9 @@ use num_bigint::BigInt;
 use crate::{
     ScalarType, SourceFile,
     semantics::{
-        CoercionPolicy, FunctionContract, SemanticPackage, SemanticUnit, SymbolKind, ValueType,
-        binding_span_is_mutated, integer_coercion_call,
+        CoercionPolicy, ContextualConstant, FunctionContract, SemanticPackage, SemanticUnit,
+        SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, contextual_constant,
+        integer_coercion_call, promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -30,6 +31,7 @@ pub(crate) fn emit(package: &SemanticPackage) -> String {
             parameter_types: Vec::new(),
             namespace_initializer: None,
         };
+        emitter.emit_union_types();
         for node in &unit.tree.root.children {
             match node.kind {
                 SyntaxKind::Binding | SyntaxKind::Assignment => emitter.namespace_binding(node),
@@ -402,6 +404,108 @@ impl Emitter<'_> {
         }
     }
 
+    fn union_binding(&self, node: &SyntaxNode) -> Option<TypedBinding> {
+        (node.kind == SyntaxKind::Name)
+            .then(|| {
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .rev()
+                    .find(|binding| {
+                        binding.name == self.text(node)
+                            && binding.span.start <= node.span.start
+                            && !binding.destination_arms.is_empty()
+                    })
+                    .cloned()
+            })
+            .flatten()
+    }
+
+    fn union_value(&mut self, binding: &TypedBinding, value: &SyntaxNode) -> String {
+        let actual = self
+            .value_type(value)
+            .and_then(|value_type| match value_type {
+                ValueType::Scalar(scalar) => Some(scalar),
+                ValueType::ScalarOrNone(_) => None,
+            });
+        let constant = binding
+            .destination_arms
+            .iter()
+            .any(|arm| contextual_constant(self.source, value, *arm).is_some());
+        let selected = (!constant)
+            .then_some(actual)
+            .flatten()
+            .filter(|actual| binding.destination_arms.contains(actual))
+            .or_else(|| {
+                binding.destination_arms.iter().copied().find(|arm| {
+                    contextual_constant(self.source, value, *arm)
+                        .is_some_and(|result| result.is_ok())
+                })
+            })
+            .or_else(|| {
+                actual.and_then(|actual| {
+                    is_numeric(actual).then(|| {
+                        binding
+                            .destination_arms
+                            .iter()
+                            .copied()
+                            .find(|arm| is_numeric(*arm))
+                            .expect("validated numeric union destination")
+                    })
+                })
+            })
+            .expect("validated union destination");
+        let index = binding
+            .destination_arms
+            .iter()
+            .position(|arm| *arm == selected)
+            .expect("selected union arm belongs to destination");
+        format!(
+            "{}::Arm{index}({})",
+            union_type_name(binding),
+            self.expression_as(value, ValueType::Scalar(selected))
+        )
+    }
+
+    fn emit_union_types(&mut self) {
+        for binding in self
+            .unit
+            .typed_bindings
+            .iter()
+            .filter(|binding| !binding.destination_arms.is_empty())
+        {
+            let name = union_type_name(binding);
+            self.line("#[allow(dead_code)]");
+            self.line("#[derive(Clone)]");
+            self.line(&format!("enum {name} {{"));
+            self.indent += 1;
+            for (index, arm) in binding.destination_arms.iter().enumerate() {
+                self.line(&format!("Arm{index}({}),", rust_type(*arm)));
+            }
+            self.indent -= 1;
+            self.line("}");
+            self.line(&format!(
+                "impl terrane_scalar_support::ScalarDisplay for {name} {{"
+            ));
+            self.indent += 1;
+            self.line("fn write_scalar(&self, output: &mut String) {");
+            self.indent += 1;
+            self.line("match self {");
+            self.indent += 1;
+            for (index, _) in binding.destination_arms.iter().enumerate() {
+                self.line(&format!(
+                    "Self::Arm{index}(value) => terrane_scalar_support::ScalarDisplay::write_scalar(value, output),"
+                ));
+            }
+            self.indent -= 1;
+            self.line("}");
+            self.indent -= 1;
+            self.line("}");
+            self.indent -= 1;
+            self.line("}");
+        }
+    }
+
     fn statement(&mut self, node: &SyntaxNode) {
         match node.kind {
             SyntaxKind::Binding => {
@@ -424,17 +528,16 @@ impl Emitter<'_> {
                     let [left, right] = node.children.as_slice() else {
                         return;
                     };
+                    let union_binding = self.union_binding(left);
                     let value_type = self.value_type(left);
-                    let mut value = if let Some(value_type) = value_type {
+                    let value = if let Some(binding) = union_binding {
+                        self.union_value(&binding, right)
+                    } else if let Some(value_type) = value_type {
                         self.expression_as(right, value_type)
                     } else {
                         self.expression(right)
                     };
-                    if value_type == Some(ValueType::Scalar(ScalarType::Int))
-                        && right.kind == SyntaxKind::BinaryExpression
-                    {
-                        value = Self::unwrapped_expression(value);
-                    }
+                    let value = Self::unwrapped_expression(value);
                     let target = self.expression(left);
                     self.line(&format!("{target} = {value};"));
                 }
@@ -454,6 +557,7 @@ impl Emitter<'_> {
                     } else {
                         self.expression(value)
                     };
+                    let value = Self::unwrapped_expression(value);
                     self.line(&format!("return {value};"));
                 } else {
                     self.line("return;");
@@ -486,9 +590,20 @@ impl Emitter<'_> {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == node.span);
-        let ty = binding.map(|binding| match binding.value_type {
-            ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
-            ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
+        let storage_type = binding
+            .and_then(|binding| binding.storage_type)
+            .filter(|_| !binding_span_is_mutated(self.package, self.unit, node.span, true));
+        let ty = binding.map(|binding| {
+            if !binding.destination_arms.is_empty() {
+                return union_type_name(binding);
+            }
+            if let Some(storage_type) = storage_type {
+                return rust_type(storage_type).to_owned();
+            }
+            match binding.value_type {
+                ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
+                ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
+            }
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -512,14 +627,18 @@ impl Emitter<'_> {
             write!(self.output, ": {ty}").unwrap();
         }
         if let Some(initializer) = initializer {
-            let mut value = if let Some(binding) = binding {
+            let value = if let Some(binding) = binding
+                && !binding.destination_arms.is_empty()
+            {
+                self.union_value(binding, initializer)
+            } else if let Some(storage_type) = storage_type {
+                self.expression_as(initializer, ValueType::Scalar(storage_type))
+            } else if let Some(binding) = binding {
                 self.expression_as(initializer, binding.value_type)
             } else {
                 self.expression(initializer)
             };
-            if initializer.kind == SyntaxKind::BinaryExpression {
-                value = Self::unwrapped_expression(value);
-            }
+            let value = Self::unwrapped_expression(value);
             write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
@@ -684,6 +803,28 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if let ValueType::Scalar(destination) = value_type
+            && (node.kind != SyntaxKind::Literal
+                || self.value_type(node) != Some(ValueType::Scalar(destination)))
+            && let Some(Ok(constant)) = contextual_constant(self.source, node, destination)
+        {
+            return match constant {
+                ContextualConstant::Integer(value) if destination == ScalarType::Int => {
+                    adaptive_literal(&value.to_string())
+                }
+                ContextualConstant::Integer(value) => value.to_string(),
+                ContextualConstant::Float32(value) => float32_literal(value),
+                ContextualConstant::Float64(value) => float64_literal(value),
+            };
+        }
+        if let ValueType::Scalar(destination) = value_type
+            && let Some(ValueType::Scalar(source)) = self.value_type(node)
+            && source != destination
+            && is_numeric(source)
+            && is_numeric(destination)
+        {
+            return self.numeric_destination(node, source, destination);
+        }
         if let ValueType::Scalar(scalar) = value_type
             && scalar != ScalarType::Int
             && scalar.is_integer()
@@ -715,6 +856,12 @@ impl Emitter<'_> {
             SyntaxKind::Literal => adaptive_literal(self.text(node)),
             SyntaxKind::Name if self.lazy_namespace_binding_type(node).is_some() => {
                 format!("(*{}).clone()", self.namespace_name(node))
+            }
+            SyntaxKind::Name if self.small_int_binding(node).is_some() => {
+                format!(
+                    "terrane_int_support::Int::from(({}) as i128)",
+                    self.name(node)
+                )
             }
             SyntaxKind::Name => format!("{}.clone()", self.name(node)),
             SyntaxKind::GroupExpression => {
@@ -758,8 +905,58 @@ impl Emitter<'_> {
         }
     }
 
+    fn adaptive_binary_as(&mut self, node: &SyntaxNode) -> String {
+        let [left, right] = node.children.as_slice() else {
+            return String::new();
+        };
+        let operator = self.source.text()[left.span.end..right.span.start].trim();
+        let left = self.expression_as(left, ValueType::Scalar(ScalarType::Int));
+        let right = self.expression_as(right, ValueType::Scalar(ScalarType::Int));
+        match operator {
+            "/" => {
+                format!("terrane_int_support::unwrap_or_fail(({left}).euclidean_div(&({right})))")
+            }
+            "%" => format!("terrane_int_support::unwrap_or_fail(({left}).modulo(&({right})))"),
+            _ => format!("({left} {operator} {right})"),
+        }
+    }
+
     fn is_adaptive_expression(&self, node: &SyntaxNode) -> bool {
         self.value_type(node) == Some(ValueType::Scalar(ScalarType::Int))
+    }
+
+    fn numeric_operation_type(&self, left: &SyntaxNode, right: &SyntaxNode) -> Option<ScalarType> {
+        let scalar = |value_type| match value_type {
+            ValueType::Scalar(scalar) => Some(scalar),
+            ValueType::ScalarOrNone(_) => None,
+        };
+        let left_type = self.value_type(left).and_then(scalar);
+        let right_type = self.value_type(right).and_then(scalar);
+        if let Some(left_type) = left_type
+            && is_numeric(left_type)
+            && matches!(
+                contextual_constant(self.source, right, left_type),
+                Some(Ok(_))
+            )
+        {
+            return Some(left_type);
+        }
+        if let Some(right_type) = right_type
+            && is_numeric(right_type)
+            && matches!(
+                contextual_constant(self.source, left, right_type),
+                Some(Ok(_))
+            )
+        {
+            return Some(right_type);
+        }
+        match (left_type, right_type) {
+            (Some(left), Some(right)) if left == right && is_numeric(left) => Some(left),
+            (Some(left), Some(right)) if left.is_integer() && right.is_integer() => {
+                Some(promoted_integer_type(left, right))
+            }
+            _ => None,
+        }
     }
 
     fn binary(&mut self, node: &SyntaxNode) -> String {
@@ -784,33 +981,72 @@ impl Emitter<'_> {
             }
             return format!("{{ {} {result} }}", effects.join(" "));
         }
-        if self.is_adaptive_expression(left) {
+        let comparison = matches!(source_operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
+        let left_is_small = self.small_int_binding(left).is_some()
+            || matches!(
+                contextual_constant(self.source, left, ScalarType::Int64),
+                Some(Ok(_))
+            );
+        let right_is_small = self.small_int_binding(right).is_some()
+            || matches!(
+                contextual_constant(self.source, right, ScalarType::Int64),
+                Some(Ok(_))
+            );
+        if comparison && left_is_small && right_is_small {
+            let left = if self.small_int_binding(left).is_some() {
+                self.expression(left)
+            } else {
+                self.expression_as(left, ValueType::Scalar(ScalarType::Int64))
+            };
+            let right = if self.small_int_binding(right).is_some() {
+                self.expression(right)
+            } else {
+                self.expression_as(right, ValueType::Scalar(ScalarType::Int64))
+            };
+            return format!("({left} {source_operator} {right})");
+        }
+        if self.is_adaptive_expression(left)
+            && matches!(source_operator, "==" | "!=" | "<" | "<=" | ">" | ">=")
+        {
             return self.adaptive_binary(node);
         }
-        if matches!(
-            self.value_type(left),
-            Some(ValueType::Scalar(value_type))
-                if value_type.is_integer() && value_type != ScalarType::Int
-        ) && let Some(operation) = match source_operator {
-            "+" => Some("addition"),
-            "-" => Some("subtraction"),
-            "*" => Some("multiplication"),
-            "/" => Some("division"),
-            "%" => Some("remainder"),
-            "<<" => Some("shift_left"),
-            ">>" => Some("shift_right"),
-            _ => None,
-        } {
-            let right = self.expression(right);
+        if self.value_type(node) == Some(ValueType::Scalar(ScalarType::Int)) {
+            return self.adaptive_binary_as(node);
+        }
+        if let Some(ValueType::Scalar(operation_type)) = self.value_type(node)
+            && operation_type.is_integer()
+            && operation_type != ScalarType::Int
+            && let Some(operation) = match source_operator {
+                "+" => Some("addition"),
+                "-" => Some("subtraction"),
+                "*" => Some("multiplication"),
+                "/" => Some("division"),
+                "%" => Some("remainder"),
+                "<<" => Some("shift_left"),
+                ">>" => Some("shift_right"),
+                _ => None,
+            }
+        {
+            let operation_type = ValueType::Scalar(operation_type);
+            let left = Self::unwrapped_expression(self.expression_as(left, operation_type));
+            let right = if matches!(source_operator, "<<" | ">>") {
+                self.expression(right)
+            } else {
+                Self::unwrapped_expression(self.expression_as(right, operation_type))
+            };
             let right = if matches!(source_operator, "<<" | ">>") {
                 format!("&{right}")
             } else {
                 right
             };
             return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({}, {right}))",
-                self.expression(left),
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({left}, {right}))"
             );
+        }
+        if let Some(operation_type) = self.numeric_operation_type(left, right) {
+            let left = self.expression_as(left, ValueType::Scalar(operation_type));
+            let right = self.expression_as(right, ValueType::Scalar(operation_type));
+            return format!("({left} {source_operator} {right})");
         }
         let operator = match source_operator {
             "and" => "&&",
@@ -828,8 +1064,24 @@ impl Emitter<'_> {
         let [value, descriptor] = node.children.as_slice() else {
             return String::new();
         };
-        let value_type = self.value_type(value);
         let descriptor_type = self.descriptor_type(descriptor);
+        if let Some(binding) = self.union_binding(value)
+            && let Some(descriptor) = descriptor_type
+            && let Some(index) = binding
+                .destination_arms
+                .iter()
+                .position(|arm| *arm == descriptor)
+        {
+            let union_name = union_type_name(&binding);
+            let expression = self.expression(value);
+            return format!("matches!(&{expression}, {union_name}::Arm{index}(_))");
+        }
+        let value_type = self.value_type(value);
+        if let Some(destination) = descriptor_type
+            && let Some(result) = contextual_constant(self.source, value, destination)
+        {
+            return result.is_ok().to_string();
+        }
         if let Some(ValueType::ScalarOrNone(inner)) = value_type {
             let value = self.expression(value);
             return match descriptor_type {
@@ -842,11 +1094,12 @@ impl Emitter<'_> {
             (value_type, descriptor_type),
             (Some(ValueType::Scalar(value)), Some(descriptor)) if value == descriptor
         );
-        let expression = match value_type {
-            Some(value_type) => self.expression_as(value, value_type),
-            None => self.expression(value),
+        let effect = if value.kind == SyntaxKind::Name {
+            let expression = Self::unwrapped_expression(self.expression(value));
+            format!("let _ = &{expression};")
+        } else {
+            Self::discarded_expression(self.expression(value))
         };
-        let effect = Self::discarded_expression(expression);
         format!("{{ {effect} {result} }}")
     }
 
@@ -940,10 +1193,33 @@ impl Emitter<'_> {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
         };
+        let receiver_type = self.value_type(receiver);
         let receiver = self.expression(receiver);
         match self.text(member) {
             "length" => format!("terrane_string_support::length(&{receiver}) as i128"),
             "type" => "()".to_owned(),
+            mode @ ("round" | "floor" | "ceiling" | "truncate")
+                if matches!(
+                    receiver_type,
+                    Some(ValueType::Scalar(ScalarType::Float32 | ScalarType::Float64))
+                ) =>
+            {
+                let helper = if receiver_type == Some(ValueType::Scalar(ScalarType::Float32)) {
+                    "rounded_f32"
+                } else {
+                    "rounded_f64"
+                };
+                let mode = match mode {
+                    "round" => "TiesEven",
+                    "floor" => "Floor",
+                    "ceiling" => "Ceiling",
+                    "truncate" => "Truncate",
+                    _ => unreachable!(),
+                };
+                format!(
+                    "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}({receiver}, terrane_int_support::FloatRounding::{mode}))"
+                )
+            }
             name => format!("{receiver}.{}", rust_name(name)),
         }
     }
@@ -1043,6 +1319,87 @@ impl Emitter<'_> {
         format!("{name}({})", values.join(", "))
     }
 
+    fn numeric_destination(
+        &mut self,
+        node: &SyntaxNode,
+        source: ScalarType,
+        destination: ScalarType,
+    ) -> String {
+        let value = self.expression(node);
+        if destination == ScalarType::Int {
+            if matches!(source, ScalarType::Float32 | ScalarType::Float64) {
+                let helper = if source == ScalarType::Float32 {
+                    "exact_int_f32"
+                } else {
+                    "exact_int_f64"
+                };
+                return format!(
+                    "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}({value}))"
+                );
+            }
+            return if source == ScalarType::Uint128 {
+                format!("terrane_int_support::adaptive(&({value}))")
+            } else {
+                format!("terrane_int_support::Int::from(({value}) as i128)")
+            };
+        }
+        if source == ScalarType::Int && destination.is_integer() {
+            return format!(
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::coerce::<{}>(&({value})))",
+                rust_type(destination)
+            );
+        }
+        if source == ScalarType::Int {
+            let helper = if destination == ScalarType::Float32 {
+                "exact_f32"
+            } else {
+                "exact_f64"
+            };
+            return format!(
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}(&({value})))"
+            );
+        }
+        if source.is_integer() && destination.is_integer() {
+            if integer_range_contains(destination, source) {
+                return format!("(({value}) as {})", rust_type(destination));
+            }
+            return format!(
+                "{{ let source_value = {value}; terrane_int_support::unwrap_or_fail({}::try_from(source_value).map_err(|_| terrane_int_support::ArithmeticError::conversion_overflow(&source_value, \"{source}\", \"{destination}\", \"the value is outside the destination range\"))) }}",
+                rust_type(destination)
+            );
+        }
+        if source == ScalarType::Float32 && destination == ScalarType::Float64 {
+            return format!("(({value}) as f64)");
+        }
+        if source.is_integer() {
+            if exact_integer_float_widening(source, destination) {
+                return format!("(({value}) as {})", rust_type(destination));
+            }
+            let helper = if destination == ScalarType::Float32 {
+                "exact_f32"
+            } else {
+                "exact_f64"
+            };
+            return format!(
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}(&({value})))"
+            );
+        }
+        if destination.is_integer() {
+            let helper = if source == ScalarType::Float32 {
+                "exact_from_f32"
+            } else {
+                "exact_from_f64"
+            };
+            return format!(
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}::<{}>({value}))",
+                rust_type(destination)
+            );
+        }
+        format!(
+            "{{ let source_value = {value}; let converted = source_value as f32; if (converted as f64) == source_value {{ converted }} else {{ terrane_int_support::unwrap_or_fail(Err(terrane_int_support::ArithmeticError::conversion_overflow(&source_value, \"float64\", \"float32\", \"the floating value is not exactly representable\"))) }} }}"
+        )
+    }
+
     fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
         let (receiver, policy) = integer_coercion_call(self.source, callee)?;
         let destination = arguments
@@ -1051,14 +1408,30 @@ impl Emitter<'_> {
             .and_then(|argument| argument.children.last())
             .unwrap_or_else(|| &arguments.children[0]);
         let destination = self.descriptor_type(destination)?;
+        let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
+            && self.lazy_namespace_binding_type(receiver).is_some();
+        if policy == CoercionPolicy::Default
+            && !receiver_is_borrowed
+            && let Some(ValueType::Scalar(source)) = self.value_type(receiver)
+        {
+            if source == destination {
+                return Some(
+                    if destination == ScalarType::Int && self.small_int_binding(receiver).is_some()
+                    {
+                        self.adaptive_expression(receiver)
+                    } else {
+                        self.expression(receiver)
+                    },
+                );
+            }
+            return Some(self.numeric_destination(receiver, source, destination));
+        }
         let helper = match policy {
             CoercionPolicy::Default => "coerce",
             CoercionPolicy::Checked => "checked_coerce",
             CoercionPolicy::Wrap => "wrapping_coerce",
             CoercionPolicy::Saturate => "saturating_coerce",
         };
-        let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
-            && self.lazy_namespace_binding_type(receiver).is_some();
         let receiver = self.expression(receiver);
         let source = if receiver_is_borrowed {
             receiver
@@ -1184,6 +1557,23 @@ impl Emitter<'_> {
             .unwrap_or_else(|| rust_name(self.text(node)))
     }
 
+    fn small_int_binding(&self, node: &SyntaxNode) -> Option<ScalarType> {
+        (node.kind == SyntaxKind::Name)
+            .then(|| {
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .rev()
+                    .find(|binding| {
+                        binding.name == self.text(node)
+                            && binding.span.start <= node.span.start
+                            && !binding_span_is_mutated(self.package, self.unit, binding.span, true)
+                    })
+                    .and_then(|binding| binding.storage_type)
+            })
+            .flatten()
+    }
+
     fn lazy_namespace_binding_type(&self, node: &SyntaxNode) -> Option<ValueType> {
         if self
             .namespace_initializer
@@ -1260,14 +1650,15 @@ impl Emitter<'_> {
             if let Some(default) = parameter.children.last().filter(|child| {
                 !matches!(child.kind, SyntaxKind::Name | SyntaxKind::TypeExpression)
             }) {
-                let value = literal_or_text(&owner.source, default);
-                values[index] = Some(
-                    if contract.parameters[index].value_type == Some(ScalarType::Int) {
-                        adaptive_literal(&value)
-                    } else {
-                        value
-                    },
-                );
+                let destination = contract.parameters[index].value_type;
+                let value = destination
+                    .and_then(|destination| {
+                        contextual_constant(&owner.source, default, destination)
+                            .and_then(Result::ok)
+                            .map(|constant| lower_contextual_constant(constant, destination))
+                    })
+                    .unwrap_or_else(|| literal_or_text(&owner.source, default));
+                values[index] = Some(value);
             }
         }
     }
@@ -1371,6 +1762,41 @@ fn adaptive_literal(text: &str) -> String {
     }
 }
 
+fn lower_contextual_constant(constant: ContextualConstant, destination: ScalarType) -> String {
+    match constant {
+        ContextualConstant::Integer(value) if destination == ScalarType::Int => {
+            adaptive_literal(&value.to_string())
+        }
+        ContextualConstant::Integer(value) => value.to_string(),
+        ContextualConstant::Float32(value) => float32_literal(value),
+        ContextualConstant::Float64(value) => float64_literal(value),
+    }
+}
+
+fn float32_literal(value: f32) -> String {
+    if value.is_nan() {
+        "f32::NAN".to_owned()
+    } else if value == f32::INFINITY {
+        "f32::INFINITY".to_owned()
+    } else if value == f32::NEG_INFINITY {
+        "f32::NEG_INFINITY".to_owned()
+    } else {
+        format!("{value:?}_f32")
+    }
+}
+
+fn float64_literal(value: f64) -> String {
+    if value.is_nan() {
+        "f64::NAN".to_owned()
+    } else if value == f64::INFINITY {
+        "f64::INFINITY".to_owned()
+    } else if value == f64::NEG_INFINITY {
+        "f64::NEG_INFINITY".to_owned()
+    } else {
+        format!("{value:?}_f64")
+    }
+}
+
 fn integer_literal(text: &str) -> Option<BigInt> {
     let (radix, digits) =
         if let Some(digits) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
@@ -1426,6 +1852,9 @@ fn unescape(value: &str) -> String {
     output
 }
 
+fn union_type_name(binding: &TypedBinding) -> String {
+    format!("TerraneUnionF{}S{}", binding.span.file, binding.span.start)
+}
 fn find_node_by_span(node: &SyntaxNode, span: crate::Span) -> Option<&SyntaxNode> {
     (node.span == span).then_some(node).or_else(|| {
         node.children
@@ -1453,6 +1882,51 @@ fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNo
 
 fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
+}
+
+const fn is_numeric(ty: ScalarType) -> bool {
+    ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
+}
+
+fn integer_range_contains(destination: ScalarType, source: ScalarType) -> bool {
+    let Some((destination_signed, destination_bits)) = fixed_integer_shape(destination) else {
+        return false;
+    };
+    let Some((source_signed, source_bits)) = fixed_integer_shape(source) else {
+        return false;
+    };
+    match (destination_signed, source_signed) {
+        (true, true) | (false, false) => destination_bits >= source_bits,
+        (true, false) => destination_bits > source_bits,
+        (false, true) => false,
+    }
+}
+
+fn exact_integer_float_widening(source: ScalarType, destination: ScalarType) -> bool {
+    let Some((_, bits)) = fixed_integer_shape(source) else {
+        return false;
+    };
+    match destination {
+        ScalarType::Float32 => bits <= 16,
+        ScalarType::Float64 => bits <= 32,
+        _ => false,
+    }
+}
+
+const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
+    match ty {
+        ScalarType::Int8 => Some((true, 8)),
+        ScalarType::Int16 => Some((true, 16)),
+        ScalarType::Int32 => Some((true, 32)),
+        ScalarType::Int64 => Some((true, 64)),
+        ScalarType::Int128 => Some((true, 128)),
+        ScalarType::Uint8 => Some((false, 8)),
+        ScalarType::Uint16 => Some((false, 16)),
+        ScalarType::Uint32 => Some((false, 32)),
+        ScalarType::Uint64 => Some((false, 64)),
+        ScalarType::Uint128 => Some((false, 128)),
+        _ => None,
+    }
 }
 
 fn function_name(contract: &FunctionContract) -> String {

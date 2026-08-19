@@ -276,12 +276,12 @@ fn lowers_scalar_membership_and_descriptor_identity_statically() {
     assert!(
         compilation
             .rust
-            .contains("let member: bool = { let _ = value.clone(); true };")
+            .contains("let member: bool = { let _ = &value; true };")
     );
     assert!(
         compilation
             .rust
-            .contains("let parameter_member: bool = { let _ = item.clone(); true };")
+            .contains("let parameter_member: bool = { let _ = &item; true };")
     );
     assert!(
         compilation
@@ -372,10 +372,7 @@ fn lowers_logical_combinations_of_integer_comparisons() {
     );
     let compilation = terrane_compiler::compile("conditions.trn", source.to_owned()).unwrap();
 
-    assert!(compilation.rust.contains(
-        "if (x.clone() > terrane_int_support::Int::from(1_i128)) && \
-(y.clone() > terrane_int_support::Int::from(2_i128)) {"
-    ));
+    assert!(compilation.rust.contains("if (x > 1) && (y > 2) {"));
 }
 
 #[test]

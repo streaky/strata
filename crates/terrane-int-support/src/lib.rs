@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Sub};
 
 use num_bigint::BigInt;
-use num_traits::ToPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 
 /// Exact Terrane `int`, normalized to the smallest representation after every operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,26 +13,53 @@ pub enum Int {
     Big(BigInt),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArithmeticError {
     DivisionByZero,
     ArithmeticOverflow,
     IntegerConversionOverflow,
+    IntegerConversionOverflowDetail {
+        source_value: String,
+        source_type: &'static str,
+        destination_type: &'static str,
+        condition: &'static str,
+    },
     NegativeShiftCount,
     ShiftCountTooLarge,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatRounding {
+    TiesEven,
+    Floor,
+    Ceiling,
+    Truncate,
+}
+
 impl fmt::Display for ArithmeticError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::DivisionByZero => "integer division by zero",
-            Self::ArithmeticOverflow => "fixed-width integer arithmetic overflow",
-            Self::IntegerConversionOverflow => {
-                "integer conversion result is outside the destination type"
+        match self {
+            Self::DivisionByZero => formatter.write_str("integer division by zero"),
+            Self::ArithmeticOverflow => {
+                formatter.write_str("fixed-width integer arithmetic overflow")
             }
-            Self::NegativeShiftCount => "negative integer shift count",
-            Self::ShiftCountTooLarge => "integer shift count cannot be represented on this target",
-        })
+            Self::IntegerConversionOverflow => {
+                formatter.write_str("integer conversion result is outside the destination type")
+            }
+            Self::IntegerConversionOverflowDetail {
+                source_value,
+                source_type,
+                destination_type,
+                condition,
+            } => write!(
+                formatter,
+                "value {source_value} of type {source_type} cannot arrive exactly as {destination_type}: {condition}"
+            ),
+            Self::NegativeShiftCount => formatter.write_str("negative integer shift count"),
+            Self::ShiftCountTooLarge => {
+                formatter.write_str("integer shift count cannot be represented on this target")
+            }
+        }
     }
 }
 
@@ -41,11 +68,13 @@ impl std::error::Error for ArithmeticError {}
 impl ArithmeticError {
     /// Stable Terrane object-form name used by generated failure paths.
     #[must_use]
-    pub const fn source_name(self) -> &'static str {
+    pub const fn source_name(&self) -> &'static str {
         match self {
             Self::DivisionByZero => ".division-by-zero",
             Self::ArithmeticOverflow => ".arithmetic-overflow",
-            Self::IntegerConversionOverflow => ".integer-conversion-overflow",
+            Self::IntegerConversionOverflow | Self::IntegerConversionOverflowDetail { .. } => {
+                ".integer-conversion-overflow"
+            }
             Self::NegativeShiftCount => ".negative-shift-count",
             Self::ShiftCountTooLarge => ".resource-error",
         }
@@ -53,8 +82,23 @@ impl ArithmeticError {
 
     /// Deterministic source-oriented text suitable for an uncaught failure.
     #[must_use]
-    pub fn render(self) -> String {
+    pub fn render(&self) -> String {
         format!("{}: {self}", self.source_name())
+    }
+
+    #[must_use]
+    pub fn conversion_overflow(
+        source_value: &impl ToString,
+        source_type: &'static str,
+        destination_type: &'static str,
+        condition: &'static str,
+    ) -> Self {
+        Self::IntegerConversionOverflowDetail {
+            source_value: source_value.to_string(),
+            source_type,
+            destination_type,
+            condition,
+        }
     }
 }
 
@@ -664,14 +708,202 @@ unsigned_destinations!(
     (u128, to_u128),
 );
 
+/// Materializes any fixed-width integer as an adaptive integer.
+#[must_use]
+pub fn adaptive(value: &impl IntegerSource) -> Int {
+    Int::from_big(value.integer_value())
+}
+
+fn terrane_numeric_type(rust_type: &str) -> &'static str {
+    match rust_type.rsplit("::").next().unwrap_or(rust_type) {
+        "i8" => "int8",
+        "i16" => "int16",
+        "i32" => "int32",
+        "i64" => "int64",
+        "i128" => "int128",
+        "u8" => "uint8",
+        "u16" => "uint16",
+        "u32" => "uint32",
+        "u64" => "uint64",
+        "u128" => "uint128",
+        "f32" => "float32",
+        "f64" => "float64",
+        "Int" => "int",
+        _ => "numeric",
+    }
+}
+
+fn conversion_overflow(
+    source_value: &impl ToString,
+    source_type: &'static str,
+    destination_type: &'static str,
+    condition: &'static str,
+) -> ArithmeticError {
+    ArithmeticError::conversion_overflow(source_value, source_type, destination_type, condition)
+}
+
 /// Performs an exact integer coercion.
 ///
 /// # Errors
 ///
 /// Returns [`ArithmeticError::IntegerConversionOverflow`] when the result is
 /// outside the destination type.
-pub fn coerce<T: IntegerDestination>(value: &impl IntegerSource) -> Result<T, ArithmeticError> {
-    T::checked_from_big(&value.integer_value()).ok_or(ArithmeticError::IntegerConversionOverflow)
+pub fn coerce<T: IntegerDestination + 'static>(
+    value: &(impl IntegerSource + 'static),
+) -> Result<T, ArithmeticError> {
+    let integer = value.integer_value();
+    T::checked_from_big(&integer).ok_or_else(|| {
+        conversion_overflow(
+            &integer,
+            terrane_numeric_type(std::any::type_name_of_val(value)),
+            terrane_numeric_type(std::any::type_name::<T>()),
+            "the value is outside the destination range",
+        )
+    })
+}
+
+/// Converts an integer to `f64` only when the floating value preserves it exactly.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for an inexact value.
+pub fn exact_f64(value: &(impl IntegerSource + 'static)) -> Result<f64, ArithmeticError> {
+    let integer = value.integer_value();
+    let error = || {
+        conversion_overflow(
+            &integer,
+            terrane_numeric_type(std::any::type_name_of_val(value)),
+            "float64",
+            "the integer is not exactly representable",
+        )
+    };
+    let converted = integer.to_f64().ok_or_else(&error)?;
+    (BigInt::from_f64(converted).as_ref() == Some(&integer))
+        .then_some(converted)
+        .ok_or_else(error)
+}
+
+/// Converts an integer to `f32` only when the floating value preserves it exactly.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for an inexact value.
+pub fn exact_f32(value: &(impl IntegerSource + 'static)) -> Result<f32, ArithmeticError> {
+    let integer = value.integer_value();
+    let error = || {
+        conversion_overflow(
+            &integer,
+            terrane_numeric_type(std::any::type_name_of_val(value)),
+            "float32",
+            "the integer is not exactly representable",
+        )
+    };
+    let converted = integer.to_f32().ok_or_else(&error)?;
+    (BigInt::from_f32(converted).as_ref() == Some(&integer))
+        .then_some(converted)
+        .ok_or_else(error)
+}
+
+/// Rounds a finite floating value using the selected source-language mode.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for NaN or infinity.
+pub fn rounded_f64(value: f64, mode: FloatRounding) -> Result<Int, ArithmeticError> {
+    let rounded = match mode {
+        FloatRounding::TiesEven => value.round_ties_even(),
+        FloatRounding::Floor => value.floor(),
+        FloatRounding::Ceiling => value.ceil(),
+        FloatRounding::Truncate => value.trunc(),
+    };
+    BigInt::from_f64(rounded)
+        .map(Int::from_big)
+        .ok_or(ArithmeticError::IntegerConversionOverflow)
+}
+
+/// Rounds a finite `f32` value using the selected source-language mode.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] for NaN or infinity.
+pub fn rounded_f32(value: f32, mode: FloatRounding) -> Result<Int, ArithmeticError> {
+    rounded_f64(f64::from(value), mode)
+}
+
+/// Converts a floating value to an adaptive integer when it is finite and integral.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_int_f64(value: f64) -> Result<Int, ArithmeticError> {
+    let error = || {
+        conversion_overflow(
+            &value,
+            "float64",
+            "int",
+            "the value must be finite and integral",
+        )
+    };
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(error());
+    }
+    BigInt::from_f64(value).map(Int::from_big).ok_or_else(error)
+}
+
+/// Converts an `f32` value to an adaptive integer when it is finite and integral.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_int_f32(value: f32) -> Result<Int, ArithmeticError> {
+    let error = || {
+        conversion_overflow(
+            &value,
+            "float32",
+            "int",
+            "the value must be finite and integral",
+        )
+    };
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(error());
+    }
+    BigInt::from_f32(value).map(Int::from_big).ok_or_else(error)
+}
+
+/// Converts an `f64` to a fixed-width integer only when it is finite, integral, and in range.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_from_f64<T: IntegerDestination + 'static>(value: f64) -> Result<T, ArithmeticError> {
+    let error = || {
+        conversion_overflow(
+            &value,
+            "float64",
+            terrane_numeric_type(std::any::type_name::<T>()),
+            "the value must be finite, integral, and within the destination range",
+        )
+    };
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(error());
+    }
+    BigInt::from_f64(value)
+        .and_then(|integer| T::checked_from_big(&integer))
+        .ok_or_else(error)
+}
+
+/// Converts an `f32` to a fixed-width integer only when it is finite, integral, and in range.
+///
+/// # Errors
+/// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
+pub fn exact_from_f32<T: IntegerDestination + 'static>(value: f32) -> Result<T, ArithmeticError> {
+    let error = || {
+        conversion_overflow(
+            &value,
+            "float32",
+            terrane_numeric_type(std::any::type_name::<T>()),
+            "the value must be finite, integral, and within the destination range",
+        )
+    };
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(error());
+    }
+    BigInt::from_f32(value)
+        .and_then(|integer| T::checked_from_big(&integer))
+        .ok_or_else(error)
 }
 
 /// Performs a non-failing checked integer coercion.

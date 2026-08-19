@@ -3,7 +3,7 @@
 // Namespace: descriptor-semantics
 fn accepts(item: terrane_int_support::Int) -> bool {
     println!("{}", terrane_scalar_support::scalar_text(&(item)));
-    return { let _ = item.clone(); true };
+    return { let _ = &item; true };
 }
 fn same_type(left: terrane_int_support::Int, right: terrane_int_support::Int) -> bool {
     println!("{}", terrane_scalar_support::scalar_text(&(left)));
@@ -20,7 +20,7 @@ fn main() {
     println!("{}", terrane_scalar_support::scalar_text(&({  true })));
     println!("{}", terrane_scalar_support::scalar_text(&({  true })));
     let value: f64 = 1.0;
-    println!("{}", terrane_scalar_support::scalar_text(&({ let _ = value; true })));
+    println!("{}", terrane_scalar_support::scalar_text(&({ let _ = &value; true })));
     println!("{}", terrane_scalar_support::scalar_text(&({ let _ = value; true })));
     println!("{}", terrane_scalar_support::scalar_text(&({  true })));
     println!("{}", terrane_scalar_support::scalar_text(&(same_type(terrane_int_support::Int::from(2_i128), terrane_int_support::Int::from(3_i128)))));

@@ -1,0 +1,18 @@
+namespace float-narrowing-special-values
+from /core/types import float32, float64
+function main
+  zero float64 = 0.0
+  one float64 = 1.0
+  negative-one float64 = -1.0
+  negative-zero float64 = -0.0
+  maximum float64 = 340282346638528859811704183484516925440.0
+  positive-infinity float64 = one / zero
+  negative-infinity float64 = negative-one / zero
+  narrowed-zero float32 = negative-zero
+  narrowed-positive float32 = positive-infinity
+  narrowed-negative float32 = negative-infinity
+  narrowed-maximum float32 = maximum
+  print; narrowed-zero
+  print; narrowed-positive
+  print; narrowed-negative
+  print; narrowed-maximum
