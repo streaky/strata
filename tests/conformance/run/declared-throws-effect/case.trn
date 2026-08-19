@@ -1,0 +1,11 @@
+namespace declared-throws-effect
+
+throws function declared int
+  return 1
+
+function middle int
+  return declared;
+
+function main
+  value int = middle;
+  print; value

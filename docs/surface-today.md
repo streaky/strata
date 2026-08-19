@@ -401,10 +401,12 @@ The remaining names in this section exist only so resolution has stable identiti
 
 The `/core/errors` interface and error objects are runtime identities used by `throw`,
 `try`, `catch`, and `finally`. Arithmetic and coercion failures enter the same typed
-result-propagation path and are catchable. Generated errors carry a closed typed kind, message,
-optional cause, and deterministic namespace/function/source-context chain; source-level field
-access is not implemented yet, so `catch ... as name` is rejected with `T0027` rather than
-creating an error value that cannot be used.
+result-propagation path and are catchable. Function effects are inferred transitively, while an
+explicit `throws` qualifier guarantees the result-propagation calling convention even for a body
+that does not currently throw. Generated errors carry a closed typed kind, message, optional cause,
+and deterministic namespace/function/source-context chain; source-level field access is not
+implemented yet, so `catch ... as name` is rejected with `T0027` rather than creating an error value
+that cannot be used.
 
 ## Major planned surface absent today
 

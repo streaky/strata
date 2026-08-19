@@ -109,7 +109,9 @@ fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
             SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
         ) || node.children.iter().any(contains)
     }
-    package.units.iter().any(|unit| contains(&unit.tree.root))
+    package.units.iter().any(|unit| {
+        unit.functions.iter().any(|contract| contract.throws) || contains(&unit.tree.root)
+    })
 }
 
 fn emit_error_support(output: &mut String) {

@@ -2234,12 +2234,15 @@ fn analyze_function_contract(
             });
         }
     }
+    let throws = node.children.iter().any(|child| {
+        child.kind == SyntaxKind::DeclarationQualifier && node_text(&unit.source, child) == "throws"
+    });
     Ok(FunctionContract {
         name: node_text(&unit.source, name_node).to_owned(),
         span: node.span,
         parameters,
         return_type,
-        throws: false,
+        throws,
     })
 }
 
@@ -2355,12 +2358,18 @@ fn infer_throwing_effects(package: &mut SemanticPackage) {
             .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
         {
             let function_key = key(function.span);
+            let declared = unit
+                .functions
+                .iter()
+                .find(|contract| contract.span == function.span)
+                .is_some_and(|contract| contract.throws);
             effects.insert(
                 function_key,
-                function
-                    .children
-                    .iter()
-                    .any(|child| !direct_errors(package, unit, child).is_empty()),
+                declared
+                    || function
+                        .children
+                        .iter()
+                        .any(|child| !direct_errors(package, unit, child).is_empty()),
             );
             let mut function_callees = BTreeSet::new();
             for child in &function.children {
