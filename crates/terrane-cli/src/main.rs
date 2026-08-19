@@ -104,7 +104,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     }
     ensure_rust_toolchain()?;
     let crate_dir = generated_crate_path(&package.root, &compilation.rust)?;
-    write_generated_crate(&crate_dir, &compilation.rust, &package.units)?;
+    write_generated_crate(&crate_dir, &compilation.rust_files, &package.units)?;
     let cargo_command = if command == "check" { "check" } else { "build" };
     let status = Command::new("cargo")
         .args([cargo_command, "--quiet", "--manifest-path"])
@@ -158,7 +158,7 @@ fn generated_crate_path(package_root: &Path, rust: &str) -> Result<PathBuf, CliF
 
 fn write_generated_crate(
     directory: &Path,
-    rust: &str,
+    rust_files: &[terrane_compiler::rust_ir::RenderedFile],
     units: &[terrane_compiler::SourceUnit],
 ) -> Result<(), CliFailure> {
     fs::create_dir_all(directory.join("src"))
@@ -173,8 +173,17 @@ fn write_generated_crate(
     write_generated_support(directory).map_err(|error| {
         CliFailure::backend(format!("cannot write generated runtime support: {error}"))
     })?;
-    write_if_changed(&directory.join("src/main.rs"), rust.as_bytes())
-        .map_err(|error| CliFailure::backend(format!("cannot write generated Rust: {error}")))?;
+    for rust_file in rust_files {
+        let path = directory.join(&rust_file.path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                CliFailure::backend(format!("cannot create generated source directory: {error}"))
+            })?;
+        }
+        write_if_changed(&path, rust_file.contents.as_bytes()).map_err(|error| {
+            CliFailure::backend(format!("cannot write generated Rust: {error}"))
+        })?;
+    }
     let mut sources = String::from("version = 1\n\n");
     for unit in units {
         write!(

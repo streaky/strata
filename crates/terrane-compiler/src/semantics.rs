@@ -4,7 +4,7 @@ use num_bigint::BigInt;
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
-use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, lexer, parser};
+use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, TypeCategory, lexer, parser};
 
 pub const BOOTSTRAP_VERSION: &str = "1";
 
@@ -43,6 +43,14 @@ impl Symbol {
             .then(|| self.identity.strip_prefix("/core/types::"))
             .flatten()
             .and_then(ScalarType::from_source_name)
+    }
+
+    #[must_use]
+    pub fn descriptor_category(&self) -> Option<TypeCategory> {
+        (self.kind == SymbolKind::TypeDescriptor)
+            .then(|| self.identity.strip_prefix("/core/types::"))
+            .flatten()
+            .and_then(TypeCategory::from_source_name)
     }
 
     #[must_use]
@@ -1794,12 +1802,13 @@ fn validate_descriptor_value_node(
     if node.kind == SyntaxKind::TypeMembershipExpression
         && let Some(descriptor) = node.children.get(1)
         && descriptor_expression_type(package, unit, descriptor).is_none()
+        && descriptor_expression_category(package, unit, descriptor).is_none()
     {
         return Err(failure(
             &unit.source,
             "T0001",
             format!(
-                "`{}` does not resolve to a scalar type descriptor",
+                "`{}` does not resolve to a type descriptor",
                 node_text(&unit.source, descriptor).trim()
             ),
             descriptor.span,
@@ -1807,7 +1816,8 @@ fn validate_descriptor_value_node(
     }
     if !descriptor_context
         && node.kind == SyntaxKind::Name
-        && descriptor_expression_type(package, unit, node).is_some()
+        && (descriptor_expression_type(package, unit, node).is_some()
+            || descriptor_expression_category(package, unit, node).is_some())
     {
         return Err(failure(
             &unit.source,
@@ -1857,6 +1867,25 @@ pub(crate) fn descriptor_expression_type(
                 node.children
                     .first()
                     .and_then(|child| descriptor_expression_type(package, unit, child))
+            }),
+        _ => None,
+    }
+}
+
+pub(crate) fn descriptor_expression_category(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<TypeCategory> {
+    let name = node_text(&unit.source, node).trim();
+    match node.kind {
+        SyntaxKind::Name | SyntaxKind::TypeExpression => package
+            .resolve_name_at(unit, node.span.start, name)
+            .and_then(Symbol::descriptor_category)
+            .or_else(|| {
+                node.children
+                    .first()
+                    .and_then(|child| descriptor_expression_category(package, unit, child))
             }),
         _ => None,
     }
@@ -4140,6 +4169,11 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "float32".to_owned(),
         "float64".to_owned(),
     ];
+    types.extend(
+        TypeCategory::ABSTRACT_SOURCE_NAMES
+            .into_iter()
+            .map(|(name, _)| name.to_owned()),
+    );
     for prefix in ["int", "uint"] {
         for width in [8, 16, 32, 64, 128] {
             types.push(format!("{prefix}{width}"));

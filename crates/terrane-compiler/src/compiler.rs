@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     Diagnostic, Package, SourceFile, Span,
+    rust_ir::RenderedFile,
     semantics::{self, SymbolKind},
 };
 
@@ -9,6 +10,7 @@ use crate::{
 pub struct Compilation {
     pub source: SourceFile,
     pub rust: String,
+    pub rust_files: Vec<RenderedFile>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,9 +94,12 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         .find(|unit| unit.source.id() == entry_span.file)
         .unwrap_or(&semantic.units[0]);
     let source = &unit.source;
-    let rust = crate::lowering::emit(&semantic);
+    let rust_ir = crate::lowering::lower(&semantic);
+    let rust = rust_ir.render();
+    let rust_files = rust_ir.render_files();
     Ok(Compilation {
         source: (*source).clone(),
         rust,
+        rust_files,
     })
 }

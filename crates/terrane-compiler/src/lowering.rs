@@ -3,7 +3,8 @@ use std::fmt::Write as _;
 use num_bigint::BigInt;
 
 use crate::{
-    ScalarType, SourceFile,
+    ScalarType, SourceFile, TypeCategory,
+    rust_ir::{Item, Module, Program},
     semantics::{
         CoercionPolicy, ContextualConstant, FunctionContract, SemanticPackage, SemanticUnit,
         SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, contextual_constant,
@@ -12,45 +13,55 @@ use crate::{
     syntax::{SyntaxKind, SyntaxNode},
 };
 
-pub(crate) fn emit(package: &SemanticPackage) -> String {
-    let mut output = format!(
-        "// Generated deterministically by Terrane {}.\n",
-        crate::VERSION
-    );
-    emit_global_storage(package, &mut output);
-    for unit in &package.units {
-        let mut emitter = Emitter {
-            package,
-            unit,
-            source: &unit.source,
-            output: String::new(),
-            indent: 0,
-            continue_label: None,
-            loop_counter: 0,
-            return_type: None,
-            parameter_types: Vec::new(),
-            namespace_initializer: None,
-        };
-        emitter.emit_union_types();
-        for node in &unit.tree.root.children {
-            match node.kind {
-                SyntaxKind::Binding | SyntaxKind::Assignment => emitter.namespace_binding(node),
-                SyntaxKind::FunctionDeclaration => emitter.function(node),
-                _ => {}
+
+pub(crate) fn lower(package: &SemanticPackage) -> Program {
+    let mut globals = String::new();
+    emit_global_storage(package, &mut globals);
+    let modules = package
+        .units
+        .iter()
+        .map(|unit| {
+            let mut emitter = Emitter {
+                package,
+                unit,
+                source: &unit.source,
+                output: String::new(),
+                indent: 0,
+                continue_label: None,
+                loop_counter: 0,
+                return_type: None,
+                parameter_types: Vec::new(),
+                namespace_initializer: None,
+            };
+            emitter.emit_union_types();
+            for node in &unit.tree.root.children {
+                match node.kind {
+                    SyntaxKind::Binding | SyntaxKind::Assignment => {
+                        emitter.namespace_binding(node);
+                    }
+                    SyntaxKind::FunctionDeclaration => emitter.function(node),
+                    _ => {}
+                }
             }
-        }
-        if !emitter.output.is_empty() {
-            writeln!(
-                output,
-                "// Source: {}\n// Namespace: {}",
-                display_path(unit.source.path()),
-                unit.namespace.trim_start_matches('/')
-            )
-            .unwrap();
-            output.push_str(&emitter.output);
-        }
+            let items = (!emitter.output.is_empty())
+                .then(|| Item::sourced(unit.tree.root.span, emitter.output))
+                .into_iter()
+                .collect();
+            Module {
+                source_path: display_path(unit.source.path()),
+                namespace: unit.namespace.clone(),
+                items,
+            }
+        })
+        .collect();
+    Program {
+        version: crate::VERSION,
+        globals: (!globals.is_empty())
+            .then(|| Item::generated(globals))
+            .into_iter()
+            .collect(),
+        modules,
     }
-    output
 }
 
 struct Emitter<'a> {
@@ -1065,6 +1076,26 @@ impl Emitter<'_> {
             return String::new();
         };
         let descriptor_type = self.descriptor_type(descriptor);
+        let descriptor_category =
+            crate::semantics::descriptor_expression_category(self.package, self.unit, descriptor);
+        if let Some(binding) = self.union_binding(value)
+            && let Some(category) = descriptor_category
+        {
+            let union_name = union_type_name(&binding);
+            let expression = self.expression(value);
+            let matching = binding
+                .destination_arms
+                .iter()
+                .enumerate()
+                .filter(|(_, arm)| arm.conforms_to(category))
+                .map(|(index, _)| format!("{union_name}::Arm{index}(_)"))
+                .collect::<Vec<_>>();
+            return if matching.is_empty() {
+                format!("{{ let _ = &{expression}; false }}")
+            } else {
+                format!("matches!(&{expression}, {})", matching.join(" | "))
+            };
+        }
         if let Some(binding) = self.union_binding(value)
             && let Some(descriptor) = descriptor_type
             && let Some(index) = binding
@@ -1077,6 +1108,9 @@ impl Emitter<'_> {
             return format!("matches!(&{expression}, {union_name}::Arm{index}(_))");
         }
         let value_type = self.value_type(value);
+        if let Some(category) = descriptor_category {
+            return self.category_membership(value, value_type, category);
+        }
         if let Some(destination) = descriptor_type
             && let Some(result) = contextual_constant(self.source, value, destination)
         {
@@ -1099,6 +1133,33 @@ impl Emitter<'_> {
             format!("let _ = &{expression};")
         } else {
             Self::discarded_expression(self.expression(value))
+        };
+        format!("{{ {effect} {result} }}")
+    }
+
+    fn category_membership(
+        &mut self,
+        node: &SyntaxNode,
+        value_type: Option<ValueType>,
+        category: TypeCategory,
+    ) -> String {
+        if let Some(ValueType::ScalarOrNone(inner)) = value_type {
+            let value = self.expression(node);
+            return if inner.conforms_to(category) {
+                format!("({value}).is_some()")
+            } else {
+                format!("{{ let _ = {value}; false }}")
+            };
+        }
+        let result = matches!(
+            value_type,
+            Some(ValueType::Scalar(value)) if value.conforms_to(category)
+        );
+        let effect = if node.kind == SyntaxKind::Name {
+            let expression = Self::unwrapped_expression(self.expression(node));
+            format!("let _ = &{expression};")
+        } else {
+            Self::discarded_expression(self.expression(node))
         };
         format!("{{ {effect} {result} }}")
     }
@@ -1942,13 +2003,62 @@ fn global_binding_name(name: &str) -> String {
 }
 
 fn rust_name(name: &str) -> String {
+    if name == "main" {
+        return name.to_owned();
+    }
     let mut output = String::with_capacity(name.len());
-    for character in name.chars() {
-        if character == '-' {
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            output.push(char::from(byte));
+        } else if byte == b'-' {
             output.push('_');
         } else {
-            output.push(character);
+            write!(output, "_P{byte:02x}_").expect("writing to a String cannot fail");
         }
+    }
+    if output.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        || matches!(
+            output.as_str(),
+            "as" | "break"
+                | "const"
+                | "continue"
+                | "crate"
+                | "else"
+                | "enum"
+                | "extern"
+                | "false"
+                | "fn"
+                | "for"
+                | "if"
+                | "impl"
+                | "in"
+                | "let"
+                | "loop"
+                | "match"
+                | "mod"
+                | "move"
+                | "mut"
+                | "pub"
+                | "ref"
+                | "return"
+                | "self"
+                | "Self"
+                | "static"
+                | "struct"
+                | "super"
+                | "trait"
+                | "true"
+                | "type"
+                | "unsafe"
+                | "use"
+                | "where"
+                | "while"
+                | "async"
+                | "await"
+                | "dyn"
+        )
+    {
+        output.insert_str(0, "T_");
     }
     output
 }

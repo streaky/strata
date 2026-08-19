@@ -6,6 +6,7 @@ mod lowering;
 pub mod package;
 pub mod parser;
 pub mod semantics;
+pub mod rust_ir;
 pub mod source;
 pub mod syntax;
 pub mod tokens;
@@ -20,6 +21,6 @@ pub use semantics::{
     ValueType, Visibility, analyze,
 };
 pub use source::{SourceFile, Span};
-pub use types::ScalarType;
+pub use types::{DescriptorSchema, ScalarType, TypeCategory};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
