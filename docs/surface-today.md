@@ -179,7 +179,7 @@ All integer descriptors, including `int`, are valid destinations except that `.c
 
 Declared numeric binding, assignment, parameter-default, argument, and return destinations admit numeric values exactly or fail with `integer-conversion-overflow`. Range-contained fixed-width widening emits only a representation change; other typed numeric pairs retain a runtime representability check. Integer values of different concrete types promote to the smallest implemented integer type containing both source ranges, or to `int`. Local adaptive-`int` bindings proven to remain in `int64` range lower directly to `i64`; conversion to the erased adaptive ABI occurs only where an operation or call requires it.
 
-Numeric union bindings retain their declared arms in the semantic model and lower to compiler-owned tagged Rust enums. An exact typed arm wins; otherwise the value must be admitted by exactly one arm. Ambiguous constants are rejected, later assignments are checked against the original arm set, and `is a` inspects the current runtime arm rather than the initializer's selected type.
+Numeric union bindings retain their declared arms in the semantic model and lower to compiler-owned tagged Rust enums. An exact typed arm wins; otherwise the value must be admitted by exactly one arm. Ambiguous constants are rejected, later assignments are checked against the original arm set, and `is a` inspects the current runtime arm rather than the initializer's selected type. Union destinations are currently implemented only for bindings and their later assignments; parameter and return annotations remain unsupported.
 
 Numeric constant expressions are evaluated in their destination context. Integer destinations use exact unbounded intermediates and check only the final result; floating destinations evaluate at destination precision. This applies to typed bindings and assignments, parameter defaults, declared arguments, and declared returns. A constant used with a typed numeric operand takes that operand's type, except for shift counts.
 
@@ -294,7 +294,7 @@ value.type is D
 value is a D
 ```
 
-both compare its resolved canonical Terrane type with `D`. Scalar values themselves are identity-less: `is` between ordinary scalar values is false even when their values and types are equal. Operand expressions are still evaluated for their effects.
+For an ordinary typed scalar, both forms compare its resolved canonical Terrane type with `D`. For a numeric constant, `value is a D` tests whether the constant is exactly admissible by `D`; for a numeric union binding, it tests the current runtime arm. The right-hand descriptor is resolved statically, and an unresolvable name fails with `T0001`. Scalar values themselves are identity-less: `is` between ordinary scalar values is false even when their values and types are equal. Operand expressions are still evaluated for their effects.
 
 Descriptor constructs are not runtime values and cannot be assigned to source bindings. An explicit import may bind a canonical descriptor under another name without creating a new descriptor.
 

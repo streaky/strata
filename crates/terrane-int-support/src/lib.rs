@@ -739,12 +739,7 @@ fn conversion_overflow(
     destination_type: &'static str,
     condition: &'static str,
 ) -> ArithmeticError {
-    ArithmeticError::conversion_overflow(
-        source_value,
-        source_type,
-        destination_type,
-        condition,
-    )
+    ArithmeticError::conversion_overflow(source_value, source_type, destination_type, condition)
 }
 
 /// Performs an exact integer coercion.
@@ -847,9 +842,7 @@ pub fn exact_int_f64(value: f64) -> Result<Int, ArithmeticError> {
     if !value.is_finite() || value.fract() != 0.0 {
         return Err(error());
     }
-    BigInt::from_f64(value)
-        .map(Int::from_big)
-        .ok_or_else(error)
+    BigInt::from_f64(value).map(Int::from_big).ok_or_else(error)
 }
 
 /// Converts an `f32` value to an adaptive integer when it is finite and integral.
@@ -868,18 +861,14 @@ pub fn exact_int_f32(value: f32) -> Result<Int, ArithmeticError> {
     if !value.is_finite() || value.fract() != 0.0 {
         return Err(error());
     }
-    BigInt::from_f32(value)
-        .map(Int::from_big)
-        .ok_or_else(error)
+    BigInt::from_f32(value).map(Int::from_big).ok_or_else(error)
 }
 
 /// Converts an `f64` to a fixed-width integer only when it is finite, integral, and in range.
 ///
 /// # Errors
 /// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
-pub fn exact_from_f64<T: IntegerDestination + 'static>(
-    value: f64,
-) -> Result<T, ArithmeticError> {
+pub fn exact_from_f64<T: IntegerDestination + 'static>(value: f64) -> Result<T, ArithmeticError> {
     let error = || {
         conversion_overflow(
             &value,
@@ -900,9 +889,7 @@ pub fn exact_from_f64<T: IntegerDestination + 'static>(
 ///
 /// # Errors
 /// Returns [`ArithmeticError::IntegerConversionOverflow`] otherwise.
-pub fn exact_from_f32<T: IntegerDestination + 'static>(
-    value: f32,
-) -> Result<T, ArithmeticError> {
+pub fn exact_from_f32<T: IntegerDestination + 'static>(value: f32) -> Result<T, ArithmeticError> {
     let error = || {
         conversion_overflow(
             &value,

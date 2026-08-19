@@ -1,0 +1,6 @@
+namespace union-return-unsupported
+from /core/types import int8, int32
+function choose int8 | int32
+  return 1
+function main
+  print; (choose)

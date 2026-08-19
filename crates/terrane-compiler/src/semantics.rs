@@ -1416,6 +1416,14 @@ fn validate_call_nodes<'a>(
     validate_resolved_assignment(package, unit, node, contracts)?;
     validate_integer_coercion_call(unit, node, scoped_bindings)?;
     if node.kind == SyntaxKind::CallExpression
+        && let Some(arguments) = node.children.get(1)
+    {
+        for argument in &arguments.children {
+            let value = argument.children.last().unwrap_or(argument);
+            infer_value_type(unit, value, scoped_bindings)?;
+        }
+    }
+    if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
         && let Some(symbol) =
@@ -2135,10 +2143,7 @@ fn analyze_binding_node(
                 type_node.span,
             ));
         };
-        if let Some(inferred) = inferred
-            && inferred != ValueType::Scalar(ty)
-            && let Some(initializer) = initializer
-        {
+        if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
             validate_numeric_destination(&unit.source, &name, ty, inferred, initializer, "T0002")?;
         }
         ValueType::Scalar(ty)
@@ -2169,11 +2174,11 @@ fn union_destination_candidates(
     unit: &SemanticUnit,
     type_node: &SyntaxNode,
 ) -> Result<Vec<ScalarType>, SemanticFailure> {
-    let names = node_text(&unit.source, type_node)
-        .split('|')
-        .map(str::trim)
-        .collect::<Vec<_>>();
-    if names.len() < 2 {
+    let Some(union) = type_node
+        .children
+        .first()
+        .filter(|child| child.kind == SyntaxKind::UnionType)
+    else {
         return Err(failure(
             &unit.source,
             "T0001",
@@ -2183,17 +2188,19 @@ fn union_destination_candidates(
             ),
             type_node.span,
         ));
-    }
-    names
-        .into_iter()
-        .map(|name| {
-            unit.descriptor_alias_at(name, type_node.span.start)
+    };
+    union
+        .children
+        .iter()
+        .map(|arm| {
+            let name = node_text(&unit.source, arm).trim();
+            unit.descriptor_alias_at(name, arm.span.start)
                 .ok_or_else(|| {
                     failure(
                         &unit.source,
                         "T0001",
                         format!("`{name}` does not resolve to a scalar type descriptor"),
-                        type_node.span,
+                        arm.span,
                     )
                 })
         })
@@ -2278,14 +2285,13 @@ fn validate_numeric_destination(
             value.span,
         ));
     };
-    if actual == expected {
+    if is_numeric(expected)
+        && let Some(constant) = contextual_constant(source, value, expected)
+    {
+        constant?;
         return Ok(());
     }
-    if is_numeric(expected)
-        && contextual_constant(source, value, expected)
-            .transpose()?
-            .is_some()
-    {
+    if actual == expected {
         return Ok(());
     }
     if is_numeric(actual) && is_numeric(expected) {
@@ -2736,6 +2742,18 @@ fn infer_binary_type(
     };
     let same = left == right;
     if contextual_numeric && left != right && left.is_integer() && right.is_integer() {
+        if contextual_constant(&unit.source, right_node, right).is_some() {
+            contextual_constant(&unit.source, right_node, left).expect(
+                "integer constant expression remains contextual across integer destinations",
+            )?;
+        }
+        if contextual_constant(&unit.source, left_node, left).is_some() {
+            contextual_constant(&unit.source, left_node, right).expect(
+                "integer constant expression remains contextual across integer destinations",
+            )?;
+        }
+    }
+    if contextual_numeric && left != right && left.is_integer() && right.is_integer() {
         return Ok(ValueType::Scalar(if comparison {
             ScalarType::Bool
         } else {
@@ -2875,7 +2893,10 @@ fn contextual_constant_value(
             };
             let operator = source.text()[left.span.end..right.span.start].trim();
             let valid = if destination.is_integer() {
-                matches!(operator, "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>")
+                matches!(
+                    operator,
+                    "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>"
+                )
             } else {
                 matches!(operator, "+" | "-" | "*" | "/" | "%")
             };
