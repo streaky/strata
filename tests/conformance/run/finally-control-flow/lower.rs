@@ -85,14 +85,11 @@ Break,
 Continue,
 }
 // Source: case.trn
-// Namespace: catch-coercion-error
-fn main() {
-    let value: i64 = 300;
-    let __terrane_completion_0: TerraneCompletion<()> = (|| {
-        let __terrane_try_0: TerraneCompletion<()> = (|| {
-            let narrow: i8 = match terrane_int_support::coerce::<i8>(&(value)) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at("/catch-coercion-error::main (case.trn:7:19)")) };
-            println!("{}", terrane_scalar_support::scalar_text(&(narrow)));
-            TerraneCompletion::Normal
+// Namespace: finally-control-flow
+fn early() -> terrane_int_support::Int {
+    let __terrane_completion_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+        let __terrane_try_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+            return TerraneCompletion::Return(terrane_int_support::Int::from(7_i128));
         })();
         match __terrane_try_0 {
             TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
@@ -101,10 +98,6 @@ fn main() {
             TerraneCompletion::Normal => {}
             TerraneCompletion::Error(__terrane_error_0) => {
                 let mut __terrane_handled_0 = false;
-                if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::IntegerConversionOverflow {
-                    __terrane_handled_0 = true;
-                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
-                }
                 if !__terrane_handled_0 {
                     return TerraneCompletion::Error(__terrane_error_0);
                 }
@@ -112,10 +105,52 @@ fn main() {
         }
         TerraneCompletion::Normal
     })();
+    println!("{}", terrane_scalar_support::scalar_text(&(String::from("return finally"))));
     match __terrane_completion_0 {
-        TerraneCompletion::Normal => {}
+        TerraneCompletion::Normal => unreachable!(),
         TerraneCompletion::Return(value) => return value,
         TerraneCompletion::Error(error) => __terrane_uncaught(error),
         TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
     }
+}
+fn main() {
+    let value: terrane_int_support::Int = early();
+    println!("{}", terrane_scalar_support::scalar_text(&(value)));
+    let mut counter: terrane_int_support::Int = terrane_int_support::Int::from(0_i128);
+    while counter.clone() < terrane_int_support::Int::from(3_i128) {
+        counter = counter.clone() + terrane_int_support::Int::from(1_i128);
+        let __terrane_completion_1: TerraneCompletion<()> = (|| {
+            let __terrane_try_1: TerraneCompletion<()> = (|| {
+                if counter.clone() == terrane_int_support::Int::from(1_i128) {
+                    return TerraneCompletion::Continue;
+                }
+                if counter.clone() == terrane_int_support::Int::from(2_i128) {
+                    return TerraneCompletion::Break;
+                }
+                TerraneCompletion::Normal
+            })();
+            match __terrane_try_1 {
+                TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+                TerraneCompletion::Break => return TerraneCompletion::Break,
+                TerraneCompletion::Continue => return TerraneCompletion::Continue,
+                TerraneCompletion::Normal => {}
+                TerraneCompletion::Error(__terrane_error_1) => {
+                    let mut __terrane_handled_1 = false;
+                    if !__terrane_handled_1 {
+                        return TerraneCompletion::Error(__terrane_error_1);
+                    }
+                }
+            }
+            TerraneCompletion::Normal
+        })();
+        println!("{}", terrane_scalar_support::scalar_text(&(String::from("loop finally"))));
+        match __terrane_completion_1 {
+            TerraneCompletion::Normal => {}
+            TerraneCompletion::Return(value) => return value,
+            TerraneCompletion::Error(error) => __terrane_uncaught(error),
+            TerraneCompletion::Break => break,
+            TerraneCompletion::Continue => continue,
+        }
+    }
+    println!("{}", terrane_scalar_support::scalar_text(&(String::from("done"))));
 }

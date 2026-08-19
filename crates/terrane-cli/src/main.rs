@@ -249,7 +249,7 @@ fn run_cargo(
                 continue;
             };
             let Some(association) = file.associations.iter().find(|association| {
-                association.generated_start <= byte_start && byte_start <= association.generated_end
+                association.generated_start <= byte_start && byte_start < association.generated_end
             }) else {
                 continue;
             };

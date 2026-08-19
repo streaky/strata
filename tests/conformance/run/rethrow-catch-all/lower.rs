@@ -1,21 +1,56 @@
 // Generated deterministically by Terrane <version>.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerraneErrorKind {
+ArithmeticOverflow,
+DivisionByZero,
+IntegerConversionOverflow,
+NegativeShiftCount,
+CoercionError,
+ResourceError,
+SourceError,
+}
+impl TerraneErrorKind {
+fn from_source_name(name: &str) -> Self {
+match name {
+".arithmetic-overflow" => Self::ArithmeticOverflow,
+".division-by-zero" => Self::DivisionByZero,
+".integer-conversion-overflow" => Self::IntegerConversionOverflow,
+".negative-shift-count" => Self::NegativeShiftCount,
+".coercion-error" => Self::CoercionError,
+".resource-error" => Self::ResourceError,
+_ => Self::SourceError,
+}
+}
+fn source_name(self) -> &'static str {
+match self {
+Self::ArithmeticOverflow => ".arithmetic-overflow",
+Self::DivisionByZero => ".division-by-zero",
+Self::IntegerConversionOverflow => ".integer-conversion-overflow",
+Self::NegativeShiftCount => ".negative-shift-count",
+Self::CoercionError => ".coercion-error",
+Self::ResourceError => ".resource-error",
+Self::SourceError => ".error",
+}
+}
+}
 #[derive(Clone, Debug)]
 struct TerraneError {
-kind: &'static str,
+kind: TerraneErrorKind,
 message: String,
 cause: Option<Box<TerraneError>>,
 context: Vec<&'static str>,
 }
 impl TerraneError {
-fn new(kind: &'static str, message: impl Into<String>) -> Self {
+fn new(kind: TerraneErrorKind, message: impl Into<String>) -> Self {
 Self { kind, message: message.into(), cause: None, context: Vec::new() }
 }
+#[allow(dead_code)]
 fn at(mut self, frame: &'static str) -> Self {
 self.context.push(frame);
 self
 }
 fn render(&self) -> String {
-let mut rendered = format!("{}: {}", self.kind, self.message);
+let mut rendered = format!("{}: {}", self.kind.source_name(), self.message);
 if let Some(cause) = &self.cause {
 rendered.push_str("\ncaused by: ");
 rendered.push_str(&cause.render());
@@ -34,7 +69,7 @@ formatter.write_str(&self.render())
 }
 impl From<terrane_int_support::ArithmeticError> for TerraneError {
 fn from(error: terrane_int_support::ArithmeticError) -> Self {
-Self::new(error.source_name(), error.to_string())
+Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {
@@ -56,7 +91,7 @@ fn main() {
         let __terrane_try_0: TerraneCompletion<()> = (|| {
             let __terrane_completion_1: TerraneCompletion<()> = (|| {
                 let __terrane_try_1: TerraneCompletion<()> = (|| {
-                    return TerraneCompletion::Error(TerraneError::new(".arithmetic-overflow", "fixed-width integer arithmetic overflow").at("case.trn:6:7"));
+                    return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::ArithmeticOverflow, "fixed-width integer arithmetic overflow").at("/rethrow-catch-all::main (case.trn:6:7)"));
                 })();
                 match __terrane_try_1 {
                     TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
@@ -65,7 +100,7 @@ fn main() {
                     TerraneCompletion::Normal => {}
                     TerraneCompletion::Error(__terrane_error_1) => {
                         let mut __terrane_handled_1 = false;
-                        if !__terrane_handled_1 && __terrane_error_1.kind == ".arithmetic-overflow" {
+                        if !__terrane_handled_1 && __terrane_error_1.kind == TerraneErrorKind::ArithmeticOverflow {
                             __terrane_handled_1 = true;
                             return TerraneCompletion::Error(__terrane_error_1.clone());
                         }

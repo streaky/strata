@@ -401,8 +401,9 @@ The remaining names in this section exist only so resolution has stable identiti
 
 The `/core/errors` interface and error objects are runtime identities used by `throw`,
 `try`, `catch`, and `finally`. Arithmetic and coercion failures enter the same typed
-result-propagation path and are catchable. Generated errors carry a stable kind, message,
-optional cause, and source-context chain; source-level field access is not implemented yet.
+result-propagation path and are catchable. Generated errors carry a closed typed kind, message,
+optional cause, and deterministic namespace/function/source-context chain; source-level field
+access is not implemented yet.
 
 ## Major planned surface absent today
 
@@ -413,7 +414,7 @@ collections: .list, .map, .set, .tuple, .range, .entry
 protocols and interfaces
 classes, structs, enums, traits, and constructors
 reflection beyond canonical scalar `.type`
-catchable error values and error hierarchies
+user-defined error objects, source-visible error fields, and error hierarchies
 bytes values and operations
 collection properties and methods
 general iteration protocols

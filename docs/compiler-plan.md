@@ -953,11 +953,13 @@ Deliver:
 Exit criterion: an arithmetic overflow and a failed coercion are catchable, a rethrow preserves the cause chain, uncaught output is unchanged from the current normative text, and generated Rust contains no panic-based control flow for recoverable failures.
 
 Implemented evidence: `throw`, ordered typed and catch-all `catch`, `try`, bare rethrow, and
-`finally` lower through `Result` rather than unwinding. Generated errors carry stable kind, message,
-optional cause, and source context; arithmetic and exact-conversion failures enter the same
-propagation path when recoverable. Conformance cases catch overflow and failed conversion, exercise
-checked callback failure, bare rethrow, catch-all ordering, and unconditional finally execution;
-reviewed Rust goldens contain no panic-based recoverable control flow.
+`finally` lower through compiler-owned completion and `Result` flow rather than unwinding. Generated
+errors use a typed closed kind, message, optional cause, and deterministic namespace/function/source
+context chain; arithmetic and exact-conversion failures enter the same propagation path when
+recoverable. Conformance cases catch overflow and failed conversion, exercise checked callback
+failure, bare rethrow, catch-all ordering, and unconditional finally execution. A CLI runtime case
+observes a chained uncaught error with Terrane frames and the established exit status; reviewed Rust
+goldens contain no panic-based recoverable control flow.
 
 ### Milestone 10 — Named bounded-arithmetic families
 

@@ -1,0 +1,20 @@
+namespace finally-control-flow
+function early int
+  try
+    return 7
+  finally
+    print; >return finally
+function main
+  value int = early;
+  print; value
+  counter int = 0
+  while counter < 3
+    counter++
+    try
+      if counter == 1
+        continue
+      if counter == 2
+        break
+    finally
+      print; >loop finally
+  print; >done
