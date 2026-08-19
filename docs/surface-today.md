@@ -403,7 +403,8 @@ The `/core/errors` interface and error objects are runtime identities used by `t
 `try`, `catch`, and `finally`. Arithmetic and coercion failures enter the same typed
 result-propagation path and are catchable. Generated errors carry a closed typed kind, message,
 optional cause, and deterministic namespace/function/source-context chain; source-level field
-access is not implemented yet.
+access is not implemented yet, so `catch ... as name` is rejected with `T0027` rather than
+creating an error value that cannot be used.
 
 ## Major planned surface absent today
 

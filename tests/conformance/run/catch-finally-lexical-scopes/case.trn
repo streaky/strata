@@ -4,8 +4,7 @@ from /core/errors import arithmetic-overflow, coercion-error
 function typed-catch
   try
     throw arithmetic-overflow
-  catch arithmetic-overflow as failure
-    failure
+  catch arithmetic-overflow
     caught = 1
     print; caught
   finally
@@ -15,8 +14,7 @@ function typed-catch
 function catch-all
   try
     throw coercion-error
-  catch as failure
-    failure
+  catch
     caught = 3
     print; caught
 

@@ -843,15 +843,6 @@ impl Emitter<'_> {
             self.line(&format!("if {condition} {{"));
             self.indent += 1;
             self.line(&format!("__terrane_handled_{index} = true;"));
-            if let Some(alias) = clause
-                .children
-                .iter()
-                .find(|child| child.kind == SyntaxKind::CatchBinding)
-            {
-                let alias = rust_name(self.text(alias));
-                self.line(&format!("let {alias} = __terrane_error_{index}.clone();"));
-                self.line(&format!("let _ = &{alias};"));
-            }
             let outer_error = self
                 .current_error
                 .replace(format!("__terrane_error_{index}"));

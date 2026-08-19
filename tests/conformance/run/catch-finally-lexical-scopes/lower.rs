@@ -100,8 +100,6 @@ fn typed_catch() {
                 let mut __terrane_handled_0 = false;
                 if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::ArithmeticOverflow {
                     __terrane_handled_0 = true;
-                    let failure = __terrane_error_0.clone();
-                    let _ = &failure;
                     let caught: i64 = 1;
                     println!("{}", terrane_scalar_support::scalar_text(&(caught)));
                 }
@@ -124,7 +122,7 @@ fn typed_catch() {
 fn catch_all() {
     let __terrane_completion_1: TerraneCompletion<()> = (|| {
         let __terrane_try_1: TerraneCompletion<()> = (|| {
-            return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::CoercionError, "coercion has no compatible result").at("/catch-finally-lexical-scopes::catch-all (case.trn:17:5)"));
+            return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::CoercionError, "coercion has no compatible result").at("/catch-finally-lexical-scopes::catch-all (case.trn:16:5)"));
         })();
         match __terrane_try_1 {
             TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
@@ -135,8 +133,6 @@ fn catch_all() {
                 let mut __terrane_handled_1 = false;
                 if !__terrane_handled_1 {
                     __terrane_handled_1 = true;
-                    let failure = __terrane_error_1.clone();
-                    let _ = &failure;
                     let caught: i64 = 3;
                     println!("{}", terrane_scalar_support::scalar_text(&(caught)));
                 }

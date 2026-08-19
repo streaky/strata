@@ -457,6 +457,18 @@ fn validate_error_clauses(package: &SemanticPackage) -> Result<(), SemanticFailu
                 .iter()
                 .filter(|child| child.kind == SyntaxKind::CatchClause)
             {
+                if let Some(alias) = clause
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::CatchBinding)
+                {
+                    return Err(failure(
+                        &unit.source,
+                        "T0027",
+                        "catch aliases are unavailable until error values expose source-level members",
+                        alias.span,
+                    ));
+                }
                 let Some(descriptor) = clause
                     .children
                     .first()
@@ -3852,19 +3864,6 @@ fn populate_node(
                 parent: Some(index),
                 symbols: BTreeMap::new(),
             });
-            if let Some(alias) = node
-                .children
-                .iter()
-                .find(|child| child.kind == SyntaxKind::CatchBinding)
-            {
-                insert_local(
-                    unit,
-                    scopes,
-                    catch_index,
-                    node_text(&unit.source, alias).to_owned(),
-                    alias.span,
-                )?;
-            }
             if let Some(block) = node.children.last()
                 && block.kind == SyntaxKind::Block
             {
