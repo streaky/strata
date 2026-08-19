@@ -106,6 +106,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     ensure_rust_toolchain()?;
     let crate_dir = generated_crate_path(&package.root, &compilation.rust_files)?;
     write_generated_crate(&crate_dir, &compilation.rust_files, &package.units)?;
+    record_and_prune_generated_crates(&crate_dir)?;
     let target_dir = package.root.join(".trn/cache/target");
     let executable = prepare_artifact(
         command,
@@ -330,6 +331,42 @@ fn generated_crate_path(
         .join(format!("{:x}", hash.finalize())))
 }
 
+fn record_and_prune_generated_crates(active: &Path) -> Result<(), CliFailure> {
+    const MAX_GENERATED_CRATES: usize = 8;
+
+    fs::write(active.join(".last-used"), []).map_err(|error| {
+        CliFailure::backend(format!("cannot record generated crate use: {error}"))
+    })?;
+    let root = active
+        .parent()
+        .expect("generated crate identity always has a build directory");
+    let mut inactive = fs::read_dir(root)
+        .map_err(|error| CliFailure::backend(format!("cannot inspect generated crates: {error}")))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path() != active && entry.path().is_dir())
+        .filter_map(|entry| {
+            let used = entry
+                .path()
+                .join(".last-used")
+                .metadata()
+                .or_else(|_| entry.metadata())
+                .and_then(|metadata| metadata.modified())
+                .ok()?;
+            Some((used, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    inactive.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_, path) in inactive.into_iter().skip(MAX_GENERATED_CRATES - 1) {
+        fs::remove_dir_all(&path).map_err(|error| {
+            CliFailure::backend(format!(
+                "cannot evict stale generated crate {}: {error}",
+                path.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 fn write_generated_crate(
     directory: &Path,
     rust_files: &[terrane_compiler::rust_ir::RenderedFile],
@@ -492,6 +529,25 @@ mod tests {
         assert!(failure.message.contains("case.trn:1:1: error[S9003]"));
         assert!(failure.message.contains("raw rustc diagnostic"));
         assert!(failure.message.contains("missing_backend_name"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn generated_crate_cache_evicts_stale_identities() {
+        let directory =
+            std::env::temp_dir().join(format!("terrane-cache-eviction-{}", std::process::id()));
+        if directory.exists() {
+            fs::remove_dir_all(&directory).unwrap();
+        }
+        fs::create_dir_all(&directory).unwrap();
+        for index in 0..10 {
+            let identity = directory.join(format!("{index:02}"));
+            fs::create_dir(&identity).unwrap();
+            assert!(record_and_prune_generated_crates(&identity).is_ok());
+        }
+        let identities = fs::read_dir(&directory).unwrap().count();
+        assert_eq!(identities, 8);
+        assert!(directory.join("09").is_dir());
         fs::remove_dir_all(directory).unwrap();
     }
 }

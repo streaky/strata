@@ -380,8 +380,8 @@ A top-level plain assignment creates a namespace variable. Functions cannot read
 | any integer | `.coerce.checked; D` | family child | destination value or `none` |
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |
 | fixed-width integer | `.coerce.saturate; D` | family child | destination value with saturation policy |
-| any value | `.parse; callback` | family default | callback's declared return |
-| any value | `.parse.checked; callback` | family child | callback's declared return or `none` |
+| `string` | `.parse; callback` | family default | callback's declared return |
+| `string` | `.parse.checked; callback` | family child | callback's declared return or `none` |
 | `string` | `.radix; base` | method | adaptive `int` interpretation |
 | any integer | `.radix; base` | method | lowercase base-N `string` |
 

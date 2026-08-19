@@ -1,0 +1,20 @@
+namespace finally-error-replacement
+from /core/errors import arithmetic-overflow, coercion-error
+throws function error-then-return int
+  try
+    throw arithmetic-overflow
+  finally
+    return 7
+throws function return-then-error int
+  try
+    return 8
+  finally
+    throw coercion-error
+function main
+  first int = error-then-return;
+  print; first
+  try
+    second int = return-then-error;
+    print; second
+  catch coercion-error
+    print; >replaced

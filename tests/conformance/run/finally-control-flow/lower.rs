@@ -76,6 +76,10 @@ fn __terrane_uncaught(error: TerraneError) -> ! {
 eprintln!("{}", error.render());
 std::process::exit(1);
 }
+fn __terrane_generated_defect(message: &str) -> ! {
+eprintln!("internal compiler defect: generated program reached an impossible completion: {message}");
+std::process::exit(5);
+}
 #[allow(dead_code)]
 enum TerraneCompletion<T> {
 Normal,
@@ -87,7 +91,7 @@ Continue,
 // Source: case.trn
 // Namespace: finally-control-flow
 fn early() -> terrane_int_support::Int {
-    let __terrane_completion_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+    let mut __terrane_completion_0: TerraneCompletion<terrane_int_support::Int> = (|| {
         let __terrane_try_0: TerraneCompletion<terrane_int_support::Int> = (|| {
             return TerraneCompletion::Return(terrane_int_support::Int::from(7_i128));
         })();
@@ -105,12 +109,19 @@ fn early() -> terrane_int_support::Int {
         }
         TerraneCompletion::Normal
     })();
-    println!("{}", terrane_scalar_support::scalar_text(&(String::from("return finally"))));
+    let __terrane_finally_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+        println!("{}", terrane_scalar_support::scalar_text(&(String::from("return finally"))));
+        TerraneCompletion::Normal
+    })();
+    match __terrane_finally_0 {
+        TerraneCompletion::Normal => {}
+        replacement => __terrane_completion_0 = replacement,
+    }
     match __terrane_completion_0 {
-        TerraneCompletion::Normal => unreachable!(),
+        TerraneCompletion::Normal => __terrane_generated_defect("non-fallthrough try completed normally"),
         TerraneCompletion::Return(value) => return value,
         TerraneCompletion::Error(error) => __terrane_uncaught(error),
-        TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
+        TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
     }
 }
 fn main() {
@@ -119,7 +130,7 @@ fn main() {
     let mut counter: terrane_int_support::Int = terrane_int_support::Int::from(0_i128);
     while counter.clone() < terrane_int_support::Int::from(3_i128) {
         counter = counter.clone() + terrane_int_support::Int::from(1_i128);
-        let __terrane_completion_1: TerraneCompletion<()> = (|| {
+        let mut __terrane_completion_1: TerraneCompletion<()> = (|| {
             let __terrane_try_1: TerraneCompletion<()> = (|| {
                 if counter.clone() == terrane_int_support::Int::from(1_i128) {
                     return TerraneCompletion::Continue;
@@ -143,7 +154,14 @@ fn main() {
             }
             TerraneCompletion::Normal
         })();
-        println!("{}", terrane_scalar_support::scalar_text(&(String::from("loop finally"))));
+        let __terrane_finally_1: TerraneCompletion<()> = (|| {
+            println!("{}", terrane_scalar_support::scalar_text(&(String::from("loop finally"))));
+            TerraneCompletion::Normal
+        })();
+        match __terrane_finally_1 {
+            TerraneCompletion::Normal => {}
+            replacement => __terrane_completion_1 = replacement,
+        }
         match __terrane_completion_1 {
             TerraneCompletion::Normal => {}
             TerraneCompletion::Return(value) => return value,

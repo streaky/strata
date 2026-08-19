@@ -76,6 +76,10 @@ fn __terrane_uncaught(error: TerraneError) -> ! {
 eprintln!("{}", error.render());
 std::process::exit(1);
 }
+fn __terrane_generated_defect(message: &str) -> ! {
+eprintln!("internal compiler defect: generated program reached an impossible completion: {message}");
+std::process::exit(5);
+}
 #[allow(dead_code)]
 enum TerraneCompletion<T> {
 Normal,

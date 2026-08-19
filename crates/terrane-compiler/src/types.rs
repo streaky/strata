@@ -53,13 +53,7 @@ impl TypeCategory {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DescriptorSchema {
-    pub scalar: ScalarType,
-    pub bit_width: Option<u16>,
-    pub signed: Option<bool>,
-    pub minimum: Option<&'static str>,
-    pub maximum: Option<&'static str>,
     pub categories: &'static [TypeCategory],
-    pub protocols: &'static [&'static str],
 }
 
 const VALUE_CATEGORIES: &[TypeCategory] = &[TypeCategory::Value, TypeCategory::Object];
@@ -91,9 +85,6 @@ const FLOATING_CATEGORIES: &[TypeCategory] = &[
     TypeCategory::Number,
     TypeCategory::Floating,
 ];
-const NO_PROTOCOLS: &[&str] = &[];
-const NUMERIC_PROTOCOLS: &[&str] = &["coerce"];
-const STRING_PROTOCOLS: &[&str] = &["parse", "radix"];
 
 impl ScalarType {
     pub const ALL: [Self; 16] = [
@@ -197,129 +188,20 @@ impl ScalarType {
             .find_map(|(source_name, ty)| (source_name == name).then_some(ty))
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the complete scalar descriptor table is clearer and reviewable as one exhaustive match"
-    )]
     #[must_use]
     pub const fn descriptor_schema(self) -> DescriptorSchema {
-        let (bit_width, signed, minimum, maximum, categories, protocols) = match self {
-            Self::Int => (
-                None,
-                Some(true),
-                None,
-                None,
-                INTEGER_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Int8 => (
-                Some(8),
-                Some(true),
-                Some("-128"),
-                Some("127"),
-                SIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Int16 => (
-                Some(16),
-                Some(true),
-                Some("-32768"),
-                Some("32767"),
-                SIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Int32 => (
-                Some(32),
-                Some(true),
-                Some("-2147483648"),
-                Some("2147483647"),
-                SIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Int64 => (
-                Some(64),
-                Some(true),
-                Some("-9223372036854775808"),
-                Some("9223372036854775807"),
-                SIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Int128 => (
-                Some(128),
-                Some(true),
-                Some("-170141183460469231731687303715884105728"),
-                Some("170141183460469231731687303715884105727"),
-                SIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Uint8 => (
-                Some(8),
-                Some(false),
-                Some("0"),
-                Some("255"),
-                UNSIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Uint16 => (
-                Some(16),
-                Some(false),
-                Some("0"),
-                Some("65535"),
-                UNSIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Uint32 => (
-                Some(32),
-                Some(false),
-                Some("0"),
-                Some("4294967295"),
-                UNSIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Uint64 => (
-                Some(64),
-                Some(false),
-                Some("0"),
-                Some("18446744073709551615"),
-                UNSIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Uint128 => (
-                Some(128),
-                Some(false),
-                Some("0"),
-                Some("340282366920938463463374607431768211455"),
-                UNSIGNED_FIXED_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Float32 => (
-                Some(32),
-                Some(true),
-                None,
-                None,
-                FLOATING_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::Float64 => (
-                Some(64),
-                Some(true),
-                None,
-                None,
-                FLOATING_CATEGORIES,
-                NUMERIC_PROTOCOLS,
-            ),
-            Self::String => (None, None, None, None, VALUE_CATEGORIES, STRING_PROTOCOLS),
-            Self::Bool | Self::None => (None, None, None, None, VALUE_CATEGORIES, NO_PROTOCOLS),
+        let categories = match self {
+            Self::Int => INTEGER_CATEGORIES,
+            Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 | Self::Int128 => {
+                SIGNED_FIXED_CATEGORIES
+            }
+            Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64 | Self::Uint128 => {
+                UNSIGNED_FIXED_CATEGORIES
+            }
+            Self::Float32 | Self::Float64 => FLOATING_CATEGORIES,
+            Self::Bool | Self::String | Self::None => VALUE_CATEGORIES,
         };
-        DescriptorSchema {
-            scalar: self,
-            bit_width,
-            signed,
-            minimum,
-            maximum,
-            categories,
-            protocols,
-        }
+        DescriptorSchema { categories }
     }
 
     #[must_use]

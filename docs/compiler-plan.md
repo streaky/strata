@@ -866,18 +866,18 @@ Generated artifacts should be organized under a project-local ignored directory 
 
 Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens. Goldens pin canonical float display at both `float32` and `float64` width for `nan`, `inf`, `-inf`, negative zero, and shortest round-trippable finite values; they pin one multi-argument `print` call proving that arguments render adjacently with no inserted separator and exactly one trailing newline, alongside adjacent `print` calls proving record separation; and generated-project goldens include both authored lowered modules and the vendored support copy.
 
-Implemented evidence: lowering now produces an explicit deterministic Rust IR whose renderer splits
-authored units from the entrypoint, uses injective source-name encoding, and exposes the complete
-rendered file set to the CLI. Generated projects contain stable authored paths, copied
-content-addressed support crates, manifests, compiler/source metadata, and a build identity covering
-compiler version, source and support content, target, profile, and command-relevant environment.
-Successful checks and native executables are retained under that identity, so repeated package
-checks, builds, and runs reuse the package artifact without depending on the shared Cargo target
-directory. `check`, `build`, and `run` share captured Cargo execution when an artifact is absent;
-`rust` renders the authored output plus explicit authored-module and vendored-support path lists for
-inspection. Pipeline and CLI tests pin byte identity, generated authored and support files, artifact
-reuse, and generated file layout; compile/run conformance cases validate the generated crates with
-warnings denied.
+Implemented evidence: lowering now produces a deterministic compiler-owned program/file model whose
+renderer splits authored units from the entrypoint, uses injective source-name encoding, and exposes
+the complete rendered file set to the CLI. Item bodies remain rendered Rust inside that model rather
+than a fully structural expression/statement IR. Generated projects contain stable authored paths,
+copied content-addressed support crates, manifests, compiler/source metadata, and a build identity
+covering compiler version, source and support content, target, profile, and command-relevant
+environment. Successful checks and native executables are retained under that identity; stale
+generated identities are bounded by last use. `check`, `build`, and `run` share captured Cargo
+execution when an artifact is absent; `rust` renders authored output plus authored-module and
+vendored-support path lists. Pipeline and CLI tests pin byte identity, generated authored and support
+files, artifact reuse, eviction, and generated file layout; compile/run conformance cases validate
+the generated crates with warnings denied.
 
 ### Milestone 6 — Source diagnostics across Rust
 
@@ -914,10 +914,11 @@ Deliver:
 
 Exit criterion: category membership drives at least one real decision the compiler previously made by enumeration, `is a` answers abstract descriptors correctly, and no scalar is boxed merely to model source conformance.
 
-Implemented evidence: compiler-owned descriptor schemas now declare scalar bounds, widths,
-signedness, categories, and protocols. Abstract category membership drives `is a` and numeric
-classification without runtime boxing. `/core/types` exports category descriptors as explicit-only
-names. Accepted and rejected conformance cases cover abstract membership and descriptor misuse.
+Implemented evidence: compiler-owned descriptor schemas declare category membership, which drives
+`is a` and numeric classification without runtime boxing. Scalar representation facts such as
+bounds, widths, and signedness remain canonical `ScalarType` contracts rather than being duplicated
+in the category schema. `/core/types` exports category descriptors as explicit-only names. Accepted
+and rejected conformance cases cover abstract membership and descriptor misuse.
 
 ### Milestone 8 — Callable signatures and bound-method families
 
@@ -933,11 +934,12 @@ Deliver:
 
 Exit criterion: adding a new member family requires no new parser or lowering route, proven by re-expressing coercion and adding one further family through the shared path only.
 
-Implemented evidence: semantic analysis represents member families, bound methods, and callable
-signatures explicitly. Coercion, parse, and radix share family binding, immediate-invocation
-validation, argument-count checks, receiver constraints, child selection, and result typing.
-Conformance cases exercise default and checked children, callback-derived return types, radix in
-both directions, and source diagnostics for invalid receivers, callback signatures, and arguments.
+Implemented evidence: semantic analysis represents member families and bound methods explicitly.
+Coercion, parse, and radix share family binding, immediate-invocation validation, receiver and
+argument checks, child selection, and result typing; lowering consumes the same bound-method result
+for all three families. Conformance cases exercise default and checked children, callback-derived
+return types, radix in both directions, and source diagnostics for invalid receivers, callback
+signatures, and arguments.
 
 ### Milestone 9 — Structured errors and typed propagation
 

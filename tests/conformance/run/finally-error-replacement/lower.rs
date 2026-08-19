@@ -89,11 +89,11 @@ Break,
 Continue,
 }
 // Source: case.trn
-// Namespace: catch-finally-lexical-scopes
-fn typed_catch() {
-    let mut __terrane_completion_0: TerraneCompletion<()> = (|| {
-        let __terrane_try_0: TerraneCompletion<()> = (|| {
-            return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::ArithmeticOverflow, "fixed-width integer arithmetic overflow").at("/catch-finally-lexical-scopes::typed-catch (case.trn:6:5)"));
+// Namespace: finally-error-replacement
+fn error_then_return() -> Result<terrane_int_support::Int, TerraneError> {
+    let mut __terrane_completion_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+        let __terrane_try_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+            return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::ArithmeticOverflow, "fixed-width integer arithmetic overflow").at("/finally-error-replacement::error-then-return (case.trn:5:5)"));
         })();
         match __terrane_try_0 {
             TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
@@ -102,11 +102,6 @@ fn typed_catch() {
             TerraneCompletion::Normal => {}
             TerraneCompletion::Error(__terrane_error_0) => {
                 let mut __terrane_handled_0 = false;
-                if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::ArithmeticOverflow {
-                    __terrane_handled_0 = true;
-                    let caught: i64 = 1;
-                    println!("{}", terrane_scalar_support::scalar_text(&(caught)));
-                }
                 if !__terrane_handled_0 {
                     return TerraneCompletion::Error(__terrane_error_0);
                 }
@@ -114,26 +109,24 @@ fn typed_catch() {
         }
         TerraneCompletion::Normal
     })();
-    let __terrane_finally_0: TerraneCompletion<()> = (|| {
-        let completed: i64 = 2;
-        println!("{}", terrane_scalar_support::scalar_text(&(completed)));
-        TerraneCompletion::Normal
+    let __terrane_finally_0: TerraneCompletion<terrane_int_support::Int> = (|| {
+        return TerraneCompletion::Return(terrane_int_support::Int::from(7_i128));
     })();
     match __terrane_finally_0 {
         TerraneCompletion::Normal => {}
         replacement => __terrane_completion_0 = replacement,
     }
     match __terrane_completion_0 {
-        TerraneCompletion::Normal => {}
-        TerraneCompletion::Return(value) => return value,
-        TerraneCompletion::Error(error) => __terrane_uncaught(error),
+        TerraneCompletion::Normal => __terrane_generated_defect("non-fallthrough try completed normally"),
+        TerraneCompletion::Return(value) => return Ok(value),
+        TerraneCompletion::Error(error) => return Err(error),
         TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
     }
 }
-fn catch_all() {
-    let __terrane_completion_1: TerraneCompletion<()> = (|| {
-        let __terrane_try_1: TerraneCompletion<()> = (|| {
-            return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::CoercionError, "coercion has no compatible result").at("/catch-finally-lexical-scopes::catch-all (case.trn:16:5)"));
+fn return_then_error() -> Result<terrane_int_support::Int, TerraneError> {
+    let mut __terrane_completion_1: TerraneCompletion<terrane_int_support::Int> = (|| {
+        let __terrane_try_1: TerraneCompletion<terrane_int_support::Int> = (|| {
+            return TerraneCompletion::Return(terrane_int_support::Int::from(8_i128));
         })();
         match __terrane_try_1 {
             TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
@@ -143,25 +136,57 @@ fn catch_all() {
             TerraneCompletion::Error(__terrane_error_1) => {
                 let mut __terrane_handled_1 = false;
                 if !__terrane_handled_1 {
-                    __terrane_handled_1 = true;
-                    let caught: i64 = 3;
-                    println!("{}", terrane_scalar_support::scalar_text(&(caught)));
-                }
-                if !__terrane_handled_1 {
                     return TerraneCompletion::Error(__terrane_error_1);
                 }
             }
         }
         TerraneCompletion::Normal
     })();
+    let __terrane_finally_1: TerraneCompletion<terrane_int_support::Int> = (|| {
+        return TerraneCompletion::Error(TerraneError::new(TerraneErrorKind::CoercionError, "coercion has no compatible result").at("/finally-error-replacement::return-then-error (case.trn:12:5)"));
+    })();
+    match __terrane_finally_1 {
+        TerraneCompletion::Normal => {}
+        replacement => __terrane_completion_1 = replacement,
+    }
     match __terrane_completion_1 {
+        TerraneCompletion::Normal => __terrane_generated_defect("non-fallthrough try completed normally"),
+        TerraneCompletion::Return(value) => return Ok(value),
+        TerraneCompletion::Error(error) => return Err(error),
+        TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
+    }
+}
+fn main() {
+    let first: terrane_int_support::Int = (error_then_return()).unwrap_or_else(|error| __terrane_uncaught(error.at("/finally-error-replacement::main (case.trn:14:15)")));
+    println!("{}", terrane_scalar_support::scalar_text(&(first)));
+    let __terrane_completion_2: TerraneCompletion<()> = (|| {
+        let __terrane_try_2: TerraneCompletion<()> = (|| {
+            let second: terrane_int_support::Int = match return_then_error() { Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.at("/finally-error-replacement::main (case.trn:17:18)")) };
+            println!("{}", terrane_scalar_support::scalar_text(&(second)));
+            TerraneCompletion::Normal
+        })();
+        match __terrane_try_2 {
+            TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+            TerraneCompletion::Break => return TerraneCompletion::Break,
+            TerraneCompletion::Continue => return TerraneCompletion::Continue,
+            TerraneCompletion::Normal => {}
+            TerraneCompletion::Error(__terrane_error_2) => {
+                let mut __terrane_handled_2 = false;
+                if !__terrane_handled_2 && __terrane_error_2.kind == TerraneErrorKind::CoercionError {
+                    __terrane_handled_2 = true;
+                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("replaced"))));
+                }
+                if !__terrane_handled_2 {
+                    return TerraneCompletion::Error(__terrane_error_2);
+                }
+            }
+        }
+        TerraneCompletion::Normal
+    })();
+    match __terrane_completion_2 {
         TerraneCompletion::Normal => {}
         TerraneCompletion::Return(value) => return value,
         TerraneCompletion::Error(error) => __terrane_uncaught(error),
         TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
     }
-}
-fn main() {
-    typed_catch();
-    catch_all();
 }

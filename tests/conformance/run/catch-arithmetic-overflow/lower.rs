@@ -76,6 +76,10 @@ fn __terrane_uncaught(error: TerraneError) -> ! {
 eprintln!("{}", error.render());
 std::process::exit(1);
 }
+fn __terrane_generated_defect(message: &str) -> ! {
+eprintln!("internal compiler defect: generated program reached an impossible completion: {message}");
+std::process::exit(5);
+}
 #[allow(dead_code)]
 enum TerraneCompletion<T> {
 Normal,
@@ -87,7 +91,7 @@ Continue,
 // Source: case.trn
 // Namespace: catch-arithmetic-overflow
 fn main() {
-    let __terrane_completion_0: TerraneCompletion<()> = (|| {
+    let mut __terrane_completion_0: TerraneCompletion<()> = (|| {
         let __terrane_try_0: TerraneCompletion<()> = (|| {
             let mut value: i8 = 127;
             value = match terrane_int_support::fixed_addition(value, 1) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at("/catch-arithmetic-overflow::main (case.trn:7:13)")) };
@@ -112,11 +116,18 @@ fn main() {
         }
         TerraneCompletion::Normal
     })();
-    println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
+    let __terrane_finally_0: TerraneCompletion<()> = (|| {
+        println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
+        TerraneCompletion::Normal
+    })();
+    match __terrane_finally_0 {
+        TerraneCompletion::Normal => {}
+        replacement => __terrane_completion_0 = replacement,
+    }
     match __terrane_completion_0 {
         TerraneCompletion::Normal => {}
         TerraneCompletion::Return(value) => return value,
         TerraneCompletion::Error(error) => __terrane_uncaught(error),
-        TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
+        TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
     }
 }

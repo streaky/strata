@@ -106,13 +106,6 @@ pub struct BoundMethod {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CallableSignature {
-    pub parameter_count: usize,
-    pub result: ValueType,
-    pub fallible: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CoercionPolicy {
     Default,
     Checked,
@@ -121,7 +114,7 @@ pub(crate) enum CoercionPolicy {
 }
 
 impl CoercionPolicy {
-    fn from_member(member: &str) -> Option<Self> {
+    pub(crate) fn from_member(member: &str) -> Option<Self> {
         match member {
             "checked" => Some(Self::Checked),
             "wrap" => Some(Self::Wrap),
@@ -3107,12 +3100,12 @@ pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<B
             child,
         });
     }
-    let [source_node, family_node] = receiver.children.as_slice() else {
-        return None;
-    };
     if receiver.kind != SyntaxKind::MemberExpression {
         return None;
     }
+    let [source_node, family_node] = receiver.children.as_slice() else {
+        return None;
+    };
     let selection = match (node_text(source, family_node), member_name) {
         ("coerce", "checked") => (MemberFamily::Coerce, "checked"),
         ("coerce", "wrap") => (MemberFamily::Coerce, "wrap"),

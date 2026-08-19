@@ -38,34 +38,18 @@ pub struct Item {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Block {
-    pub lines: Vec<RustLine>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RustLine {
-    pub text: String,
-    pub newline: bool,
+    rendered: String,
 }
 
 impl Block {
     fn from_rendered(rust: &str) -> Self {
-        let lines = rust
-            .split_inclusive('\n')
-            .map(|line| RustLine {
-                text: line.strip_suffix('\n').unwrap_or(line).to_owned(),
-                newline: line.ends_with('\n'),
-            })
-            .collect();
-        Self { lines }
+        Self {
+            rendered: rust.to_owned(),
+        }
     }
 
     fn render(&self, output: &mut String) {
-        for line in &self.lines {
-            output.push_str(&line.text);
-            if line.newline {
-                output.push('\n');
-            }
-        }
+        output.push_str(&self.rendered);
     }
 }
 

@@ -8,7 +8,7 @@ use crate::{
     semantics::{
         CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily, SemanticPackage,
         SemanticUnit, SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, bound_method,
-        contextual_constant, integer_coercion_call, promoted_integer_type,
+        contextual_constant, promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -163,6 +163,9 @@ fn emit_error_support(output: &mut String) {
          Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
          eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
+         fn __terrane_generated_defect(message: &str) -> ! {\n\
+         eprintln!(\"internal compiler defect: generated program reached an impossible completion: {message}\");\n\
+         std::process::exit(5);\n}\n\
          #[allow(dead_code)]\nenum TerraneCompletion<T> {\nNormal,\nReturn(T),\nError(TerraneError),\nBreak,\nContinue,\n}\n",
     );
 }
@@ -789,8 +792,17 @@ impl Emitter<'_> {
         let index = self.try_counter;
         self.try_counter += 1;
         let result = self.return_type.map_or("()", rust_type);
+        let mutable = if node
+            .children
+            .iter()
+            .any(|child| child.kind == SyntaxKind::FinallyClause)
+        {
+            "mut "
+        } else {
+            ""
+        };
         self.line(&format!(
-            "let __terrane_completion_{index}: TerraneCompletion<{result}> = (|| {{"
+            "let {mutable}__terrane_completion_{index}: TerraneCompletion<{result}> = (|| {{"
         ));
         self.indent += 1;
         self.line(&format!(
@@ -876,14 +888,37 @@ impl Emitter<'_> {
             .find(|child| child.kind == SyntaxKind::FinallyClause)
             .and_then(|clause| clause.children.first())
         {
+            self.line(&format!(
+                "let __terrane_finally_{index}: TerraneCompletion<{result}> = (|| {{"
+            ));
+            self.indent += 1;
+            let outer_completion = std::mem::replace(&mut self.try_completion, true);
+            let outer_propagation = std::mem::replace(&mut self.propagate_errors, true);
+            let outer_function_errors = std::mem::replace(&mut self.function_errors, false);
             self.block(finally);
+            if block_may_fall_through(finally) {
+                self.line("TerraneCompletion::Normal");
+            }
+            self.function_errors = outer_function_errors;
+            self.propagate_errors = outer_propagation;
+            self.try_completion = outer_completion;
+            self.indent -= 1;
+            self.line("})();");
+            self.line(&format!("match __terrane_finally_{index} {{"));
+            self.indent += 1;
+            self.line("TerraneCompletion::Normal => {}");
+            self.line(&format!(
+                "replacement => __terrane_completion_{index} = replacement,"
+            ));
+            self.indent -= 1;
+            self.line("}");
         }
         self.line(&format!("match __terrane_completion_{index} {{"));
         self.indent += 1;
         if statement_may_fall_through(node) {
             self.line("TerraneCompletion::Normal => {}");
         } else {
-            self.line("TerraneCompletion::Normal => unreachable!(),");
+            self.line("TerraneCompletion::Normal => __terrane_generated_defect(\"non-fallthrough try completed normally\"),");
         }
         if self.try_completion {
             self.line(
@@ -908,7 +943,7 @@ impl Emitter<'_> {
                 self.line("TerraneCompletion::Continue => continue,");
             }
         } else {
-            self.line("TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),");
+            self.line("TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect(\"loop control escaped a non-loop try\"),");
         }
         self.indent -= 1;
         self.line("}");
@@ -1626,15 +1661,13 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
-        if let Some(coercion) = self.integer_coercion(callee, arguments) {
-            return coercion;
-        }
-        if let Some(method) = bound_method(self.source, callee)
-            && method.family != MemberFamily::Coerce
-        {
+        if let Some(method) = bound_method(self.source, callee) {
             let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
                 .expect("validated bound method receiver");
             let receiver = self.expression(receiver_node);
+            if method.family == MemberFamily::Coerce {
+                return self.integer_coercion(&method, receiver_node, callee, arguments);
+            }
             let argument = arguments
                 .children
                 .first()
@@ -1901,14 +1934,26 @@ impl Emitter<'_> {
         )
     }
 
-    fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
-        let (receiver, policy) = integer_coercion_call(self.source, callee)?;
+    fn integer_coercion(
+        &mut self,
+        method: &crate::BoundMethod,
+        receiver: &SyntaxNode,
+        callee: &SyntaxNode,
+        arguments: &SyntaxNode,
+    ) -> String {
+        let policy = match method.child {
+            "default" => CoercionPolicy::Default,
+            child => CoercionPolicy::from_member(child)
+                .expect("validated coercion family child must select a policy"),
+        };
         let destination = arguments
             .children
             .first()
             .and_then(|argument| argument.children.last())
             .unwrap_or_else(|| &arguments.children[0]);
-        let destination = self.descriptor_type(destination)?;
+        let destination = self
+            .descriptor_type(destination)
+            .expect("validated coercion destination must resolve to a scalar descriptor");
         let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
             && self.lazy_namespace_binding_type(receiver).is_some();
         if policy == CoercionPolicy::Default
@@ -1916,16 +1961,15 @@ impl Emitter<'_> {
             && let Some(ValueType::Scalar(source)) = self.value_type(receiver)
         {
             if source == destination {
-                return Some(
-                    if destination == ScalarType::Int && self.small_int_binding(receiver).is_some()
-                    {
-                        self.adaptive_expression(receiver)
-                    } else {
-                        self.expression(receiver)
-                    },
-                );
+                return if destination == ScalarType::Int
+                    && self.small_int_binding(receiver).is_some()
+                {
+                    self.adaptive_expression(receiver)
+                } else {
+                    self.expression(receiver)
+                };
             }
-            return Some(self.numeric_destination(receiver, source, destination));
+            return self.numeric_destination(receiver, source, destination);
         }
         let helper = match policy {
             CoercionPolicy::Default => "coerce",
@@ -1943,11 +1987,11 @@ impl Emitter<'_> {
             "terrane_int_support::{helper}::<{}>({source})",
             rust_type(destination)
         );
-        Some(if policy == CoercionPolicy::Default {
+        if policy == CoercionPolicy::Default {
             self.fallible(call, callee)
         } else {
             call
-        })
+        }
     }
 
     fn descriptor_identity(&self, node: &SyntaxNode) -> Option<String> {
