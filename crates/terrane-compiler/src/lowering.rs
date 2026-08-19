@@ -530,16 +530,14 @@ impl Emitter<'_> {
                     };
                     let union_binding = self.union_binding(left);
                     let value_type = self.value_type(left);
-                    let mut value = if let Some(binding) = union_binding {
+                    let value = if let Some(binding) = union_binding {
                         self.union_value(&binding, right)
                     } else if let Some(value_type) = value_type {
                         self.expression_as(right, value_type)
                     } else {
                         self.expression(right)
                     };
-                    if right.kind == SyntaxKind::BinaryExpression {
-                        value = Self::unwrapped_expression(value);
-                    }
+                    let value = Self::unwrapped_expression(value);
                     let target = self.expression(left);
                     self.line(&format!("{target} = {value};"));
                 }
@@ -554,17 +552,12 @@ impl Emitter<'_> {
             SyntaxKind::ForStatement => self.for_statement(node),
             SyntaxKind::ReturnStatement => {
                 if let Some(value) = node.children.first() {
-                    let is_binary = value.kind == SyntaxKind::BinaryExpression;
                     let value = if let Some(return_type) = self.return_type {
                         self.expression_as(value, ValueType::Scalar(return_type))
                     } else {
                         self.expression(value)
                     };
-                    let value = if is_binary {
-                        Self::unwrapped_expression(value)
-                    } else {
-                        value
-                    };
+                    let value = Self::unwrapped_expression(value);
                     self.line(&format!("return {value};"));
                 } else {
                     self.line("return;");
@@ -634,7 +627,7 @@ impl Emitter<'_> {
             write!(self.output, ": {ty}").unwrap();
         }
         if let Some(initializer) = initializer {
-            let mut value = if let Some(binding) = binding
+            let value = if let Some(binding) = binding
                 && !binding.destination_arms.is_empty()
             {
                 self.union_value(binding, initializer)
@@ -645,9 +638,7 @@ impl Emitter<'_> {
             } else {
                 self.expression(initializer)
             };
-            if initializer.kind == SyntaxKind::BinaryExpression {
-                value = Self::unwrapped_expression(value);
-            }
+            let value = Self::unwrapped_expression(value);
             write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
@@ -1369,7 +1360,7 @@ impl Emitter<'_> {
         }
         if source.is_integer() && destination.is_integer() {
             if integer_range_contains(destination, source) {
-                return format!("({value}) as {}", rust_type(destination));
+                return format!("(({value}) as {})", rust_type(destination));
             }
             return format!(
                 "{{ let source_value = {value}; terrane_int_support::unwrap_or_fail({}::try_from(source_value).map_err(|_| terrane_int_support::ArithmeticError::conversion_overflow(&source_value, \"{source}\", \"{destination}\", \"the value is outside the destination range\"))) }}",
@@ -1377,11 +1368,11 @@ impl Emitter<'_> {
             );
         }
         if source == ScalarType::Float32 && destination == ScalarType::Float64 {
-            return format!("({value}) as f64");
+            return format!("(({value}) as f64)");
         }
         if source.is_integer() {
             if exact_integer_float_widening(source, destination) {
-                return format!("({value}) as {}", rust_type(destination));
+                return format!("(({value}) as {})", rust_type(destination));
             }
             let helper = if destination == ScalarType::Float32 {
                 "exact_f32"

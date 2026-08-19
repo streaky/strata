@@ -1,0 +1,18 @@
+namespace mixed-width-comparisons
+from /core/types import int8, int32
+
+function main
+  small int8 = 5
+  wide int32 = 9
+  print; small == wide
+  print; small != wide
+  print; small < wide
+  print; small <= wide
+  print; small > wide
+  print; small >= wide
+  print; wide == small
+  print; wide != small
+  print; wide < small
+  print; wide <= small
+  print; wide > small
+  print; wide >= small

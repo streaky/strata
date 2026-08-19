@@ -1,5 +1,5 @@
 namespace numeric-destination-conversion
-from /core/types import int8, int32, float, none
+from /core/types import int8, int32, int64, float, none
 
 function main
   small int8 = 12
@@ -23,3 +23,7 @@ function main
   print; total
   print; exact-float
   print; converted
+  myvar int64 = 12
+  slop int8
+  slop = myvar + 1
+  print; slop
