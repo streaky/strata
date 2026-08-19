@@ -10,10 +10,6 @@ impl TerraneError {
 fn new(kind: &'static str, message: impl Into<String>) -> Self {
 Self { kind, message: message.into(), cause: None, context: Vec::new() }
 }
-fn at(mut self, frame: &'static str) -> Self {
-self.context.push(frame);
-self
-}
 fn render(&self) -> String {
 let mut rendered = format!("{}: {}", self.kind, self.message);
 if let Some(cause) = &self.cause {
@@ -38,34 +34,49 @@ Self::new(error.source_name(), error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {
-let _ = TerraneError::at;
 eprintln!("{}", error.render());
 std::process::exit(1);
+}
+#[allow(dead_code)]
+enum TerraneCompletion<T> {
+Normal,
+Return(T),
+Error(TerraneError),
+Break,
+Continue,
 }
 // Source: case.trn
 // Namespace: catch-coercion-error
 fn main() {
     let value: i64 = 300;
-    let __terrane_try_0: Result<Option<()>, TerraneError> = (|| {
-        let narrow: i8 = (terrane_int_support::coerce::<i8>(&(value))).map_err(TerraneError::from)?;
-        println!("{}", terrane_scalar_support::scalar_text(&(narrow)));
-        Ok(None)
-    })();
-    let mut __terrane_return_0: Option<()> = None;
-    match __terrane_try_0 {
-        Ok(value) => __terrane_return_0 = value,
-        Err(__terrane_error_0) => {
-            let mut __terrane_handled_0 = false;
-            if !__terrane_handled_0 && __terrane_error_0.kind == ".integer-conversion-overflow" {
-                __terrane_handled_0 = true;
-                println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
-            }
-            if !__terrane_handled_0 {
-                __terrane_uncaught(__terrane_error_0);
+    let __terrane_completion_0: TerraneCompletion<()> = (|| {
+        let __terrane_try_0: TerraneCompletion<()> = (|| {
+            let narrow: i8 = match terrane_int_support::coerce::<i8>(&(value)) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.into()) };
+            println!("{}", terrane_scalar_support::scalar_text(&(narrow)));
+            TerraneCompletion::Normal
+        })();
+        match __terrane_try_0 {
+            TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+            TerraneCompletion::Break => return TerraneCompletion::Break,
+            TerraneCompletion::Continue => return TerraneCompletion::Continue,
+            TerraneCompletion::Normal => {}
+            TerraneCompletion::Error(__terrane_error_0) => {
+                let mut __terrane_handled_0 = false;
+                if !__terrane_handled_0 && __terrane_error_0.kind == ".integer-conversion-overflow" {
+                    __terrane_handled_0 = true;
+                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
+                }
+                if !__terrane_handled_0 {
+                    return TerraneCompletion::Error(__terrane_error_0);
+                }
             }
         }
-    }
-    if let Some(value) = __terrane_return_0 {
-        return value;
+        TerraneCompletion::Normal
+    })();
+    match __terrane_completion_0 {
+        TerraneCompletion::Normal => {}
+        TerraneCompletion::Return(value) => return value,
+        TerraneCompletion::Error(error) => __terrane_uncaught(error),
+        TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
     }
 }

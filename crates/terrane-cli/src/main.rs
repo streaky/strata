@@ -1,9 +1,9 @@
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use sha2::{Digest, Sha256};
 
 struct CliFailure {
     code: u8,
@@ -100,19 +100,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
         }
     };
     if command == "rust" {
-        print!("{}", compilation.rust);
-        println!(
-            "// Authored generated modules: {}",
-            compilation
-                .rust_files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        println!(
-            "// Vendored support crates: terrane-int-support, terrane-scalar-support, terrane-string-support"
-        );
+        print_rust(&compilation);
         return Ok(ExitCode::SUCCESS);
     }
     ensure_rust_toolchain()?;
@@ -149,6 +137,22 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
     ))
+}
+
+fn print_rust(compilation: &terrane_compiler::Compilation) {
+    print!("{}", compilation.rust);
+    println!(
+        "// Authored generated modules: {}",
+        compilation
+            .rust_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "// Vendored support crates: terrane-int-support, terrane-scalar-support, terrane-string-support"
+    );
 }
 
 fn run_cargo(
@@ -290,8 +294,9 @@ fn write_generated_crate(
         [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
         terrane-scalar-support = { path = \"support/terrane-scalar-support\" }\n\
         terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n";
-    write_if_changed(&directory.join("Cargo.toml"), manifest.as_bytes())
-        .map_err(|error| CliFailure::backend(format!("cannot write generated manifest: {error}")))?;
+    write_if_changed(&directory.join("Cargo.toml"), manifest.as_bytes()).map_err(|error| {
+        CliFailure::backend(format!("cannot write generated manifest: {error}"))
+    })?;
     write_generated_support(directory).map_err(|error| {
         CliFailure::backend(format!("cannot write generated runtime support: {error}"))
     })?;
@@ -428,7 +433,14 @@ mod tests {
             expected_namespace: None,
         }];
 
-        let failure = run_cargo("check", &directory, &rust_files, &units).unwrap_err();
+        let failure = run_cargo(
+            "check",
+            &directory,
+            &directory.join("target"),
+            &rust_files,
+            &units,
+        )
+        .unwrap_err();
         assert_eq!(failure.code, 5);
         assert!(failure.message.contains("case.trn:1:1: error[S9003]"));
         assert!(failure.message.contains("raw rustc diagnostic"));

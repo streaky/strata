@@ -10,10 +10,6 @@ impl TerraneError {
 fn new(kind: &'static str, message: impl Into<String>) -> Self {
 Self { kind, message: message.into(), cause: None, context: Vec::new() }
 }
-fn at(mut self, frame: &'static str) -> Self {
-self.context.push(frame);
-self
-}
 fn render(&self) -> String {
 let mut rendered = format!("{}: {}", self.kind, self.message);
 if let Some(cause) = &self.cause {
@@ -38,35 +34,50 @@ Self::new(error.source_name(), error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {
-let _ = TerraneError::at;
 eprintln!("{}", error.render());
 std::process::exit(1);
+}
+#[allow(dead_code)]
+enum TerraneCompletion<T> {
+Normal,
+Return(T),
+Error(TerraneError),
+Break,
+Continue,
 }
 // Source: case.trn
 // Namespace: catch-arithmetic-overflow
 fn main() {
-    let __terrane_try_0: Result<Option<()>, TerraneError> = (|| {
-        let mut value: i8 = 127;
-        value = (terrane_int_support::fixed_addition(value, 1)).map_err(TerraneError::from)?;
-        println!("{}", terrane_scalar_support::scalar_text(&(value)));
-        Ok(None)
-    })();
-    let mut __terrane_return_0: Option<()> = None;
-    match __terrane_try_0 {
-        Ok(value) => __terrane_return_0 = value,
-        Err(__terrane_error_0) => {
-            let mut __terrane_handled_0 = false;
-            if !__terrane_handled_0 && __terrane_error_0.kind == ".arithmetic-overflow" {
-                __terrane_handled_0 = true;
-                println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
-            }
-            if !__terrane_handled_0 {
-                __terrane_uncaught(__terrane_error_0);
+    let __terrane_completion_0: TerraneCompletion<()> = (|| {
+        let __terrane_try_0: TerraneCompletion<()> = (|| {
+            let mut value: i8 = 127;
+            value = match terrane_int_support::fixed_addition(value, 1) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.into()) };
+            println!("{}", terrane_scalar_support::scalar_text(&(value)));
+            TerraneCompletion::Normal
+        })();
+        match __terrane_try_0 {
+            TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+            TerraneCompletion::Break => return TerraneCompletion::Break,
+            TerraneCompletion::Continue => return TerraneCompletion::Continue,
+            TerraneCompletion::Normal => {}
+            TerraneCompletion::Error(__terrane_error_0) => {
+                let mut __terrane_handled_0 = false;
+                if !__terrane_handled_0 && __terrane_error_0.kind == ".arithmetic-overflow" {
+                    __terrane_handled_0 = true;
+                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
+                }
+                if !__terrane_handled_0 {
+                    return TerraneCompletion::Error(__terrane_error_0);
+                }
             }
         }
-    }
+        TerraneCompletion::Normal
+    })();
     println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
-    if let Some(value) = __terrane_return_0 {
-        return value;
+    match __terrane_completion_0 {
+        TerraneCompletion::Normal => {}
+        TerraneCompletion::Return(value) => return value,
+        TerraneCompletion::Error(error) => __terrane_uncaught(error),
+        TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
     }
 }

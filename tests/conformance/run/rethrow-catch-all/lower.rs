@@ -38,52 +38,74 @@ Self::new(error.source_name(), error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {
-let _ = TerraneError::at;
 eprintln!("{}", error.render());
 std::process::exit(1);
+}
+#[allow(dead_code)]
+enum TerraneCompletion<T> {
+Normal,
+Return(T),
+Error(TerraneError),
+Break,
+Continue,
 }
 // Source: case.trn
 // Namespace: rethrow-catch-all
 fn main() {
-    let __terrane_try_0: Result<Option<()>, TerraneError> = (|| {
-        let __terrane_try_1: Result<Option<()>, TerraneError> = (|| {
-            return Err(TerraneError::new(".arithmetic-overflow", "fixed-width integer arithmetic overflow").at("case.trn:6:7"));
+    let __terrane_completion_0: TerraneCompletion<()> = (|| {
+        let __terrane_try_0: TerraneCompletion<()> = (|| {
+            let __terrane_completion_1: TerraneCompletion<()> = (|| {
+                let __terrane_try_1: TerraneCompletion<()> = (|| {
+                    return TerraneCompletion::Error(TerraneError::new(".arithmetic-overflow", "fixed-width integer arithmetic overflow").at("case.trn:6:7"));
+                })();
+                match __terrane_try_1 {
+                    TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+                    TerraneCompletion::Break => return TerraneCompletion::Break,
+                    TerraneCompletion::Continue => return TerraneCompletion::Continue,
+                    TerraneCompletion::Normal => {}
+                    TerraneCompletion::Error(__terrane_error_1) => {
+                        let mut __terrane_handled_1 = false;
+                        if !__terrane_handled_1 && __terrane_error_1.kind == ".arithmetic-overflow" {
+                            __terrane_handled_1 = true;
+                            return TerraneCompletion::Error(__terrane_error_1.clone());
+                        }
+                        if !__terrane_handled_1 {
+                            return TerraneCompletion::Error(__terrane_error_1);
+                        }
+                    }
+                }
+                TerraneCompletion::Normal
+            })();
+            match __terrane_completion_1 {
+                TerraneCompletion::Normal => unreachable!(),
+                TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+                TerraneCompletion::Error(error) => return TerraneCompletion::Error(error),
+                TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
+            }
         })();
-        let mut __terrane_return_1: Option<()> = None;
-        match __terrane_try_1 {
-            Ok(value) => __terrane_return_1 = value,
-            Err(__terrane_error_1) => {
-                let mut __terrane_handled_1 = false;
-                if !__terrane_handled_1 && __terrane_error_1.kind == ".arithmetic-overflow" {
-                    __terrane_handled_1 = true;
-                    return Err(__terrane_error_1.clone());
+        match __terrane_try_0 {
+            TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
+            TerraneCompletion::Break => return TerraneCompletion::Break,
+            TerraneCompletion::Continue => return TerraneCompletion::Continue,
+            TerraneCompletion::Normal => {}
+            TerraneCompletion::Error(__terrane_error_0) => {
+                let mut __terrane_handled_0 = false;
+                if !__terrane_handled_0 {
+                    __terrane_handled_0 = true;
+                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
                 }
-                if !__terrane_handled_1 {
-                    return Err(__terrane_error_1);
+                if !__terrane_handled_0 {
+                    return TerraneCompletion::Error(__terrane_error_0);
                 }
             }
         }
-        if let Some(value) = __terrane_return_1 {
-            return Ok(Some(value));
-        }
-        Ok(None)
+        TerraneCompletion::Normal
     })();
-    let mut __terrane_return_0: Option<()> = None;
-    match __terrane_try_0 {
-        Ok(value) => __terrane_return_0 = value,
-        Err(__terrane_error_0) => {
-            let mut __terrane_handled_0 = false;
-            if !__terrane_handled_0 {
-                __terrane_handled_0 = true;
-                println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
-            }
-            if !__terrane_handled_0 {
-                __terrane_uncaught(__terrane_error_0);
-            }
-        }
-    }
     println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
-    if let Some(value) = __terrane_return_0 {
-        return value;
+    match __terrane_completion_0 {
+        TerraneCompletion::Normal => {}
+        TerraneCompletion::Return(value) => return value,
+        TerraneCompletion::Error(error) => __terrane_uncaught(error),
+        TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),
     }
 }

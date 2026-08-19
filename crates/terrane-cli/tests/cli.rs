@@ -20,12 +20,16 @@ fn all_commands_share_the_hello_pipeline() {
     assert!(rust.status.success());
     assert!(rust_again.status.success());
     assert_eq!(rust.stdout, rust_again.stdout);
-    assert_eq!(
-        String::from_utf8(rust.stdout)
-            .unwrap()
-            .replace(terrane_compiler::VERSION, "<version>"),
-        fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap()
+    let displayed_rust = String::from_utf8(rust.stdout)
+        .unwrap()
+        .replace(terrane_compiler::VERSION, "<version>");
+    let authored_rust = fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap();
+    assert!(displayed_rust.starts_with(&authored_rust));
+    assert!(
+        displayed_rust
+            .contains("// Authored generated modules: src/authored/unit-0000.rs, src/main.rs")
     );
+    assert!(displayed_rust.contains("// Vendored support crates: terrane-int-support"));
 
     let check = Command::new(binary)
         .args(["check", hello().to_str().unwrap()])

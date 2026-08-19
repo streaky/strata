@@ -92,8 +92,8 @@ const FLOATING_CATEGORIES: &[TypeCategory] = &[
     TypeCategory::Floating,
 ];
 const NO_PROTOCOLS: &[&str] = &[];
-const NUMERIC_PROTOCOLS: &[&str] = &["coerce", "parse", "radix"];
-const FLOAT_PROTOCOLS: &[&str] = &["coerce", "parse"];
+const NUMERIC_PROTOCOLS: &[&str] = &["coerce"];
+const STRING_PROTOCOLS: &[&str] = &["parse", "radix"];
 
 impl ScalarType {
     pub const ALL: [Self; 16] = [
@@ -298,7 +298,7 @@ impl ScalarType {
                 None,
                 None,
                 FLOATING_CATEGORIES,
-                FLOAT_PROTOCOLS,
+                NUMERIC_PROTOCOLS,
             ),
             Self::Float64 => (
                 Some(64),
@@ -306,11 +306,10 @@ impl ScalarType {
                 None,
                 None,
                 FLOATING_CATEGORIES,
-                FLOAT_PROTOCOLS,
+                NUMERIC_PROTOCOLS,
             ),
-            Self::Bool | Self::String | Self::None => {
-                (None, None, None, None, VALUE_CATEGORIES, NO_PROTOCOLS)
-            }
+            Self::String => (None, None, None, None, VALUE_CATEGORIES, STRING_PROTOCOLS),
+            Self::Bool | Self::None => (None, None, None, None, VALUE_CATEGORIES, NO_PROTOCOLS),
         };
         DescriptorSchema {
             scalar: self,
@@ -330,61 +329,15 @@ impl ScalarType {
 
     #[must_use]
     pub const fn conforms_to(self, category: TypeCategory) -> bool {
-        match category {
-            TypeCategory::Value | TypeCategory::Object => true,
-            TypeCategory::Number => matches!(
-                self,
-                Self::Int
-                    | Self::Int8
-                    | Self::Int16
-                    | Self::Int32
-                    | Self::Int64
-                    | Self::Int128
-                    | Self::Uint8
-                    | Self::Uint16
-                    | Self::Uint32
-                    | Self::Uint64
-                    | Self::Uint128
-                    | Self::Float32
-                    | Self::Float64
-            ),
-            TypeCategory::Integer => matches!(
-                self,
-                Self::Int
-                    | Self::Int8
-                    | Self::Int16
-                    | Self::Int32
-                    | Self::Int64
-                    | Self::Int128
-                    | Self::Uint8
-                    | Self::Uint16
-                    | Self::Uint32
-                    | Self::Uint64
-                    | Self::Uint128
-            ),
-            TypeCategory::FixedInteger => matches!(
-                self,
-                Self::Int8
-                    | Self::Int16
-                    | Self::Int32
-                    | Self::Int64
-                    | Self::Int128
-                    | Self::Uint8
-                    | Self::Uint16
-                    | Self::Uint32
-                    | Self::Uint64
-                    | Self::Uint128
-            ),
-            TypeCategory::SignedFixedInteger => matches!(
-                self,
-                Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 | Self::Int128
-            ),
-            TypeCategory::UnsignedFixedInteger => matches!(
-                self,
-                Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64 | Self::Uint128
-            ),
-            TypeCategory::Floating => matches!(self, Self::Float32 | Self::Float64),
+        let categories = self.descriptor_schema().categories;
+        let mut index = 0;
+        while index < categories.len() {
+            if categories[index] as u8 == category as u8 {
+                return true;
+            }
+            index += 1;
         }
+        false
     }
 }
 

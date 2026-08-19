@@ -16,7 +16,7 @@ use crate::{
 pub(crate) fn lower(package: &SemanticPackage) -> Program {
     let mut globals = String::new();
     if package_uses_structured_errors(package) {
-        emit_error_support(&mut globals);
+        emit_error_support(&mut globals, package_constructs_error(package));
     }
     emit_global_storage(package, &mut globals);
     let modules = package
@@ -38,8 +38,15 @@ pub(crate) fn lower(package: &SemanticPackage) -> Program {
                 function_errors: false,
                 try_counter: 0,
                 current_error: None,
+                try_completion: false,
+                in_loop: false,
             };
             emitter.emit_union_types();
+            let mut items = Vec::new();
+            if !emitter.output.is_empty() {
+                items.push(Item::generated(&emitter.output));
+                emitter.output.clear();
+            }
             for node in &unit.tree.root.children {
                 match node.kind {
                     SyntaxKind::Binding | SyntaxKind::Assignment => {
@@ -48,11 +55,11 @@ pub(crate) fn lower(package: &SemanticPackage) -> Program {
                     SyntaxKind::FunctionDeclaration => emitter.function(node),
                     _ => {}
                 }
+                if !emitter.output.is_empty() {
+                    items.push(Item::sourced(node.span, &emitter.output));
+                    emitter.output.clear();
+                }
             }
-            let items = (!emitter.output.is_empty())
-                .then(|| Item::sourced(unit.tree.root.span, emitter.output))
-                .into_iter()
-                .collect();
             Module {
                 source_path: display_path(unit.source.path()),
                 namespace: unit.namespace.clone(),
@@ -63,13 +70,17 @@ pub(crate) fn lower(package: &SemanticPackage) -> Program {
     Program {
         version: crate::VERSION,
         globals: (!globals.is_empty())
-            .then(|| Item::generated(globals))
+            .then(|| Item::generated(&globals))
             .into_iter()
             .collect(),
         modules,
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these independent lexical control contexts are saved and restored separately"
+)]
 struct Emitter<'a> {
     package: &'a SemanticPackage,
     unit: &'a SemanticUnit,
@@ -85,6 +96,8 @@ struct Emitter<'a> {
     function_errors: bool,
     try_counter: usize,
     current_error: Option<String>,
+    try_completion: bool,
+    in_loop: bool,
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
@@ -97,7 +110,15 @@ fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
     package.units.iter().any(|unit| contains(&unit.tree.root))
 }
 
-fn emit_error_support(output: &mut String) {
+fn package_constructs_error(package: &SemanticPackage) -> bool {
+    fn contains(node: &SyntaxNode) -> bool {
+        (node.kind == SyntaxKind::ThrowStatement && !node.children.is_empty())
+            || node.children.iter().any(contains)
+    }
+    package.units.iter().any(|unit| contains(&unit.tree.root))
+}
+
+fn emit_error_support(output: &mut String, emit_context: bool) {
     output.push_str(
         "#[derive(Clone, Debug)]\nstruct TerraneError {\n\
          kind: &'static str,\nmessage: String,\ncause: Option<Box<TerraneError>>,\n\
@@ -105,7 +126,15 @@ fn emit_error_support(output: &mut String) {
          impl TerraneError {\n\
          fn new(kind: &'static str, message: impl Into<String>) -> Self {\n\
          Self { kind, message: message.into(), cause: None, context: Vec::new() }\n}\n\
-         fn at(mut self, frame: &'static str) -> Self {\nself.context.push(frame);\nself\n}\n\
+         ",
+    );
+    if emit_context {
+        output.push_str(
+            "fn at(mut self, frame: &'static str) -> Self {\nself.context.push(frame);\nself\n}\n",
+        );
+    }
+    output.push_str(
+        "\
          fn render(&self) -> String {\n\
          let mut rendered = format!(\"{}: {}\", self.kind, self.message);\n\
          if let Some(cause) = &self.cause {\nrendered.push_str(\"\\ncaused by: \");\nrendered.push_str(&cause.render());\n}\n\
@@ -117,7 +146,8 @@ fn emit_error_support(output: &mut String) {
          fn from(error: terrane_int_support::ArithmeticError) -> Self {\n\
          Self::new(error.source_name(), error.to_string())\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
-         let _ = TerraneError::at;\neprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n",
+         eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
+         #[allow(dead_code)]\nenum TerraneCompletion<T> {\nNormal,\nReturn(T),\nError(TerraneError),\nBreak,\nContinue,\n}\n",
     );
 }
 
@@ -165,6 +195,8 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             function_errors: false,
             try_counter: 0,
             current_error: None,
+            try_completion: false,
+            in_loop: false,
         };
         let value_type = unit
             .typed_bindings
@@ -220,6 +252,8 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
                 function_errors: false,
                 try_counter: 0,
                 current_error: None,
+                try_completion: false,
+                in_loop: false,
             };
             Some(initial_emitter.expression_as(initializer, ValueType::Scalar(scalar)))
         });
@@ -461,7 +495,14 @@ impl Emitter<'_> {
         {
             self.block(block);
         }
-        if function_errors && contract.return_type.is_none_or(|ty| ty == ScalarType::None) {
+        if function_errors
+            && contract.return_type.is_none_or(|ty| ty == ScalarType::None)
+            && node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+                .is_some_and(block_may_fall_through)
+        {
             self.line("Ok(())");
         }
         self.return_type = outer_return_type;
@@ -625,31 +666,36 @@ impl Emitter<'_> {
             SyntaxKind::WhileStatement => self.while_statement(node),
             SyntaxKind::ForStatement => self.for_statement(node),
             SyntaxKind::ReturnStatement => {
-                if let Some(value) = node.children.first() {
-                    let value = if let Some(return_type) = self.return_type {
-                        self.expression_as(value, ValueType::Scalar(return_type))
-                    } else {
-                        self.expression(value)
-                    };
-                    let value = Self::unwrapped_expression(value);
-                    if self.function_errors {
-                        self.line(&format!("return Ok({value});"));
-                    } else if self.propagate_errors {
-                        self.line(&format!("return Ok(Some({value}));"));
-                    } else {
-                        self.line(&format!("return {value};"));
-                    }
+                let value = node.children.first().map_or_else(
+                    || "()".to_owned(),
+                    |value| {
+                        let value = if let Some(return_type) = self.return_type {
+                            self.expression_as(value, ValueType::Scalar(return_type))
+                        } else {
+                            self.expression(value)
+                        };
+                        Self::unwrapped_expression(value)
+                    },
+                );
+                if self.try_completion {
+                    self.line(&format!("return TerraneCompletion::Return({value});"));
                 } else if self.function_errors {
-                    self.line("return Ok(());");
+                    self.line(&format!("return Ok({value});"));
                 } else if self.propagate_errors {
-                    self.line("return Ok(Some(()));");
+                    self.line(&format!("return Ok(Some({value}));"));
                 } else {
-                    self.line("return;");
+                    self.line(&format!("return {value};"));
                 }
             }
             SyntaxKind::ThrowStatement => self.throw_statement(node),
             SyntaxKind::TryStatement => self.try_statement(node),
+            SyntaxKind::BreakStatement if self.try_completion => {
+                self.line("return TerraneCompletion::Break;");
+            }
             SyntaxKind::BreakStatement => self.line("break;"),
+            SyntaxKind::ContinueStatement if self.try_completion => {
+                self.line("return TerraneCompletion::Continue;");
+            }
             SyntaxKind::ContinueStatement => {
                 if let Some(label) = &self.continue_label {
                     self.line(&format!("break '{label};"));
@@ -661,11 +707,23 @@ impl Emitter<'_> {
         }
     }
 
+    fn error_kind(&self, node: &SyntaxNode) -> String {
+        self.package
+            .resolve_name_at(self.unit, node.span.start, self.text(node))
+            .and_then(|symbol| symbol.identity.strip_prefix("/core/errors::"))
+            .unwrap_or_else(|| self.text(node).trim().trim_start_matches('.'))
+            .to_owned()
+    }
+
     fn throw_statement(&mut self, node: &SyntaxNode) {
         if let Some(current_error) = &self.current_error
             && node.children.is_empty()
         {
-            if self.propagate_errors {
+            if self.try_completion {
+                self.line(&format!(
+                    "return TerraneCompletion::Error({current_error}.clone());"
+                ));
+            } else if self.propagate_errors {
                 self.line(&format!("return Err({current_error}.clone());"));
             } else {
                 self.line(&format!("__terrane_uncaught({current_error}.clone());"));
@@ -675,11 +733,11 @@ impl Emitter<'_> {
         let Some(error_node) = node.children.first() else {
             return;
         };
-        let name = self.text(error_node).trim().trim_start_matches('.');
+        let name = self.error_kind(error_node);
         let (line, column) = self.source.line_column(node.span.start);
         let mut error = format!(
             "TerraneError::new(\".{name}\", \"{}\").at(\"{}:{line}:{column}\")",
-            error_message(name),
+            error_message(&name),
             display_path(self.source.path())
         );
         if let Some(current_error) = &self.current_error {
@@ -687,7 +745,9 @@ impl Emitter<'_> {
                 "{{ let mut error = {error}; error.cause = Some(Box::new({current_error}.clone())); error }}"
             );
         }
-        if self.propagate_errors {
+        if self.try_completion {
+            self.line(&format!("return TerraneCompletion::Error({error});"));
+        } else if self.propagate_errors {
             self.line(&format!("return Err({error});"));
         } else {
             self.line(&format!("__terrane_uncaught({error});"));
@@ -706,26 +766,33 @@ impl Emitter<'_> {
         self.try_counter += 1;
         let result = self.return_type.map_or("()", rust_type);
         self.line(&format!(
-            "let __terrane_try_{index}: Result<Option<{result}>, TerraneError> = (|| {{"
+            "let __terrane_completion_{index}: TerraneCompletion<{result}> = (|| {{"
         ));
         self.indent += 1;
+        self.line(&format!(
+            "let __terrane_try_{index}: TerraneCompletion<{result}> = (|| {{"
+        ));
+        self.indent += 1;
+        let outer_completion = std::mem::replace(&mut self.try_completion, true);
         let outer_propagation = std::mem::replace(&mut self.propagate_errors, true);
         let outer_function_errors = std::mem::replace(&mut self.function_errors, false);
         self.block(block);
         if block_may_fall_through(block) {
-            self.line("Ok(None)");
+            self.line("TerraneCompletion::Normal");
         }
         self.function_errors = outer_function_errors;
         self.propagate_errors = outer_propagation;
         self.indent -= 1;
         self.line("})();");
-        self.line(&format!(
-            "let mut __terrane_return_{index}: Option<{result}> = None;"
-        ));
         self.line(&format!("match __terrane_try_{index} {{"));
         self.indent += 1;
-        self.line(&format!("Ok(value) => __terrane_return_{index} = value,"));
-        self.line(&format!("Err(__terrane_error_{index}) => {{"));
+        self.line("TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),");
+        self.line("TerraneCompletion::Break => return TerraneCompletion::Break,");
+        self.line("TerraneCompletion::Continue => return TerraneCompletion::Continue,");
+        self.line("TerraneCompletion::Normal => {}");
+        self.line(&format!(
+            "TerraneCompletion::Error(__terrane_error_{index}) => {{"
+        ));
         self.indent += 1;
         self.line(&format!("let mut __terrane_handled_{index} = false;"));
         for clause in node
@@ -740,7 +807,7 @@ impl Emitter<'_> {
             let condition = descriptor.map_or_else(
                 || format!("!__terrane_handled_{index}"),
                 |descriptor| {
-                    let kind = self.text(descriptor).trim().trim_start_matches('.');
+                    let kind = self.error_kind(descriptor);
                     if kind == "error" {
                         format!("!__terrane_handled_{index}")
                     } else {
@@ -771,19 +838,21 @@ impl Emitter<'_> {
             self.indent -= 1;
             self.line("}");
         }
+        self.try_completion = outer_completion;
         self.line(&format!("if !__terrane_handled_{index} {{"));
         self.indent += 1;
-        if outer_propagation {
-            self.line(&format!("return Err(__terrane_error_{index});"));
-        } else {
-            self.line(&format!("__terrane_uncaught(__terrane_error_{index});"));
-        }
+        self.line(&format!(
+            "return TerraneCompletion::Error(__terrane_error_{index});"
+        ));
         self.indent -= 1;
         self.line("}");
         self.indent -= 1;
         self.line("}");
         self.indent -= 1;
         self.line("}");
+        self.line("TerraneCompletion::Normal");
+        self.indent -= 1;
+        self.line("})();");
         if let Some(finally) = node
             .children
             .iter()
@@ -792,14 +861,37 @@ impl Emitter<'_> {
         {
             self.block(finally);
         }
-        self.line(&format!("if let Some(value) = __terrane_return_{index} {{"));
+        self.line(&format!("match __terrane_completion_{index} {{"));
         self.indent += 1;
-        if self.function_errors {
-            self.line("return Ok(value);");
-        } else if self.propagate_errors {
-            self.line("return Ok(Some(value));");
+        if statement_may_fall_through(node) {
+            self.line("TerraneCompletion::Normal => {}");
         } else {
-            self.line("return value;");
+            self.line("TerraneCompletion::Normal => unreachable!(),");
+        }
+        if self.try_completion {
+            self.line(
+                "TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),",
+            );
+            self.line("TerraneCompletion::Error(error) => return TerraneCompletion::Error(error),");
+        } else if self.function_errors {
+            self.line("TerraneCompletion::Return(value) => return Ok(value),");
+            self.line("TerraneCompletion::Error(error) => return Err(error),");
+        } else if self.propagate_errors {
+            self.line("TerraneCompletion::Return(value) => return Ok(Some(value)),");
+            self.line("TerraneCompletion::Error(error) => return Err(error),");
+        } else {
+            self.line("TerraneCompletion::Return(value) => return value,");
+            self.line("TerraneCompletion::Error(error) => __terrane_uncaught(error),");
+        }
+        if self.in_loop {
+            self.line("TerraneCompletion::Break => break,");
+            if let Some(label) = &self.continue_label {
+                self.line(&format!("TerraneCompletion::Continue => break '{label},"));
+            } else {
+                self.line("TerraneCompletion::Continue => continue,");
+            }
+        } else {
+            self.line("TerraneCompletion::Break | TerraneCompletion::Continue => unreachable!(),");
         }
         self.indent -= 1;
         self.line("}");
@@ -947,7 +1039,9 @@ impl Emitter<'_> {
         self.line(&format!("while {condition} {{"));
         self.indent += 1;
         let outer_continue = self.continue_label.take();
+        let outer_loop = std::mem::replace(&mut self.in_loop, true);
         self.block(block);
+        self.in_loop = outer_loop;
         self.continue_label = outer_continue;
         self.indent -= 1;
         self.line("}");
@@ -971,7 +1065,9 @@ impl Emitter<'_> {
                 ));
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();
+                let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
+                self.in_loop = outer_loop;
                 self.continue_label = outer_continue;
                 self.indent -= 1;
                 self.line("}");
@@ -986,7 +1082,9 @@ impl Emitter<'_> {
                 self.line(&format!("'{label}: {{"));
                 self.indent += 1;
                 let outer_continue = self.continue_label.replace(label);
+                let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
+                self.in_loop = outer_loop;
                 self.continue_label = outer_continue;
                 self.indent -= 1;
                 self.line("}");
@@ -1555,7 +1653,11 @@ impl Emitter<'_> {
             } else if method.child == "checked" {
                 format!("({call}).ok()")
             } else if method.family == MemberFamily::Parse {
-                if self.propagate_errors {
+                if self.try_completion {
+                    format!(
+                        "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.into()) }}"
+                    )
+                } else if self.propagate_errors {
                     format!("({call})?")
                 } else {
                     format!("({call}).unwrap_or_else(|error| __terrane_uncaught(error))")
@@ -1651,7 +1753,11 @@ impl Emitter<'_> {
             .map_or_else(|| self.expression(callee), function_name);
         let call = format!("{name}({})", values.join(", "));
         if contract.is_some_and(|contract| contract.throws) {
-            if self.propagate_errors {
+            if self.try_completion {
+                format!(
+                    "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.into()) }}"
+                )
+            } else if self.propagate_errors {
                 format!("({call})?")
             } else {
                 format!("({call}).unwrap_or_else(|error| __terrane_uncaught(error))")
@@ -1663,7 +1769,11 @@ impl Emitter<'_> {
 
     fn fallible(&self, call: impl AsRef<str>) -> String {
         let call = call.as_ref();
-        if self.propagate_errors {
+        if self.try_completion {
+            format!(
+                "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.into()) }}"
+            )
+        } else if self.propagate_errors {
             format!("({call}).map_err(TerraneError::from)?")
         } else {
             format!("terrane_int_support::unwrap_or_fail({call})")
@@ -2275,10 +2385,63 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
 }
 
 fn block_may_fall_through(block: &SyntaxNode) -> bool {
-    !matches!(
-        block.children.last().map(|statement| statement.kind),
-        Some(SyntaxKind::ReturnStatement | SyntaxKind::ThrowStatement)
-    )
+    block.children.last().is_none_or(statement_may_fall_through)
+}
+
+fn statement_may_fall_through(statement: &SyntaxNode) -> bool {
+    match statement.kind {
+        SyntaxKind::ReturnStatement
+        | SyntaxKind::ThrowStatement
+        | SyntaxKind::BreakStatement
+        | SyntaxKind::ContinueStatement => false,
+        SyntaxKind::IfStatement => {
+            let mut branches = statement.children.iter().skip(1);
+            let Some(first) = branches.next() else {
+                return true;
+            };
+            let first_falls_through = first
+                .children
+                .last()
+                .filter(|child| child.kind == SyntaxKind::Block)
+                .map_or_else(|| block_may_fall_through(first), block_may_fall_through);
+            let mut has_else = false;
+            let mut any_falls_through = first_falls_through;
+            for branch in branches {
+                has_else |= branch.kind == SyntaxKind::ElseClause;
+                any_falls_through |= branch
+                    .children
+                    .last()
+                    .filter(|child| child.kind == SyntaxKind::Block)
+                    .is_none_or(block_may_fall_through);
+            }
+            !has_else || any_falls_through
+        }
+        SyntaxKind::TryStatement => {
+            let try_falls_through = statement
+                .children
+                .first()
+                .is_none_or(block_may_fall_through);
+            let catch_falls_through = statement
+                .children
+                .iter()
+                .filter(|child| child.kind == SyntaxKind::CatchClause)
+                .filter_map(|clause| {
+                    clause
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Block)
+                })
+                .any(block_may_fall_through);
+            let finally_returns = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::FinallyClause)
+                .and_then(|clause| clause.children.first())
+                .is_some_and(|block| !block_may_fall_through(block));
+            !finally_returns && (try_falls_through || catch_falls_through)
+        }
+        _ => true,
+    }
 }
 
 fn error_message(kind: &str) -> &'static str {
@@ -2288,12 +2451,17 @@ fn error_message(kind: &str) -> &'static str {
         "integer-conversion-overflow" => "integer conversion overflow",
         "negative-shift-count" => "negative integer shift count",
         "coercion-error" => "coercion has no compatible result",
+        "resource-error" => "integer shift count cannot be represented on this target",
         _ => "source error",
     }
 }
 
 fn function_name(contract: &FunctionContract) -> String {
-    rust_name(&contract.name)
+    if contract.name == "main" {
+        "main".to_owned()
+    } else {
+        rust_name(&contract.name)
+    }
 }
 
 fn namespace_binding_name(file: u32, name: &str) -> String {
@@ -2305,62 +2473,56 @@ fn global_binding_name(name: &str) -> String {
 }
 
 fn rust_name(name: &str) -> String {
-    if name == "main" {
-        return name.to_owned();
+    let readable_identifier = name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    let keyword = matches!(
+        name,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+    );
+    if readable_identifier && !keyword {
+        return name.replace('-', "_");
     }
-    let mut output = String::with_capacity(name.len());
+    let mut output = String::from("__trn_");
     for byte in name.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            output.push(char::from(byte));
-        } else if byte == b'-' {
-            output.push('_');
-        } else {
-            write!(output, "_P{byte:02x}_").expect("writing to a String cannot fail");
-        }
-    }
-    if output.as_bytes().first().is_some_and(u8::is_ascii_digit)
-        || matches!(
-            output.as_str(),
-            "as" | "break"
-                | "const"
-                | "continue"
-                | "crate"
-                | "else"
-                | "enum"
-                | "extern"
-                | "false"
-                | "fn"
-                | "for"
-                | "if"
-                | "impl"
-                | "in"
-                | "let"
-                | "loop"
-                | "match"
-                | "mod"
-                | "move"
-                | "mut"
-                | "pub"
-                | "ref"
-                | "return"
-                | "self"
-                | "Self"
-                | "static"
-                | "struct"
-                | "super"
-                | "trait"
-                | "true"
-                | "type"
-                | "unsafe"
-                | "use"
-                | "where"
-                | "while"
-                | "async"
-                | "await"
-                | "dyn"
-        )
-    {
-        output.insert_str(0, "T_");
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
     }
     output
 }

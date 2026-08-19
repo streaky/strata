@@ -539,7 +539,12 @@ fn populate_function_aliases(package: &mut SemanticPackage) {
         .units
         .iter()
         .flat_map(|unit| unit.functions.iter())
-        .map(|contract| ((contract.span.file, contract.span.start, contract.span.end), contract.clone()))
+        .map(|contract| {
+            (
+                (contract.span.file, contract.span.start, contract.span.end),
+                contract.clone(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     for unit in &mut package.units {
         unit.function_aliases = package
@@ -2226,6 +2231,10 @@ fn analyze_function_contract(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixed-point call graph and its local traversals form one auditable effect analysis"
+)]
 fn infer_throwing_effects(package: &mut SemanticPackage) {
     type FunctionKey = (u32, usize, usize);
 
@@ -4262,14 +4271,7 @@ fn validate_flow_statement(
         }
         SyntaxKind::TryStatement => {
             let try_falls_through = if let Some(block) = statement.children.first() {
-                validate_flow_block(
-                    unit,
-                    block,
-                    contract,
-                    bindings,
-                    loop_depth,
-                    unreachable,
-                )?
+                validate_flow_block(unit, block, contract, bindings, loop_depth, unreachable)?
             } else {
                 true
             };
@@ -4299,14 +4301,7 @@ fn validate_flow_statement(
                 .iter()
                 .find(|child| child.kind == SyntaxKind::FinallyClause)
                 .and_then(|clause| clause.children.first())
-                && !validate_flow_block(
-                    unit,
-                    finally,
-                    contract,
-                    bindings,
-                    loop_depth,
-                    unreachable,
-                )?
+                && !validate_flow_block(unit, finally, contract, bindings, loop_depth, unreachable)?
             {
                 return Ok(false);
             }

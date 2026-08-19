@@ -38,9 +38,16 @@ Self::new(error.source_name(), error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {
-let _ = TerraneError::at;
 eprintln!("{}", error.render());
 std::process::exit(1);
+}
+#[allow(dead_code)]
+enum TerraneCompletion<T> {
+Normal,
+Return(T),
+Error(TerraneError),
+Break,
+Continue,
 }
 // Source: case.trn
 // Namespace: parse-radix-families

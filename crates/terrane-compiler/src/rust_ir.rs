@@ -38,41 +38,56 @@ pub struct Item {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Block {
-    pub expressions: Vec<Expression>,
+    pub lines: Vec<RustLine>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Expression {
-    Rust(String),
+pub struct RustLine {
+    pub text: String,
+    pub newline: bool,
+}
+
+impl Block {
+    fn from_rendered(rust: &str) -> Self {
+        let lines = rust
+            .split_inclusive('\n')
+            .map(|line| RustLine {
+                text: line.strip_suffix('\n').unwrap_or(line).to_owned(),
+                newline: line.ends_with('\n'),
+            })
+            .collect();
+        Self { lines }
+    }
+
+    fn render(&self, output: &mut String) {
+        for line in &self.lines {
+            output.push_str(&line.text);
+            if line.newline {
+                output.push('\n');
+            }
+        }
+    }
 }
 
 impl Item {
     #[must_use]
-    pub fn generated(rust: String) -> Self {
+    pub fn generated(rust: &str) -> Self {
         Self {
             source: None,
-            body: Block {
-                expressions: vec![Expression::Rust(rust)],
-            },
+            body: Block::from_rendered(rust),
         }
     }
 
     #[must_use]
-    pub fn sourced(source: Span, rust: String) -> Self {
+    pub fn sourced(source: Span, rust: &str) -> Self {
         Self {
             source: Some(source),
-            body: Block {
-                expressions: vec![Expression::Rust(rust)],
-            },
+            body: Block::from_rendered(rust),
         }
     }
 
     fn render(&self, output: &mut String) {
-        for expression in &self.body.expressions {
-            match expression {
-                Expression::Rust(rust) => output.push_str(rust),
-            }
-        }
+        self.body.render(output);
     }
 
     fn render_associated(&self, output: &mut String, associations: &mut Vec<SourceAssociation>) {
@@ -91,31 +106,19 @@ impl Item {
 impl Program {
     #[must_use]
     pub fn render(&self) -> String {
+        let files = self.render_files();
         let mut output = format!(
             "// Generated deterministically by Terrane {}.\n",
             self.version
         );
-        for item in &self.globals {
-            item.render(&mut output);
-        }
-        for module in &self.modules {
-            if module.items.is_empty() {
-                continue;
-            }
-            writeln!(
-                output,
-                "// Source: {}\n// Namespace: {}",
-                module.source_path,
-                module.namespace.trim_start_matches('/')
-            )
-            .expect("writing to a String cannot fail");
-            for item in &module.items {
-                item.render(&mut output);
-            }
+        for file in files
+            .iter()
+            .filter(|file| file.path.starts_with("src/authored/"))
+        {
+            output.push_str(&file.contents);
         }
         output
     }
-
     #[must_use]
     pub fn render_files(&self) -> Vec<RenderedFile> {
         let mut files = Vec::new();
