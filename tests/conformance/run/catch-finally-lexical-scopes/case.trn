@@ -1,0 +1,25 @@
+namespace catch-finally-lexical-scopes
+from /core/errors import arithmetic-overflow, coercion-error
+
+function typed-catch
+  try
+    throw arithmetic-overflow
+  catch arithmetic-overflow as failure
+    failure
+    caught = 1
+    print; caught
+  finally
+    completed = 2
+    print; completed
+
+function catch-all
+  try
+    throw coercion-error
+  catch as failure
+    failure
+    caught = 3
+    print; caught
+
+function main
+  typed-catch;
+  catch-all;

@@ -3852,8 +3852,11 @@ fn populate_node(
                 parent: Some(index),
                 symbols: BTreeMap::new(),
             });
-            if node.children.len() == 3 {
-                let alias = &node.children[1];
+            if let Some(alias) = node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::CatchBinding)
+            {
                 insert_local(
                     unit,
                     scopes,
@@ -3903,7 +3906,10 @@ fn populate_node(
                         Some(index),
                         false,
                     )?;
-                } else if child.kind == SyntaxKind::ElseClause {
+                } else if matches!(
+                    child.kind,
+                    SyntaxKind::ElseClause | SyntaxKind::CatchClause | SyntaxKind::FinallyClause
+                ) {
                     populate_node(unit, namespaces, globals, scopes, index, child)?;
                 }
             }

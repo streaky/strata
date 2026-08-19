@@ -850,6 +850,7 @@ impl Emitter<'_> {
             {
                 let alias = rust_name(self.text(alias));
                 self.line(&format!("let {alias} = __terrane_error_{index}.clone();"));
+                self.line(&format!("let _ = &{alias};"));
             }
             let outer_error = self
                 .current_error
