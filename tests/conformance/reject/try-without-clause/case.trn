@@ -1,0 +1,5 @@
+namespace try-without-clause
+function main
+  try
+    print; >body
+  print; >after

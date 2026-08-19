@@ -879,6 +879,11 @@ vendored-support path lists. Pipeline and CLI tests pin byte identity, generated
 files, artifact reuse, eviction, and generated file layout; compile/run conformance cases validate
 the generated crates with warnings denied.
 
+Deferred milestone-5 work: the fully structural expression/statement IR and its pinned formatter
+policy, including the named-intermediate nesting threshold, remain assigned to this milestone.
+The current file model does not satisfy that deliverable. Complete it before milestone 10 adds
+enough lowering families to make another string-emission expansion costly.
+
 ### Milestone 6 — Source diagnostics across Rust
 
 Deliver:
@@ -936,10 +941,13 @@ Exit criterion: adding a new member family requires no new parser or lowering ro
 
 Implemented evidence: semantic analysis represents member families and bound methods explicitly.
 Coercion, parse, and radix share family binding, immediate-invocation validation, receiver and
-argument checks, child selection, and result typing; lowering consumes the same bound-method result
-for all three families. Conformance cases exercise default and checked children, callback-derived
-return types, radix in both directions, and source diagnostics for invalid receivers, callback
-signatures, and arguments.
+argument checks, and child selection; lowering consumes the same bound-method result for all three
+families. Their result rules intentionally remain in two semantic helpers: numeric destination
+coercion is destination-driven, while parse/radix typing is callback- or receiver-driven. Converge
+those helpers only when milestone 15 introduces first-class function values and a common callable
+candidate model. Conformance cases exercise default and checked children, callback-derived return
+types, radix in both directions, and source diagnostics for invalid receivers, callback signatures,
+and arguments.
 
 ### Milestone 9 — Structured errors and typed propagation
 

@@ -1,0 +1,7 @@
+namespace uncaught-finally
+from /core/errors import arithmetic-overflow
+function main
+  try
+    throw arithmetic-overflow
+  finally
+    print; >finally ran

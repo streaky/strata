@@ -1,12 +1,22 @@
 namespace finally-control-flow
+from /core/errors import arithmetic-overflow
 function early int
   try
     return 7
   finally
     print; >return finally
+function caught int
+  try
+    throw arithmetic-overflow
+  catch arithmetic-overflow
+    return 9
+  finally
+    print; >catch finally
 function main
   value int = early;
   print; value
+  caught-value int = caught;
+  print; caught-value
   counter int = 0
   while counter < 3
     counter++
