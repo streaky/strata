@@ -80,6 +80,8 @@ impl Parser<'_> {
             "while" => self.parse_while(),
             "for" => self.parse_for(),
             "return" => self.parse_simple_value_statement(SyntaxKind::ReturnStatement),
+            "throw" => self.parse_simple_value_statement(SyntaxKind::ThrowStatement),
+            "try" => self.parse_try(),
             "break" => self.parse_bare_statement(SyntaxKind::BreakStatement),
             "continue" => self.parse_bare_statement(SyntaxKind::ContinueStatement),
             "from" => self.parse_import_declaration(),
@@ -91,8 +93,8 @@ impl Parser<'_> {
                 self.parse_binding()
             }
             "import" => self.parse_import_selection(),
-            "class" | "try" | "throw" | "yield" | "match" | "unsafe" | "rust" | "label"
-            | "goto" | "when" | "use" | "catch" | "finally" | "case" => self.parse_unsupported(),
+            "class" | "yield" | "match" | "unsafe" | "rust" | "label" | "goto" | "when" | "use"
+            | "catch" | "finally" | "case" => self.parse_unsupported(),
             _ if self.looks_like_binding() => self.parse_binding(),
             _ => self.parse_expression_statement(),
         }
@@ -431,6 +433,52 @@ impl Parser<'_> {
             children.push(self.node(SyntaxKind::ElseClause, clause_start, self.position, clause));
         }
         self.node(SyntaxKind::IfStatement, start, self.position, children)
+    }
+
+    fn parse_try(&mut self) -> SyntaxNode {
+        let start = self.position;
+        self.bump();
+        if !self.at_line_end() {
+            self.error_here("S1030", "`try` does not take an expression");
+            self.recover_line();
+        }
+        let mut children = vec![self.parse_block()];
+        while self.at_text("catch") {
+            let clause_start = self.position;
+            self.bump();
+            let mut clause = Vec::new();
+            if self.at(TokenKind::Identifier) && !self.at_text("as") {
+                clause.push(self.leaf(SyntaxKind::Name));
+            }
+            if self.eat_text("as") {
+                if self.at(TokenKind::Identifier) {
+                    clause.push(self.leaf(SyntaxKind::CatchBinding));
+                } else {
+                    self.error_here("S1032", "expected a binding name after `as`");
+                }
+            }
+            clause.push(self.parse_block());
+            children.push(self.node(SyntaxKind::CatchClause, clause_start, self.position, clause));
+        }
+        if self.at_text("finally") {
+            let clause_start = self.position;
+            self.bump();
+            let block = self.parse_block();
+            children.push(self.node(
+                SyntaxKind::FinallyClause,
+                clause_start,
+                self.position,
+                vec![block],
+            ));
+        }
+        if children.len() == 1 {
+            self.diagnostics.push(Diagnostic::error(
+                "S1033",
+                "`try` requires at least one `catch` or `finally` clause",
+                self.current().span,
+            ));
+        }
+        self.node(SyntaxKind::TryStatement, start, self.position, children)
     }
 
     fn parse_while(&mut self) -> SyntaxNode {

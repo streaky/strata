@@ -1,0 +1,16 @@
+namespace parse-radix-families
+from /core/types import int, string
+from /core/errors import coercion-error
+function from-hex int; source string
+  return source.radix; 16
+function fail int; source string
+  print; source
+  throw coercion-error
+function main
+  text string = >ff
+  parsed int = text.parse; from-hex
+  print; parsed
+  value int = 255
+  print; (value.radix; 16)
+  bad string = >x
+  bad.parse.checked; fail

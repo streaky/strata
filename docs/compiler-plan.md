@@ -866,6 +866,15 @@ Generated artifacts should be organized under a project-local ignored directory 
 
 Exit criterion: identical inputs produce byte-identical generated files; all accepted compile cases pass Cargo; the generated Rust for representative fixtures is readable and has reviewed goldens. Goldens pin canonical float display at both `float32` and `float64` width for `nan`, `inf`, `-inf`, negative zero, and shortest round-trippable finite values; they pin one multi-argument `print` call proving that arguments render adjacently with no inserted separator and exactly one trailing newline, alongside adjacent `print` calls proving record separation; and generated-project goldens include both authored lowered modules and the vendored support copy.
 
+Implemented evidence: lowering now produces an explicit deterministic Rust IR whose renderer splits
+authored units from the entrypoint, uses injective source-name encoding, and exposes the complete
+rendered file set to the CLI. Generated projects contain stable authored paths, copied
+content-addressed support crates, manifests, compiler/source metadata, and a build identity covering
+compiler version, source and support content, target, profile, and command-relevant options.
+`check`, `build`, and `run` share captured Cargo execution, while `rust` renders the authored output
+for inspection. Pipeline tests pin byte identity and generated file layout; compile/run conformance
+cases validate the generated crates with warnings denied.
+
 ### Milestone 6 — Source diagnostics across Rust
 
 Deliver:
@@ -882,6 +891,12 @@ The frontend should prevent ordinary type/name errors from reaching rustc. Backe
 
 Exit criterion: at least one deliberately induced backend error is mapped to its Terrane source location, and raw rustc information remains available.
 
+Implemented evidence: authored Rust items retain Terrane spans through lowering, Cargo is consumed as
+JSON, and the CLI projects the primary backend span back to the associated Terrane source location
+while retaining raw rustc output as a note. Stable backend, toolchain, and compiler-defect codes are
+rendered through the same diagnostic type; compiler defects preserve the generated project and
+report its reproduction path. CLI tests induce a backend failure and verify source projection.
+
 ### Milestone 7 — Semantic descriptor, protocol, and category model
 
 Deliver:
@@ -894,6 +909,11 @@ Deliver:
 - a compiler-owned descriptor schema carrying bounds, bit width, signedness, and declared protocols, kept separate from generated-Rust representation metadata.
 
 Exit criterion: category membership drives at least one real decision the compiler previously made by enumeration, `is a` answers abstract descriptors correctly, and no scalar is boxed merely to model source conformance.
+
+Implemented evidence: compiler-owned descriptor schemas now declare scalar bounds, widths,
+signedness, categories, and protocols. Abstract category membership drives `is a` and numeric
+classification without runtime boxing. `/core/types` exports category descriptors as explicit-only
+names. Accepted and rejected conformance cases cover abstract membership and descriptor misuse.
 
 ### Milestone 8 — Callable signatures and bound-method families
 
@@ -909,6 +929,12 @@ Deliver:
 
 Exit criterion: adding a new member family requires no new parser or lowering route, proven by re-expressing coercion and adding one further family through the shared path only.
 
+Implemented evidence: semantic analysis represents member families, bound methods, and callable
+signatures explicitly. Coercion, parse, and radix share family binding, immediate-invocation
+validation, argument-count checks, receiver constraints, child selection, and result typing.
+Conformance cases exercise default and checked children, callback-derived return types, radix in
+both directions, and source diagnostics for invalid receivers, callback signatures, and arguments.
+
 ### Milestone 9 — Structured errors and typed propagation
 
 Deliver:
@@ -921,6 +947,13 @@ Deliver:
 - deterministic uncaught rendering of the cause and source chain, preserving the current outermost reporting policy and exit code.
 
 Exit criterion: an arithmetic overflow and a failed coercion are catchable, a rethrow preserves the cause chain, uncaught output is unchanged from the current normative text, and generated Rust contains no panic-based control flow for recoverable failures.
+
+Implemented evidence: `throw`, ordered typed and catch-all `catch`, `try`, bare rethrow, and
+`finally` lower through `Result` rather than unwinding. Generated errors carry stable kind, message,
+optional cause, and source context; arithmetic and exact-conversion failures enter the same
+propagation path when recoverable. Conformance cases catch overflow and failed conversion, exercise
+checked callback failure, bare rethrow, catch-all ordering, and unconditional finally execution;
+reviewed Rust goldens contain no panic-based recoverable control flow.
 
 ### Milestone 10 — Named bounded-arithmetic families
 

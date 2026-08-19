@@ -1,0 +1,10 @@
+namespace catch-coercion-error
+from /core/types import int, int8
+from /core/errors import integer-conversion-overflow
+function main
+  value int = 300
+  try
+    narrow int8 = value.coerce; int8
+    print; narrow
+  catch integer-conversion-overflow
+    print; >caught

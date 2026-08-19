@@ -1,0 +1,12 @@
+namespace rethrow-catch-all
+from /core/errors import arithmetic-overflow
+function main
+  try
+    try
+      throw arithmetic-overflow
+    catch arithmetic-overflow
+      throw
+  catch
+    print; >caught
+  finally
+    print; >finally

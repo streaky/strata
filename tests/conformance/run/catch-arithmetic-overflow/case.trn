@@ -1,0 +1,12 @@
+namespace catch-arithmetic-overflow
+from /core/types import int8
+from /core/errors import arithmetic-overflow
+function main
+  try
+    value int8 = 127
+    value = value + 1
+    print; value
+  catch arithmetic-overflow
+    print; >caught
+  finally
+    print; >finally

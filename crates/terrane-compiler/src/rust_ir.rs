@@ -47,6 +47,7 @@ pub enum Expression {
 }
 
 impl Item {
+    #[must_use]
     pub fn generated(rust: String) -> Self {
         Self {
             source: None,
@@ -56,6 +57,7 @@ impl Item {
         }
     }
 
+    #[must_use]
     pub fn sourced(source: Span, rust: String) -> Self {
         Self {
             source: Some(source),
@@ -73,11 +75,7 @@ impl Item {
         }
     }
 
-    fn render_associated(
-        &self,
-        output: &mut String,
-        associations: &mut Vec<SourceAssociation>,
-    ) {
+    fn render_associated(&self, output: &mut String, associations: &mut Vec<SourceAssociation>) {
         let generated_start = output.len();
         self.render(output);
         if let Some(source) = self.source {
@@ -168,4 +166,3 @@ impl Program {
         files
     }
 }
-

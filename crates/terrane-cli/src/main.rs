@@ -156,9 +156,7 @@ fn run_cargo(
         let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if message["reason"] != "compiler-message"
-            || message["message"]["level"] != "error"
-        {
+        if message["reason"] != "compiler-message" || message["message"]["level"] != "error" {
             continue;
         }
         let raw = message["message"]["rendered"]
@@ -179,10 +177,11 @@ fn run_cargo(
             else {
                 continue;
             };
-            let byte_start = span["byte_start"].as_u64().unwrap_or(0) as usize;
+            let Ok(byte_start) = usize::try_from(span["byte_start"].as_u64().unwrap_or(0)) else {
+                continue;
+            };
             let Some(association) = file.associations.iter().find(|association| {
-                association.generated_start <= byte_start
-                    && byte_start <= association.generated_end
+                association.generated_start <= byte_start && byte_start <= association.generated_end
             }) else {
                 continue;
             };
@@ -362,10 +361,8 @@ mod tests {
 
     #[test]
     fn backend_error_projects_to_terrane_source_and_retains_rustc() {
-        let directory = std::env::temp_dir().join(format!(
-            "terrane-backend-diagnostic-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("terrane-backend-diagnostic-{}", std::process::id()));
         if directory.exists() {
             fs::remove_dir_all(&directory).unwrap();
         }
@@ -388,11 +385,7 @@ mod tests {
         }];
         let units = vec![SourceUnit {
             relative_path: PathBuf::from("case.trn"),
-            source: SourceFile::new(
-                0,
-                PathBuf::from("case.trn"),
-                "function main\n".to_owned(),
-            ),
+            source: SourceFile::new(0, PathBuf::from("case.trn"), "function main\n".to_owned()),
             expected_namespace: None,
         }];
 

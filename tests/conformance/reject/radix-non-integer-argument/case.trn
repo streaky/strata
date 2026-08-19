@@ -1,0 +1,4 @@
+namespace radix-non-integer-argument
+function main
+  radix string = >16
+  rendered string = 15.radix; radix

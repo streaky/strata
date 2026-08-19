@@ -19,6 +19,13 @@ Terrane package
 │   │   ├── /core/types
 │   │   │   ├── bool                           type descriptor
 │   │   │   ├── int                            type descriptor
+│   │   │   ├── abstract category descriptors
+│   │   │   │   ├── number
+│   │   │   │   ├── integer
+│   │   │   │   ├── fixed-integer
+│   │   │   │   ├── signed-fixed-integer
+│   │   │   │   ├── unsigned-fixed-integer
+│   │   │   │   └── floating
 │   │   │   ├── signed fixed-width descriptors
 │   │   │   │   ├── int8
 │   │   │   │   ├── int16
@@ -39,13 +46,13 @@ Terrane package
 │   │   │   ├── none                           type descriptor
 │   │   │   └── bytes                          descriptor name only
 │   │   └── /core/errors
-│   │       ├── error                          structural interface name only
-│   │       ├── arithmetic-overflow            error object name only
-│   │       ├── division-by-zero               error object name only
-│   │       ├── integer-conversion-overflow    error object name only
-│   │       ├── negative-shift-count           error object name only
-│   │       ├── resource-error                 error object name only
-│   │       └── coercion-error                 error object name only
+│   │       ├── error                          catch-all structural interface
+│   │       ├── arithmetic-overflow            catchable error object
+│   │       ├── division-by-zero               catchable error object
+│   │       ├── integer-conversion-overflow    catchable error object
+│   │       ├── negative-shift-count           catchable error object
+│   │       ├── resource-error                 catchable error object
+│   │       └── coercion-error                 catchable error object
 │   └── /core/collections                      empty namespace; name only
 ├── default prelude
 │   ├── print                                  binding to /core/output::print
@@ -373,32 +380,29 @@ A top-level plain assignment creates a namespace variable. Functions cannot read
 | any integer | `.coerce.checked; D` | family child | destination value or `none` |
 | fixed-width integer | `.coerce.wrap; D` | family child | destination value with wrapping policy |
 | fixed-width integer | `.coerce.saturate; D` | family child | destination value with saturation policy |
+| any value | `.parse; callback` | family default | callback's declared return |
+| any value | `.parse.checked; callback` | family child | callback's declared return or `none` |
+| `string` | `.radix; base` | method | adaptive `int` interpretation |
+| any integer | `.radix; base` | method | lowercase base-N `string` |
 
-The compiler represents these spellings as one canonical callable family with a
-distinguished default and typed policy children. Semantic analysis resolves that family
-before lowering; generated Rust then erases the family object to the matching support
-operation. The support-crate helper names are backend details, not additional Terrane
-members or direct source-level coercion operations.
-
-No other value properties or methods are recognized by the current semantic/lowering pipeline.
+The compiler represents callable families as bound methods with a distinguished default,
+typed children, signatures, and availability constraints. Semantic analysis resolves the
+family before lowering; generated Rust erases it to a direct function or support operation.
+Family selections must be invoked in the same expression.
 
 ## Compiler-owned names without implemented object behavior
 
-These names exist so the namespace and resolution model has stable canonical identities. They must not be mistaken for completed runtime behavior. The `.error` name is classified as a structural interface and the remaining `/core/errors` names as error objects, but fields, inheritance, constructors, catchability, and runtime instances remain unimplemented:
+The remaining names in this section exist only so resolution has stable identities:
 
 ```text
 /core/types::bytes
-/core/errors::error
-/core/errors::arithmetic-overflow
-/core/errors::division-by-zero
-/core/errors::integer-conversion-overflow
-/core/errors::negative-shift-count
-/core/errors::resource-error
-/core/errors::coercion-error
 /core/collections
 ```
 
-In particular, runtime arithmetic diagnostics currently use deterministic compiler support paths; they do not construct catchable instances of the `/core/errors` names.
+The `/core/errors` interface and error objects are runtime identities used by `throw`,
+`try`, `catch`, and `finally`. Arithmetic and coercion failures enter the same typed
+result-propagation path and are catchable. Generated errors carry a stable kind, message,
+optional cause, and source-context chain; source-level field access is not implemented yet.
 
 ## Major planned surface absent today
 

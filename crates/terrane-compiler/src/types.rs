@@ -197,6 +197,10 @@ impl ScalarType {
             .find_map(|(source_name, ty)| (source_name == name).then_some(ty))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete scalar descriptor table is clearer and reviewable as one exhaustive match"
+    )]
     #[must_use]
     pub const fn descriptor_schema(self) -> DescriptorSchema {
         let (bit_width, signed, minimum, maximum, categories, protocols) = match self {
@@ -304,14 +308,9 @@ impl ScalarType {
                 FLOATING_CATEGORIES,
                 FLOAT_PROTOCOLS,
             ),
-            Self::Bool | Self::String | Self::None => (
-                None,
-                None,
-                None,
-                None,
-                VALUE_CATEGORIES,
-                NO_PROTOCOLS,
-            ),
+            Self::Bool | Self::String | Self::None => {
+                (None, None, None, None, VALUE_CATEGORIES, NO_PROTOCOLS)
+            }
         };
         DescriptorSchema {
             scalar: self,
