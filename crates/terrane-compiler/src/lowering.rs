@@ -1027,10 +1027,12 @@ impl Emitter<'_> {
                 _ => None,
             }
         {
+            let operation_type = ValueType::Scalar(operation_type);
+            let left = Self::unwrapped_expression(self.expression_as(left, operation_type));
             let right = if matches!(source_operator, "<<" | ">>") {
                 self.expression(right)
             } else {
-                self.expression_as(right, ValueType::Scalar(operation_type))
+                Self::unwrapped_expression(self.expression_as(right, operation_type))
             };
             let right = if matches!(source_operator, "<<" | ">>") {
                 format!("&{right}")
@@ -1038,8 +1040,7 @@ impl Emitter<'_> {
                 right
             };
             return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({}, {right}))",
-                self.expression_as(left, ValueType::Scalar(operation_type)),
+                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({left}, {right}))"
             );
         }
         if let Some(operation_type) = self.numeric_operation_type(left, right) {

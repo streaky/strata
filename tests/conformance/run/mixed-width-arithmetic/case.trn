@@ -1,0 +1,11 @@
+namespace mixed-width-arithmetic
+from /core/types import int8, uint8, int16, int32
+
+function main
+  left int8 = 100
+  right int32 = 2
+  unsigned uint8 = 120
+  total int32 = left + right
+  combined int16 = left + unsigned
+  print; total
+  print; combined
