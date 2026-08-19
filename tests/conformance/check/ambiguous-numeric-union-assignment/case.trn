@@ -1,0 +1,5 @@
+namespace ambiguous-numeric-union-assignment
+from /core/types import int8, int32
+function main
+  choice int8|int32 = 128
+  choice = 5

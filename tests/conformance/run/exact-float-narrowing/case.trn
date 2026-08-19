@@ -1,0 +1,6 @@
+namespace exact-float-narrowing
+from /core/types import float32, float64
+function main
+  source float64 = 1.5
+  target float32 = source
+  print; target

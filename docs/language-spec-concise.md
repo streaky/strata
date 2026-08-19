@@ -417,6 +417,7 @@ checked_narrowing: direct representability check; integer destination failure th
 float_to_integer: succeeds only for finite, integral, in-range values; otherwise integer-conversion-overflow
 integer_to_float_implicit: succeeds only when this integer is exactly representable; otherwise throws
 integer_to_float_written: 'value.coerce; float-type' requests IEEE round-to-nearest, ties-to-even; inexact result is ordinary
+float_narrowing: exact finite values, signed zero, and signed infinity arrive with sign preserved; rounded finite values and every NaN throw integer-conversion-overflow
 fixed_to_int: exact; int8..int64 and uint8..uint32 fit Small, uint64..int128 fit Wide, uint128 uses Wide below 2^127 or Big otherwise; Big may have an ordinary allocation failure but no conversion error
 float_to_integer_written: NO declared coerce pair - choosing an integer for a fractional value needs a rounding mode and coerce never takes one; 'ratio.coerce; int' is absent while 'count int = ratio' is admitted
 float_rounding_members: round (ties-to-even) | floor | ceiling | truncate; each yields an integer before destination conversion

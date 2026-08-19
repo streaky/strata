@@ -1,5 +1,7 @@
-use num_bigint::BigInt;
 use std::collections::{BTreeMap, BTreeSet};
+
+use num_bigint::BigInt;
+use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
 use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, lexer, parser};
@@ -123,6 +125,8 @@ pub struct TypedBinding {
     pub name: String,
     pub span: Span,
     pub value_type: ValueType,
+    pub destination_arms: Vec<ScalarType>,
+    pub storage_type: Option<ScalarType>,
     pub mutable: bool,
 }
 
@@ -1443,6 +1447,8 @@ fn validate_call_nodes<'a>(
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
             value_type: ValueType::Scalar(ScalarType::String),
+            destination_arms: Vec::new(),
+            storage_type: None,
             mutable: false,
         }));
         validate_call_nodes(
@@ -1640,18 +1646,17 @@ fn validate_call_arguments(
                 argument.span,
             ));
         }
-        if let Some(expected) = parameter.value_type {
-            let value = argument.children.last().unwrap_or(argument);
-            if let Some(actual) = infer_value_type(unit, value, bindings)? {
-                validate_numeric_destination(
-                    &unit.source,
-                    &parameter.name,
-                    expected,
-                    actual,
-                    value,
-                    "T0012",
-                )?;
-            }
+        let value = argument.children.last().unwrap_or(argument);
+        let actual = infer_value_type(unit, value, bindings)?;
+        if let (Some(expected), Some(actual)) = (parameter.value_type, actual) {
+            validate_numeric_destination(
+                &unit.source,
+                &parameter.name,
+                expected,
+                actual,
+                value,
+                "T0012",
+            )?;
         }
     }
     if let Some(missing) = contract
@@ -1697,6 +1702,8 @@ fn call_site_bindings(
                 name: parameter.name.clone(),
                 span: parameter.span,
                 value_type: ValueType::Scalar(value_type),
+                destination_arms: Vec::new(),
+                storage_type: None,
                 mutable: false,
             })
         }));
@@ -1921,6 +1928,8 @@ fn collect_typed_bindings(
                 name: parameter.name.clone(),
                 span: parameter.span,
                 value_type: ValueType::Scalar(value_type),
+                destination_arms: Vec::new(),
+                storage_type: None,
                 mutable: false,
             })
         }));
@@ -1939,6 +1948,8 @@ fn collect_typed_bindings(
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
             value_type: ValueType::Scalar(ScalarType::String),
+            destination_arms: Vec::new(),
+            storage_type: None,
             mutable: false,
         };
         let mut loop_bindings = visible_bindings.clone();
@@ -2082,11 +2093,28 @@ fn analyze_binding_node(
     if node.kind == SyntaxKind::Assignment
         && declared.is_none()
         && let Some(previous) = bindings.iter().rev().find(|binding| binding.name == name)
-        && let ValueType::Scalar(expected) = previous.value_type
         && let Some(initializer) = initializer
         && let Some(actual) = infer_value_type(unit, initializer, bindings)?
     {
-        validate_numeric_destination(&unit.source, &name, expected, actual, initializer, "T0002")?;
+        if previous.destination_arms.is_empty() {
+            if let ValueType::Scalar(expected) = previous.value_type {
+                validate_numeric_destination(
+                    &unit.source,
+                    &name,
+                    expected,
+                    actual,
+                    initializer,
+                    "T0002",
+                )?;
+            }
+        } else {
+            select_union_candidates(
+                &unit.source,
+                initializer,
+                actual,
+                previous.destination_arms.clone(),
+            )?;
+        }
         return Ok(());
     }
     let inferred = initializer
@@ -2119,22 +2147,28 @@ fn analyze_binding_node(
     } else {
         return Ok(());
     };
+    let destination_arms = declared
+        .and_then(|type_node| union_destination_candidates(unit, type_node).ok())
+        .unwrap_or_default();
+    let storage_type = (value_type == ValueType::Scalar(ScalarType::Int))
+        .then(|| initializer.and_then(|value| small_int_storage(unit, value, inferred)))
+        .flatten();
 
     bindings.push(TypedBinding {
         name,
         span: node.span,
         value_type,
+        destination_arms,
+        storage_type,
         mutable: false,
     });
     Ok(())
 }
 
-fn select_union_destination(
+fn union_destination_candidates(
     unit: &SemanticUnit,
     type_node: &SyntaxNode,
-    value: &SyntaxNode,
-    actual: ValueType,
-) -> Result<ScalarType, SemanticFailure> {
+) -> Result<Vec<ScalarType>, SemanticFailure> {
     let names = node_text(&unit.source, type_node)
         .split('|')
         .map(str::trim)
@@ -2150,21 +2184,45 @@ fn select_union_destination(
             type_node.span,
         ));
     }
-    let mut candidates = Vec::with_capacity(names.len());
-    for name in names {
-        let Some(candidate) = unit.descriptor_alias_at(name, type_node.span.start) else {
-            return Err(failure(
-                &unit.source,
-                "T0001",
-                format!("`{name}` does not resolve to a scalar type descriptor"),
-                type_node.span,
-            ));
-        };
-        candidates.push(candidate);
-    }
+    names
+        .into_iter()
+        .map(|name| {
+            unit.descriptor_alias_at(name, type_node.span.start)
+                .ok_or_else(|| {
+                    failure(
+                        &unit.source,
+                        "T0001",
+                        format!("`{name}` does not resolve to a scalar type descriptor"),
+                        type_node.span,
+                    )
+                })
+        })
+        .collect()
+}
+
+fn select_union_destination(
+    unit: &SemanticUnit,
+    type_node: &SyntaxNode,
+    value: &SyntaxNode,
+    actual: ValueType,
+) -> Result<ScalarType, SemanticFailure> {
+    select_union_candidates(
+        &unit.source,
+        value,
+        actual,
+        union_destination_candidates(unit, type_node)?,
+    )
+}
+
+fn select_union_candidates(
+    source: &SourceFile,
+    value: &SyntaxNode,
+    actual: ValueType,
+    candidates: Vec<ScalarType>,
+) -> Result<ScalarType, SemanticFailure> {
     let is_constant = candidates
         .iter()
-        .any(|candidate| contextual_constant(&unit.source, value, *candidate).is_some());
+        .any(|candidate| contextual_constant(source, value, *candidate).is_some());
     if !is_constant
         && let ValueType::Scalar(actual) = actual
         && candidates.contains(&actual)
@@ -2174,7 +2232,7 @@ fn select_union_destination(
     let admitted = candidates
         .into_iter()
         .filter(|candidate| {
-            if let Some(result) = contextual_constant(&unit.source, value, *candidate) {
+            if let Some(result) = contextual_constant(source, value, *candidate) {
                 return result.is_ok();
             }
             matches!(actual, ValueType::Scalar(actual) if is_numeric(actual) && is_numeric(*candidate))
@@ -2183,13 +2241,13 @@ fn select_union_destination(
     match admitted.as_slice() {
         [candidate] => Ok(*candidate),
         [] => Err(failure(
-            &unit.source,
+            source,
             "T0002",
             "value is not admitted by any union destination arm",
             value.span,
         )),
         candidates => Err(failure(
-            &unit.source,
+            source,
             "T0002",
             format!(
                 "numeric destination is ambiguous between {}",
@@ -2678,7 +2736,11 @@ fn infer_binary_type(
     };
     let same = left == right;
     if contextual_numeric && left != right && left.is_integer() && right.is_integer() {
-        return Ok(ValueType::Scalar(promoted_integer_type(left, right)));
+        return Ok(ValueType::Scalar(if comparison {
+            ScalarType::Bool
+        } else {
+            promoted_integer_type(left, right)
+        }));
     }
     let numeric =
         |ty: ScalarType| ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64);
@@ -2724,6 +2786,7 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
     if node.kind != SyntaxKind::Literal {
         return None;
     }
+
     let text = node_text(source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
@@ -2743,12 +2806,46 @@ pub(crate) fn contextual_constant(
     }
     contextual_constant_value(source, node, destination).map(|result| {
         result.and_then(|value| {
-            if let ContextualConstant::Integer(integer) = &value {
-                check_integer_range(source, destination, integer, node.span)?;
+            match &value {
+                ContextualConstant::Integer(integer) => {
+                    check_integer_range(source, destination, integer, node.span)?;
+                }
+                ContextualConstant::Float32(value) if !value.is_finite() => {
+                    return Err(invalid_floating_constant(source, destination, node.span));
+                }
+                ContextualConstant::Float64(value) if !value.is_finite() => {
+                    return Err(invalid_floating_constant(source, destination, node.span));
+                }
+                ContextualConstant::Float32(_) | ContextualConstant::Float64(_) => {}
             }
             Ok(value)
         })
     })
+}
+fn small_int_storage(
+    unit: &SemanticUnit,
+    value: &SyntaxNode,
+    inferred: Option<ValueType>,
+) -> Option<ScalarType> {
+    if let Some(Ok(ContextualConstant::Integer(integer))) =
+        contextual_constant(&unit.source, value, ScalarType::Int)
+        && integer.to_i64().is_some()
+    {
+        return Some(ScalarType::Int64);
+    }
+    matches!(
+        inferred,
+        Some(ValueType::Scalar(
+            ScalarType::Int8
+                | ScalarType::Int16
+                | ScalarType::Int32
+                | ScalarType::Int64
+                | ScalarType::Uint8
+                | ScalarType::Uint16
+                | ScalarType::Uint32
+        ))
+    )
+    .then_some(ScalarType::Int64)
 }
 
 fn contextual_constant_value(
@@ -2777,6 +2874,14 @@ fn contextual_constant_value(
                 return None;
             };
             let operator = source.text()[left.span.end..right.span.start].trim();
+            let valid = if destination.is_integer() {
+                matches!(operator, "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>")
+            } else {
+                matches!(operator, "+" | "-" | "*" | "/" | "%")
+            };
+            if !valid {
+                return None;
+            }
             let left = contextual_constant_value(source, left, destination)?;
             let right = contextual_constant_value(source, right, destination)?;
             match (left, right) {
@@ -2813,8 +2918,9 @@ fn contextual_literal(
     destination: ScalarType,
 ) -> Result<ContextualConstant, SemanticFailure> {
     let text = node_text(source, node).replace('_', "");
+    let decimal = text.contains('.');
     if destination.is_integer() {
-        let value = if text.contains('.') {
+        let value = if decimal {
             let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
             if !fraction.chars().all(|digit| digit == '0') {
                 return Err(failure(
@@ -2829,13 +2935,48 @@ fn contextual_literal(
             parse_integer_source_text(source, node).expect("validated integer constant")
         };
         Ok(ContextualConstant::Integer(value))
-    } else if destination == ScalarType::Float32 {
-        let value = text.parse::<f32>().expect("validated float constant");
-        Ok(ContextualConstant::Float32(value))
+    } else if decimal {
+        if destination == ScalarType::Float32 {
+            let value = text
+                .parse::<f32>()
+                .map_err(|_| invalid_floating_constant(source, destination, node.span))?;
+            Ok(ContextualConstant::Float32(value))
+        } else {
+            let value = text
+                .parse::<f64>()
+                .map_err(|_| invalid_floating_constant(source, destination, node.span))?;
+            Ok(ContextualConstant::Float64(value))
+        }
     } else {
-        let value = text.parse::<f64>().expect("validated float constant");
-        Ok(ContextualConstant::Float64(value))
+        let integer =
+            parse_integer_source_text(source, node).expect("validated whole-number constant");
+        if destination == ScalarType::Float32 {
+            let value = integer
+                .to_f32()
+                .filter(|value| BigInt::from_f32(*value).as_ref() == Some(&integer))
+                .ok_or_else(|| invalid_floating_constant(source, destination, node.span))?;
+            Ok(ContextualConstant::Float32(value))
+        } else {
+            let value = integer
+                .to_f64()
+                .filter(|value| BigInt::from_f64(*value).as_ref() == Some(&integer))
+                .ok_or_else(|| invalid_floating_constant(source, destination, node.span))?;
+            Ok(ContextualConstant::Float64(value))
+        }
     }
+}
+
+fn invalid_floating_constant(
+    source: &SourceFile,
+    destination: ScalarType,
+    span: Span,
+) -> SemanticFailure {
+    failure(
+        source,
+        "T0003",
+        format!("constant is not a finite exact `{destination}` value"),
+        span,
+    )
 }
 
 fn fold_integer_constant(
@@ -2872,6 +3013,24 @@ fn fold_integer_constant(
                 }
             } else {
                 remainder
+            }
+        }
+        "&" => left & right,
+        "|" => left | right,
+        "^" => left ^ right,
+        "<<" | ">>" => {
+            let Some(count) = right.to_usize() else {
+                return Err(failure(
+                    source,
+                    "T0011",
+                    "constant shift count cannot be represented on this target",
+                    span,
+                ));
+            };
+            if operator == "<<" {
+                left << count
+            } else {
+                left >> count
             }
         }
         _ => {
@@ -2978,7 +3137,7 @@ fn integer_bounds(bits: usize, signed: bool) -> (BigInt, BigInt) {
     }
 }
 
-fn promoted_integer_type(left: ScalarType, right: ScalarType) -> ScalarType {
+pub(crate) fn promoted_integer_type(left: ScalarType, right: ScalarType) -> ScalarType {
     if left == ScalarType::Int || right == ScalarType::Int {
         return ScalarType::Int;
     }
@@ -3528,6 +3687,10 @@ fn validate_flow_block(
     Ok(falls_through)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "flow validation keeps every statement transition in one exhaustive dispatch"
+)]
 fn validate_flow_statement(
     unit: &SemanticUnit,
     statement: &SyntaxNode,
@@ -3595,6 +3758,8 @@ fn validate_flow_statement(
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
                     value_type: ValueType::Scalar(ScalarType::String),
+                    destination_arms: Vec::new(),
+                    storage_type: None,
                     mutable: false,
                 }));
             }

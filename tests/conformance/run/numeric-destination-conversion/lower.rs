@@ -1,20 +1,39 @@
 // Generated deterministically by Terrane <version>.
 // Source: case.trn
 // Namespace: numeric-destination-conversion
+#[allow(dead_code)]
+#[derive(Clone)]
+enum TerraneUnionF0S169 {
+    Arm0(i8),
+    Arm1(i32),
+}
+impl terrane_scalar_support::ScalarDisplay for TerraneUnionF0S169 {
+    fn write_scalar(&self, output: &mut String) {
+        match self {
+            Self::Arm0(value) => terrane_scalar_support::ScalarDisplay::write_scalar(value, output),
+            Self::Arm1(value) => terrane_scalar_support::ScalarDisplay::write_scalar(value, output),
+        }
+    }
+}
 fn main() {
     let small: i8 = 12;
-    let adaptive: terrane_int_support::Int = terrane_int_support::Int::from((small) as i128);
+    let adaptive: i64 = (small) as i64;
     let wide: i32 = (small) as i32;
-    let selected: terrane_int_support::Int = terrane_int_support::Int::from((small) as i128);
+    let mut selected: TerraneUnionF0S169 = TerraneUnionF0S169::Arm0(small);
     let count: i32 = 16777216;
-    let total: f64 = { let source = count; let converted = source as f64; if (converted as i32) == source { converted } else { terrane_int_support::unwrap_or_fail(Err(terrane_int_support::ArithmeticError::IntegerConversionOverflow)) } };
-    let exact: terrane_int_support::Int = terrane_int_support::Int::from(18014398509481984_i128);
+    let total: f64 = (count) as f64;
+    let exact: i64 = 18014398509481984;
     let exact_float: f64 = terrane_int_support::unwrap_or_fail(terrane_int_support::exact_f64(&(exact)));
     let whole: f64 = 4.0;
     let converted: terrane_int_support::Int = terrane_int_support::unwrap_or_fail(terrane_int_support::exact_int_f64(whole));
     println!("{}", terrane_scalar_support::scalar_text(&(adaptive)));
     println!("{}", terrane_scalar_support::scalar_text(&(wide)));
     println!("{}", terrane_scalar_support::scalar_text(&(selected)));
+    let other: i32 = 13;
+    selected = TerraneUnionF0S169::Arm1(other);
+    println!("{}", terrane_scalar_support::scalar_text(&(matches!(&selected, TerraneUnionF0S169::Arm1(_)))));
+    selected = TerraneUnionF0S169::Arm0(small);
+    println!("{}", terrane_scalar_support::scalar_text(&(matches!(&selected, TerraneUnionF0S169::Arm0(_)))));
     println!("{}", terrane_scalar_support::scalar_text(&(total)));
     println!("{}", terrane_scalar_support::scalar_text(&(exact_float)));
     println!("{}", terrane_scalar_support::scalar_text(&(converted)));

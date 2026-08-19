@@ -177,7 +177,9 @@ fixed-width integer value T
 
 All integer descriptors, including `int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked; overflow is a runtime failure. `.coerce.checked` returns `T or none`; `.coerce.wrap` and `.coerce.saturate` return `T`.
 
-Declared numeric binding, assignment, parameter-default, argument, and return destinations now admit numeric values exactly or fail with `integer-conversion-overflow`. Range-contained fixed-width widening emits only a representation change; other typed numeric pairs retain a runtime representability check. Integer values of different concrete types promote to the smallest implemented integer type containing both source ranges, or to `int`. For a numeric union binding destination, an exact typed arm wins; otherwise the value must be admitted by exactly one arm, and ambiguous constants are rejected.
+Declared numeric binding, assignment, parameter-default, argument, and return destinations admit numeric values exactly or fail with `integer-conversion-overflow`. Range-contained fixed-width widening emits only a representation change; other typed numeric pairs retain a runtime representability check. Integer values of different concrete types promote to the smallest implemented integer type containing both source ranges, or to `int`. Local adaptive-`int` bindings proven to remain in `int64` range lower directly to `i64`; conversion to the erased adaptive ABI occurs only where an operation or call requires it.
+
+Numeric union bindings retain their declared arms in the semantic model and lower to compiler-owned tagged Rust enums. An exact typed arm wins; otherwise the value must be admitted by exactly one arm. Ambiguous constants are rejected, later assignments are checked against the original arm set, and `is a` inspects the current runtime arm rather than the initializer's selected type.
 
 Numeric constant expressions are evaluated in their destination context. Integer destinations use exact unbounded intermediates and check only the final result; floating destinations evaluate at destination precision. This applies to typed bindings and assignments, parameter defaults, declared arguments, and declared returns. A constant used with a typed numeric operand takes that operand's type, except for shift counts.
 
@@ -213,7 +215,7 @@ floating-point value T
     └── value is a descriptor T -> bool
 ```
 
-No float conversion methods are implemented.
+No float conversion methods are implemented. Numeric destinations do implement exact integer/floating crossings and exact `float64`-to-`float32` narrowing; inexact narrowing fails with `integer-conversion-overflow`.
 
 ### `string`
 

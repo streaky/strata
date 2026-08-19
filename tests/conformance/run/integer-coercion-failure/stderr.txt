@@ -1,1 +1,1 @@
-.integer-conversion-overflow: integer conversion result is outside the destination type
+.integer-conversion-overflow: value 128 of type int64 cannot arrive exactly as int8: the value is outside the destination range

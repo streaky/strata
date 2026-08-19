@@ -154,7 +154,12 @@ fn integer_coercion_families_cover_signed_unsigned_and_adaptive_values() {
     assert_eq!(coerce::<i8>(&127_i128), Ok(127));
     assert_eq!(
         coerce::<i8>(&128_i128),
-        Err(ArithmeticError::IntegerConversionOverflow)
+        Err(ArithmeticError::conversion_overflow(
+            &128,
+            "int128",
+            "int8",
+            "the value is outside the destination range",
+        ))
     );
     assert_eq!(checked_coerce::<u8>(&-1_i16), None);
     assert_eq!(wrapping_coerce::<i8>(&255_u16), -1);

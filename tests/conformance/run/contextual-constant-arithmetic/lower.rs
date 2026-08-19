@@ -9,8 +9,8 @@ fn bounded() -> i32 {
 }
 fn main() {
     let reduced: i8 = 100;
-    let integral: terrane_int_support::Int = terrane_int_support::Int::from(4_i128);
-    let quotient: terrane_int_support::Int = terrane_int_support::Int::from(0_i128);
+    let integral: i64 = 4;
+    let quotient: i64 = 0;
     let ratio: f32 = 0.33333334_f32;
     let rounded: terrane_int_support::Int = terrane_int_support::unwrap_or_fail(terrane_int_support::rounded_f32(ratio, terrane_int_support::FloatRounding::TiesEven));
     println!("{}", terrane_scalar_support::scalar_text(&(reduced)));

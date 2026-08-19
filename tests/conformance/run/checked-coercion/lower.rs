@@ -14,12 +14,12 @@ fn helper() {
 }
 fn main() {
     helper();
-    let value: terrane_int_support::Int = terrane_int_support::Int::from(300_i128);
-    let within: terrane_int_support::Int = terrane_int_support::Int::from(100_i128);
+    let value: i64 = 300;
+    let within: i64 = 100;
     let coerced: i8 = terrane_int_support::unwrap_or_fail(terrane_int_support::coerce::<i8>(&(within)));
     let renamed_checked: Option<i8> = terrane_int_support::checked_coerce::<i8>(&(within));
     let shared_coerced: i8 = terrane_int_support::unwrap_or_fail(terrane_int_support::coerce::<i8>(&*__TERRANE_F0_SHARED));
-    let parameter_coerced: i8 = convert(within.clone());
+    let parameter_coerced: i8 = convert(terrane_int_support::Int::from((within) as i128));
     let checked: Option<i8> = terrane_int_support::checked_coerce::<i8>(&(value));
     let absent: bool = (checked).is_none();
     let present: bool = (checked).is_some();

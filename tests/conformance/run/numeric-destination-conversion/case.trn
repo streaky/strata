@@ -5,7 +5,7 @@ function main
   small int8 = 12
   adaptive int = small
   wide int32 = small
-  selected int|none = small
+  selected int8|int32 = small
   count int32 = 16_777_216
   total float = count
   exact int = 18_014_398_509_481_984
@@ -15,6 +15,11 @@ function main
   print; adaptive
   print; wide
   print; selected
+  other int32 = 13
+  selected = other
+  print; selected is a int32
+  selected = small
+  print; selected is a int8
   print; total
   print; exact-float
   print; converted

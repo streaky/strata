@@ -829,6 +829,8 @@ with `counter + 1` throws `arithmetic-overflow`; a fixed-width value in an `int|
 widens while the constant `5` in `int8|int32` is rejected as ambiguous; and `is a` fails at its span
 on an unresolvable right-hand name.
 
+Implemented evidence: semantic analysis now evaluates numeric constants in destination and typed-operand context, including exact integer folding, destination-precision floating folding, Euclidean division, shifts, and bitwise operators. Typed bindings, assignments, parameter defaults, declared call arguments, and declared returns share one exact-arrival validation path. Lowering materialises contextual constants directly, uses representation-only fixed-width widening, emits checked integer/floating crossings with source-oriented `integer-conversion-overflow` details, and keeps statically proven Small `int` locals as machine words. Numeric union bindings retain compiler-owned arm metadata, reject ambiguous constants independently of arm order, preserve the selected runtime arm across assignment, and answer `is a` from that arm. Focused conformance cases cover exact and inexact float narrowing, contextual floating literals, ambiguous union initialization and reassignment, conversion boundaries, operand promotion, and runtime failures; the Mandelbrot benchmark now uses contextual literals without written coercions.
+
 Deferred out of this milestone and recorded in specification §40.9: the exact-arrival predicate for a
 typed value, proposed as `value.fits; Destination`; the statically false `is a` lint and the lossy
 constant-division lint; whether `integer-conversion-overflow` keeps a name that now covers neither
