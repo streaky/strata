@@ -220,6 +220,7 @@ pub struct SemanticUnit {
     pub typed_bindings: Vec<TypedBinding>,
     /// Function contracts declared by every source unit in this unit's namespace.
     pub functions: Vec<FunctionContract>,
+    function_aliases: BTreeMap<String, FunctionContract>,
     descriptor_aliases: BTreeMap<String, Vec<DescriptorAlias>>,
     pub unreachable_spans: Vec<Span>,
     pub evaluation_steps: Vec<EvaluationStep>,
@@ -343,6 +344,7 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
+            function_aliases: BTreeMap::new(),
             descriptor_aliases: BTreeMap::new(),
             unreachable_spans: Vec::new(),
             evaluation_steps: Vec::new(),
@@ -418,6 +420,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     validate_references(&semantic)?;
     validate_error_clauses(&semantic)?;
     analyze_types(&mut semantic)?;
+    infer_throwing_effects(&mut semantic);
     validate_constant_reassignment(&semantic)?;
     validate_global_definite_assignment(&semantic)?;
     record_binding_mutability(&mut semantic);
@@ -485,7 +488,8 @@ fn validate_error_clauses(package: &SemanticPackage) -> Result<(), SemanticFailu
                         descriptor.span,
                     ));
                 }
-                if catches_all || !caught.insert(name.to_owned()) {
+                let identity = &symbol.expect("validated error symbol").identity;
+                if catches_all || !caught.insert(identity.clone()) {
                     return Err(failure(
                         &unit.source,
                         "T0022",
@@ -493,9 +497,7 @@ fn validate_error_clauses(package: &SemanticPackage) -> Result<(), SemanticFailu
                         clause.span,
                     ));
                 }
-                catches_all = symbol.is_some_and(|symbol| {
-                    symbol.kind == SymbolKind::Interface && symbol.identity == "/core/errors::error"
-                });
+                catches_all = identity == "/core/errors::error";
             }
         }
         for child in &node.children {
@@ -528,6 +530,31 @@ fn populate_namespace_function_contracts(package: &mut SemanticPackage) {
             .zip(&functions)
             .filter(|(candidate, _)| *candidate == namespace)
             .flat_map(|(_, functions)| functions.iter().cloned())
+            .collect();
+    }
+}
+
+fn populate_function_aliases(package: &mut SemanticPackage) {
+    let contracts = package
+        .units
+        .iter()
+        .flat_map(|unit| unit.functions.iter())
+        .map(|contract| ((contract.span.file, contract.span.start, contract.span.end), contract.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for unit in &mut package.units {
+        unit.function_aliases = package
+            .namespaces
+            .get(&unit.namespace)
+            .into_iter()
+            .flat_map(|namespace| &namespace.symbols)
+            .filter_map(|(visible_name, symbol)| {
+                let span = symbol.declaration_span?;
+                (symbol.kind == SymbolKind::Function)
+                    .then(|| contracts.get(&(span.file, span.start, span.end)))
+                    .flatten()
+                    .cloned()
+                    .map(|contract| (visible_name.clone(), contract))
+            })
             .collect();
     }
 }
@@ -1888,6 +1915,7 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         package.units[index].functions = functions;
     }
     populate_namespace_function_contracts(package);
+    populate_function_aliases(package);
     validate_descriptor_value_uses(package)?;
 
     for index in 0..package.units.len() {
@@ -2194,14 +2222,155 @@ fn analyze_function_contract(
         span: node.span,
         parameters,
         return_type,
-        throws: node.children.iter().any(contains_direct_throw),
+        throws: false,
     })
 }
 
-fn contains_direct_throw(node: &SyntaxNode) -> bool {
-    node.kind == SyntaxKind::ThrowStatement
-        || (node.kind != SyntaxKind::FunctionDeclaration
-            && node.children.iter().any(contains_direct_throw))
+fn infer_throwing_effects(package: &mut SemanticPackage) {
+    type FunctionKey = (u32, usize, usize);
+
+    fn key(span: Span) -> FunctionKey {
+        (span.file, span.start, span.end)
+    }
+
+    fn direct_errors(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> BTreeSet<String> {
+        if node.kind == SyntaxKind::FunctionDeclaration {
+            return BTreeSet::new();
+        }
+        if node.kind == SyntaxKind::ThrowStatement {
+            return node
+                .children
+                .first()
+                .and_then(|error| {
+                    package.resolve_name_at(unit, error.span.start, node_text(&unit.source, error))
+                })
+                .map(|symbol| symbol.identity.clone())
+                .into_iter()
+                .collect();
+        }
+        if node.kind == SyntaxKind::TryStatement {
+            let mut errors = node
+                .children
+                .first()
+                .map_or_else(BTreeSet::new, |block| direct_errors(package, unit, block));
+            let mut clauses_finished = false;
+            for child in node.children.iter().skip(1) {
+                if child.kind == SyntaxKind::CatchClause {
+                    let descriptor = child
+                        .children
+                        .first()
+                        .filter(|candidate| candidate.kind == SyntaxKind::Name);
+                    if let Some(descriptor) = descriptor
+                        && let Some(symbol) = package.resolve_name_at(
+                            unit,
+                            descriptor.span.start,
+                            node_text(&unit.source, descriptor),
+                        )
+                    {
+                        if symbol.identity == "/core/errors::error" {
+                            errors.clear();
+                        } else {
+                            errors.remove(&symbol.identity);
+                        }
+                    } else {
+                        errors.clear();
+                    }
+                    if let Some(block) = child.children.last() {
+                        errors.extend(direct_errors(package, unit, block));
+                    }
+                    clauses_finished = true;
+                } else if child.kind == SyntaxKind::FinallyClause {
+                    if let Some(block) = child.children.last() {
+                        errors.extend(direct_errors(package, unit, block));
+                    }
+                } else if !clauses_finished {
+                    errors.extend(direct_errors(package, unit, child));
+                }
+            }
+            return errors;
+        }
+        node.children
+            .iter()
+            .flat_map(|child| direct_errors(package, unit, child))
+            .collect()
+    }
+
+    fn callees(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        output: &mut BTreeSet<FunctionKey>,
+    ) {
+        if node.kind == SyntaxKind::FunctionDeclaration {
+            return;
+        }
+        if node.kind == SyntaxKind::CallExpression
+            && let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::Name
+            && let Some(symbol) =
+                package.resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))
+            && symbol.kind == SymbolKind::Function
+            && let Some(span) = symbol.declaration_span
+        {
+            output.insert(key(span));
+        }
+        for child in &node.children {
+            callees(package, unit, child, output);
+        }
+    }
+
+    let mut effects = BTreeMap::<FunctionKey, bool>::new();
+    let mut edges = BTreeMap::<FunctionKey, BTreeSet<FunctionKey>>::new();
+    for unit in &package.units {
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let function_key = key(function.span);
+            effects.insert(
+                function_key,
+                function
+                    .children
+                    .iter()
+                    .any(|child| !direct_errors(package, unit, child).is_empty()),
+            );
+            let mut function_callees = BTreeSet::new();
+            for child in &function.children {
+                callees(package, unit, child, &mut function_callees);
+            }
+            edges.insert(function_key, function_callees);
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for (function, callees) in &edges {
+            let inferred = effects[function]
+                || callees
+                    .iter()
+                    .any(|callee| effects.get(callee).copied().unwrap_or(false));
+            if inferred && !effects[function] {
+                effects.insert(*function, true);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for unit in &mut package.units {
+        for contract in &mut unit.functions {
+            contract.throws = effects.get(&key(contract.span)).copied().unwrap_or(false);
+        }
+    }
 }
 
 fn resolve_scalar_type(
@@ -2736,11 +2905,7 @@ fn infer_parse_or_radix_type(
         ));
     }
     let callback_name = node_text(&unit.source, callback);
-    let Some(contract) = unit
-        .functions
-        .iter()
-        .find(|contract| contract.name == callback_name)
-    else {
+    let Some(contract) = unit.function_aliases.get(callback_name) else {
         return Err(failure(
             &unit.source,
             "T0025",
@@ -4094,6 +4259,58 @@ fn validate_flow_statement(
         }
         SyntaxKind::IfStatement => {
             validate_if_flow(unit, statement, contract, bindings, loop_depth, unreachable)
+        }
+        SyntaxKind::TryStatement => {
+            let try_falls_through = if let Some(block) = statement.children.first() {
+                validate_flow_block(
+                    unit,
+                    block,
+                    contract,
+                    bindings,
+                    loop_depth,
+                    unreachable,
+                )?
+            } else {
+                true
+            };
+            let mut catch_falls_through = false;
+            for clause in statement
+                .children
+                .iter()
+                .filter(|child| child.kind == SyntaxKind::CatchClause)
+            {
+                if let Some(block) = clause
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                {
+                    catch_falls_through |= validate_flow_block(
+                        unit,
+                        block,
+                        contract,
+                        bindings,
+                        loop_depth,
+                        unreachable,
+                    )?;
+                }
+            }
+            if let Some(finally) = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::FinallyClause)
+                .and_then(|clause| clause.children.first())
+                && !validate_flow_block(
+                    unit,
+                    finally,
+                    contract,
+                    bindings,
+                    loop_depth,
+                    unreachable,
+                )?
+            {
+                return Ok(false);
+            }
+            Ok(try_falls_through || catch_falls_through)
         }
         SyntaxKind::WhileStatement => {
             if let Some(condition) = statement.children.first() {

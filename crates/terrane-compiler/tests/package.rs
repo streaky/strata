@@ -500,3 +500,25 @@ fn namespace_discovery_follows_symlinked_source_files() {
     assert_eq!(loaded.units.len(), 1);
     assert_eq!(loaded.units[0].relative_path, Path::new("src/helper.trn"));
 }
+
+#[test]
+fn parse_callbacks_resolve_through_import_aliases() {
+    let package = TempPackage::new();
+    package.write(
+        "package.toml",
+        "package = \"callback-alias\"\n[namespaces]\ncallbacks = \"callbacks\"\napp = \"app\"\n",
+    );
+    package.write(
+        "callbacks/parse.trn",
+        "namespace callbacks\npublic function decode int; text string\n  return text.radix; 10\n",
+    );
+    package.write(
+        "app/main.trn",
+        "namespace app\nfrom /callbacks import decode as parse-decimal\nfunction main\n  text string = >42\n  value int = text.parse; parse-decimal\n",
+    );
+
+    let compilation = compile_package(&Package::load(&package.0).unwrap()).unwrap();
+
+    assert!(compilation.rust.contains("parse_radix"));
+    assert!(compilation.rust.contains("decode"));
+}

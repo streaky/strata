@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use sha2::{Digest, Sha256};
 
 struct CliFailure {
     code: u8,
@@ -100,22 +101,39 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     };
     if command == "rust" {
         print!("{}", compilation.rust);
+        println!(
+            "// Authored generated modules: {}",
+            compilation
+                .rust_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!(
+            "// Vendored support crates: terrane-int-support, terrane-scalar-support, terrane-string-support"
+        );
         return Ok(ExitCode::SUCCESS);
     }
     ensure_rust_toolchain()?;
-    let crate_dir = generated_crate_path(&package.root, &compilation.rust)?;
+    let crate_dir = generated_crate_path(&package.root, &compilation.rust_files)?;
     write_generated_crate(&crate_dir, &compilation.rust_files, &package.units)?;
+    let target_dir = package.root.join(".trn/cache/target");
     let cargo_command = if command == "check" { "check" } else { "build" };
     run_cargo(
         cargo_command,
         &crate_dir,
+        &target_dir,
         &compilation.rust_files,
         &package.units,
     )?;
     if command == "check" {
         return Ok(ExitCode::SUCCESS);
     }
-    let executable = crate_dir.join("target/debug/terrane_program");
+    let executable = target_dir
+        .join("debug/terrane_program")
+        .canonicalize()
+        .map_err(|error| CliFailure::backend(format!("cannot locate built program: {error}")))?;
     if command == "build" {
         println!("{}", executable.display());
         return Ok(ExitCode::SUCCESS);
@@ -136,9 +154,15 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
 fn run_cargo(
     command: &str,
     crate_dir: &Path,
+    target_dir: &Path,
     rust_files: &[terrane_compiler::rust_ir::RenderedFile],
     units: &[terrane_compiler::SourceUnit],
 ) -> Result<(), CliFailure> {
+    let mut rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
+    if !rustflags.is_empty() {
+        rustflags.push(" ");
+    }
+    rustflags.push("-Dwarnings");
     let output = Command::new("cargo")
         .args([
             command,
@@ -147,6 +171,8 @@ fn run_cargo(
             "--manifest-path",
         ])
         .arg(crate_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("RUSTFLAGS", rustflags)
         .output()
         .map_err(|error| CliFailure::backend(format!("failed to start Cargo: {error}")))?;
     if output.status.success() {
@@ -218,25 +244,39 @@ fn run_cargo(
     ))
 }
 
-fn generated_crate_path(package_root: &Path, rust: &str) -> Result<PathBuf, CliFailure> {
+fn generated_crate_path(
+    package_root: &Path,
+    rust_files: &[terrane_compiler::rust_ir::RenderedFile],
+) -> Result<PathBuf, CliFailure> {
     let root = package_root.canonicalize().map_err(|error| {
         CliFailure::backend(format!(
             "cannot locate package root {}: {error}",
             package_root.display()
         ))
     })?;
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in rust.bytes().chain(
-        include_bytes!("../../terrane-int-support/src/lib.rs")
-            .iter()
-            .chain(include_bytes!("../../terrane-scalar-support/src/lib.rs"))
-            .chain(include_bytes!("../../terrane-string-support/src/lib.rs"))
-            .copied(),
-    ) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    let mut hash = Sha256::new();
+    hash.update(b"terrane-generated-crate-v2\0");
+    hash.update(terrane_compiler::VERSION.as_bytes());
+    hash.update(b"\0target=");
+    hash.update(std::env::var("CARGO_BUILD_TARGET").unwrap_or_default());
+    hash.update(b"\0profile=debug\0");
+    for file in rust_files {
+        hash.update(file.path.as_bytes());
+        hash.update(b"\0");
+        hash.update(file.contents.as_bytes());
+        hash.update(b"\0");
     }
-    Ok(root.join(".trn/build").join(format!("{hash:016x}")))
+    for support in [
+        include_bytes!("../../terrane-int-support/src/lib.rs").as_slice(),
+        include_bytes!("../../terrane-scalar-support/src/lib.rs").as_slice(),
+        include_bytes!("../../terrane-string-support/src/lib.rs").as_slice(),
+    ] {
+        hash.update(support);
+        hash.update(b"\0");
+    }
+    Ok(root
+        .join(".trn/build")
+        .join(format!("{:x}", hash.finalize())))
 }
 
 fn write_generated_crate(
@@ -250,9 +290,8 @@ fn write_generated_crate(
         [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
         terrane-scalar-support = { path = \"support/terrane-scalar-support\" }\n\
         terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n";
-    fs::write(directory.join("Cargo.toml"), manifest).map_err(|error| {
-        CliFailure::backend(format!("cannot write generated manifest: {error}"))
-    })?;
+    write_if_changed(&directory.join("Cargo.toml"), manifest.as_bytes())
+        .map_err(|error| CliFailure::backend(format!("cannot write generated manifest: {error}")))?;
     write_generated_support(directory).map_err(|error| {
         CliFailure::backend(format!("cannot write generated runtime support: {error}"))
     })?;
