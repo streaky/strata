@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use terrane_compiler::highlight::{Highlight, HighlightKind, highlight};
-use terrane_compiler::{Diagnostic as TerraneDiagnostic, SourceFile, Span};
+use terrane_compiler::{Diagnostic as TerraneDiagnostic, Severity, SourceFile, Span};
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::{
@@ -222,7 +222,10 @@ fn lsp_diagnostic(source: &SourceFile, diagnostic: &TerraneDiagnostic) -> Diagno
     );
     Diagnostic {
         range,
-        severity: Some(DiagnosticSeverity::ERROR),
+        severity: Some(match diagnostic.severity {
+            Severity::Error => DiagnosticSeverity::ERROR,
+            Severity::Warning => DiagnosticSeverity::WARNING,
+        }),
         code: Some(NumberOrString::String(diagnostic.code.to_owned())),
         source: Some("terrane".to_owned()),
         message: diagnostic.message.clone(),

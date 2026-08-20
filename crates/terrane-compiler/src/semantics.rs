@@ -73,6 +73,7 @@ pub struct SemanticPackage {
     pub prelude_bindings: BTreeMap<String, Symbol>,
     pub descriptor_constructs: BTreeMap<String, Symbol>,
     pub units: Vec<SemanticUnit>,
+    binding_events: BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
     pub bootstrap_version: &'static str,
 }
 
@@ -546,6 +547,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         prelude_bindings,
         descriptor_constructs,
         units,
+        binding_events: BTreeMap::new(),
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_initializer_dependencies(&semantic)?;
@@ -558,6 +560,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
+    record_binding_events(&mut semantic);
     let unreachable_units = validate_control_flow(&semantic)?;
     for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
         unit.unreachable_spans = unreachable_spans;
@@ -6063,35 +6066,205 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
     }
 }
 
-pub(crate) fn binding_span_is_read(
-    package: &SemanticPackage,
-    unit: &SemanticUnit,
-    declaration_span: Span,
-) -> bool {
-    fn reads(
+#[derive(Clone, Copy, Debug)]
+enum BindingEvent {
+    Read,
+    Write { span: Span, definite: bool },
+}
+
+fn span_key(span: Span) -> (u32, usize, usize) {
+    (span.file, span.start, span.end)
+}
+
+fn record_binding_events(package: &mut SemanticPackage) {
+    fn collect(
         package: &SemanticPackage,
         unit: &SemanticUnit,
-        declaration_span: Span,
         node: &SyntaxNode,
-        write_target: bool,
-    ) -> bool {
-        if node.kind == SyntaxKind::Name
-            && !write_target
-            && package
-                .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
-                .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
-        {
-            return true;
+        events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
+        declaration_name: bool,
+        conditional: bool,
+    ) {
+        if node.kind == SyntaxKind::Name {
+            if !declaration_name
+                && let Some(declaration_span) = package
+                    .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
+                    .and_then(|symbol| symbol.declaration_span)
+            {
+                events
+                    .entry(span_key(declaration_span))
+                    .or_default()
+                    .push(BindingEvent::Read);
+            }
+            return;
         }
-        node.children.iter().enumerate().any(|(index, child)| {
-            let declaration_name = node.span == declaration_span && child.kind == SyntaxKind::Name;
-            let assignment_target =
-                node.kind == SyntaxKind::Assignment && node.span != declaration_span && index == 0;
-            !declaration_name && reads(package, unit, declaration_span, child, assignment_target)
-        })
+
+        let declared_binding = unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == node.span);
+        let assignment_target = if matches!(
+            node.kind,
+            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+        ) && declared_binding.is_none()
+        {
+            node.children
+                .first()
+                .filter(|target| target.kind == SyntaxKind::Name)
+        } else {
+            None
+        };
+
+        for (index, child) in node.children.iter().enumerate() {
+            let declares_child = (declared_binding.is_some()
+                || matches!(node.kind, SyntaxKind::Parameter | SyntaxKind::ForTarget))
+                && child.kind == SyntaxKind::Name
+                && !node.children[..index]
+                    .iter()
+                    .any(|prior| prior.kind == SyntaxKind::Name);
+            let plain_assignment_target =
+                assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
+            if !plain_assignment_target {
+                let child_conditional = conditional
+                    || matches!(
+                        node.kind,
+                        SyntaxKind::IfStatement
+                            | SyntaxKind::ElseClause
+                            | SyntaxKind::WhileStatement
+                            | SyntaxKind::ForStatement
+                            | SyntaxKind::TryStatement
+                            | SyntaxKind::CatchClause
+                    );
+                collect(
+                    package,
+                    unit,
+                    child,
+                    events,
+                    declares_child,
+                    child_conditional,
+                );
+            }
+        }
+
+        if let Some(binding) = declared_binding
+            && unit.source.text()[node.span.start..node.span.end].contains('=')
+        {
+            events
+                .entry(span_key(binding.span))
+                .or_default()
+                .push(BindingEvent::Write {
+                    span: node.span,
+                    definite: true,
+                });
+        } else if let Some(target) = assignment_target
+            && let Some(declaration_span) = package
+                .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
+                .and_then(|symbol| symbol.declaration_span)
+        {
+            events
+                .entry(span_key(declaration_span))
+                .or_default()
+                .push(BindingEvent::Write {
+                    span: node.span,
+                    definite: !conditional,
+                });
+        }
     }
 
-    reads(package, unit, declaration_span, &unit.tree.root, false)
+    let mut events = BTreeMap::new();
+    for unit in &package.units {
+        collect(package, unit, &unit.tree.root, &mut events, false, false);
+    }
+    package.binding_events = events;
+}
+
+pub(crate) fn binding_store_value_is_read(
+    package: &SemanticPackage,
+    declaration_span: Span,
+    store_span: Span,
+) -> bool {
+    let Some(events) = package.binding_events.get(&span_key(declaration_span)) else {
+        return false;
+    };
+    let Some(store) = events
+        .iter()
+        .position(|event| matches!(event, BindingEvent::Write { span, .. } if *span == store_span))
+    else {
+        return false;
+    };
+    for event in &events[store + 1..] {
+        match event {
+            BindingEvent::Read => return true,
+            BindingEvent::Write { definite: true, .. } => return false,
+            BindingEvent::Write {
+                definite: false, ..
+            } => {}
+        }
+    }
+    false
+}
+
+pub(crate) fn binding_span_is_read(package: &SemanticPackage, declaration_span: Span) -> bool {
+    package
+        .binding_events
+        .get(&span_key(declaration_span))
+        .is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| matches!(event, BindingEvent::Read))
+        })
+}
+
+pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
+    let mut warnings = Vec::new();
+    for unit in &package.units {
+        for binding in &unit.typed_bindings {
+            if package
+                .globals
+                .values()
+                .any(|symbol| symbol.declaration_span == Some(binding.span))
+            {
+                continue;
+            }
+            let Some(events) = package.binding_events.get(&span_key(binding.span)) else {
+                continue;
+            };
+            for (index, event) in events.iter().enumerate() {
+                let BindingEvent::Write {
+                    span: store_span, ..
+                } = event
+                else {
+                    continue;
+                };
+                if binding_store_value_is_read(package, binding.span, *store_span) {
+                    continue;
+                }
+                let later_store = events[index + 1..]
+                    .iter()
+                    .any(|event| matches!(event, BindingEvent::Write { .. }));
+                let (code, message) = if *store_span == binding.span && !later_store {
+                    ("W4001", format!("binding `{}` is never read", binding.name))
+                } else if *store_span == binding.span {
+                    (
+                        "W4002",
+                        format!("initial value assigned to `{}` is never read", binding.name),
+                    )
+                } else {
+                    (
+                        "W4002",
+                        format!("value assigned to `{}` is never read", binding.name),
+                    )
+                };
+                warnings.push(Diagnostic::warning(code, message, *store_span));
+            }
+        }
+    }
+    warnings.sort_by_key(|diagnostic| {
+        diagnostic
+            .primary
+            .map_or((u32::MAX, usize::MAX), |span| (span.file, span.start))
+    });
+    warnings
 }
 
 pub(crate) fn binding_span_is_mutated(

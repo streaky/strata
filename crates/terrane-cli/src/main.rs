@@ -99,6 +99,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
             });
         }
     };
+    emit_warnings(&compilation, &package);
     if command == "rust" {
         print_rust(&compilation);
         return Ok(ExitCode::SUCCESS);
@@ -134,6 +135,22 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
     ))
+}
+
+fn emit_warnings(compilation: &terrane_compiler::Compilation, package: &terrane_compiler::Package) {
+    for warning in &compilation.warnings {
+        let source = warning
+            .primary
+            .and_then(|span| {
+                package
+                    .units
+                    .iter()
+                    .find(|unit| unit.source.id() == span.file)
+                    .map(|unit| &unit.source)
+            })
+            .unwrap_or(&compilation.source);
+        eprint!("{}", warning.render(source));
+    }
 }
 
 fn prepare_artifact(

@@ -8,8 +8,9 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
         SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
-        binding_span_is_mutated, binding_span_is_read, bound_method, contextual_constant,
-        narrowed_optional_type, narrowed_value_type, promoted_integer_type, string_call_selection,
+        binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read, bound_method,
+        contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
+        string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -684,51 +685,7 @@ impl Emitter<'_> {
                     self.binding(node);
                 }
             }
-            SyntaxKind::Assignment => {
-                if self.global_assignment(node) {
-                    return;
-                }
-                if self
-                    .unit
-                    .typed_bindings
-                    .iter()
-                    .any(|binding| binding.span == node.span)
-                {
-                    self.binding(node);
-                } else {
-                    let [left, right] = node.children.as_slice() else {
-                        return;
-                    };
-                    let union_binding = self.union_binding(left);
-                    let value_type = if left.kind == SyntaxKind::Name {
-                        let name = self.text(left);
-                        self.unit
-                            .typed_bindings
-                            .iter()
-                            .rev()
-                            .find(|binding| {
-                                binding.name == name && binding.span.start < node.span.start
-                            })
-                            .map(|binding| binding.value_type)
-                    } else {
-                        self.value_type(left)
-                    };
-                    let value = if let Some(binding) = union_binding {
-                        self.union_value(&binding, right)
-                    } else if let Some(value_type) = value_type {
-                        self.expression_as(right, value_type)
-                    } else {
-                        self.expression(right)
-                    };
-                    let value = Self::unwrapped_expression(value);
-                    let target = if left.kind == SyntaxKind::Name {
-                        rust_name(self.text(left))
-                    } else {
-                        self.expression(left)
-                    };
-                    self.line(&format!("{target} = {value};"));
-                }
-            }
+            SyntaxKind::Assignment => self.assignment(node),
             SyntaxKind::CallExpression => {
                 let expression = self.expression(node);
                 self.line(&format!("{expression};"));
@@ -776,6 +733,60 @@ impl Emitter<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn assignment(&mut self, node: &SyntaxNode) {
+        if self.global_assignment(node) {
+            return;
+        }
+        if self
+            .unit
+            .typed_bindings
+            .iter()
+            .any(|binding| binding.span == node.span)
+        {
+            self.binding(node);
+            return;
+        }
+        let [left, right] = node.children.as_slice() else {
+            return;
+        };
+        let assigned_binding = (left.kind == SyntaxKind::Name)
+            .then(|| {
+                self.package
+                    .resolve_name_at(self.unit, left.span.start, self.text(left))
+            })
+            .flatten()
+            .and_then(|symbol| symbol.declaration_span)
+            .and_then(|span| {
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .find(|binding| binding.span == span)
+            });
+        let union_binding = self.union_binding(left);
+        let value_type = assigned_binding
+            .map(|binding| binding.value_type)
+            .or_else(|| self.value_type(left));
+        let value = if let Some(binding) = union_binding {
+            self.union_value(&binding, right)
+        } else if let Some(value_type) = value_type {
+            self.expression_as(right, value_type)
+        } else {
+            self.expression(right)
+        };
+        let value = Self::unwrapped_expression(value);
+        let target = if left.kind == SyntaxKind::Name {
+            rust_name(self.text(left))
+        } else {
+            self.expression(left)
+        };
+        self.line(&format!("{target} = {value};"));
+        if let Some(binding) = assigned_binding
+            && !binding_store_value_is_read(self.package, binding.span, node.span)
+        {
+            self.line(&format!("let _ = &mut {target};"));
         }
     }
 
@@ -1060,7 +1071,8 @@ impl Emitter<'_> {
             write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
-        if initializer.is_some() && !binding_span_is_read(self.package, self.unit, node.span) {
+        if initializer.is_some() && !binding_store_value_is_read(self.package, node.span, node.span)
+        {
             let borrow = if mutable { "&mut " } else { "&" };
             self.line(&format!("let _ = {borrow}{name};"));
         }
@@ -1166,6 +1178,7 @@ impl Emitter<'_> {
                 let Some(name) = target.children.first() else {
                     return;
                 };
+                let name_span = name.span;
                 let mutable = if binding_span_is_mutated(self.package, self.unit, name.span, true) {
                     "mut "
                 } else {
@@ -1184,6 +1197,9 @@ impl Emitter<'_> {
                     ));
                 }
                 self.indent += 1;
+                if !binding_span_is_read(self.package, name_span) {
+                    self.line(&format!("let _ = &{name};"));
+                }
                 let outer_continue = self.continue_label.take();
                 let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
