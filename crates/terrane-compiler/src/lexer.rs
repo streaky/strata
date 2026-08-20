@@ -304,9 +304,6 @@ fn lex_line(
                         break;
                     }
                     escaped = bytes[index] == b'\\' && !escaped;
-                    if bytes[index] != b'\\' {
-                        escaped = false;
-                    }
                     index += 1;
                 }
                 if terminated {
@@ -315,7 +312,7 @@ fn lex_line(
                     {
                         diagnostics.push(Diagnostic::error(
                             "L0012",
-                            "invalid bytes escape; use `\\\\`, `\\'`, `\\n`, `\\r`, `\\t`, or `\\xHH`",
+                            "invalid bytes escape; use `\\\\`, `\\'`, `\\n`, `\\r`, `\\t`, `\\0`, or `\\xHH`",
                             Span::new(
                                 source.id(),
                                 base + start + 2 + escape_start,
@@ -683,6 +680,7 @@ pub(crate) fn unescape_bytes(value: &str) -> Result<Vec<u8>, (usize, usize)> {
             Some(b'n') => output.push(b'\n'),
             Some(b'r') => output.push(b'\r'),
             Some(b't') => output.push(b'\t'),
+            Some(b'0') => output.push(0),
             Some(b'x')
                 if bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit)
                     && bytes.get(index + 2).is_some_and(u8::is_ascii_hexdigit) =>

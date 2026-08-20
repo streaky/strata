@@ -104,7 +104,7 @@ fn main() {
     let encoded: Vec<u8> = terrane_string_support::encode(&(text), terrane_string_support::Encoding::Utf8);
     let decoded: String = (terrane_string_support::decode(&(encoded), terrane_string_support::Encoding::Utf8)).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/bytes-views-encoding::main (case.trn:6:20)")));
     println!("{}", terrane_scalar_support::scalar_text(&(decoded)));
-    let raw: Vec<u8> = Vec::from([97, 98, 99]);
+    let raw: Vec<u8> = Vec::from([97, 0, 99]);
     for byte in (raw).iter().copied() {
         println!("{}", terrane_scalar_support::scalar_text(&(byte)));
     }

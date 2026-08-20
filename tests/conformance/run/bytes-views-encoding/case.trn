@@ -5,7 +5,7 @@ function main
   encoded bytes = text.encode; utf8
   decoded string = encoded.decode; utf8
   print; decoded
-  raw bytes = b'abc'
+  raw bytes = b'a\0c'
   for byte in raw
     print; byte
   print; raw.length, (raw.decode; utf8)
