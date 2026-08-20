@@ -1,0 +1,6 @@
+namespace null-byte-literal
+function main
+  raw bytes = b'a\0c'
+  for byte in raw
+    print; byte
+  print; raw.length, (raw.decode; utf8)

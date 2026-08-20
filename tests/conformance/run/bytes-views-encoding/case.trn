@@ -5,10 +5,6 @@ function main
   encoded bytes = text.encode; utf8
   decoded string = encoded.decode; utf8
   print; decoded
-  raw bytes = b'a\0c'
-  for byte in raw
-    print; byte
-  print; raw.length, (raw.decode; utf8)
   utf16le-text string = (text.encode; utf16-le).decode; utf16-le
   utf16be-text string = (text.encode; utf16-be).decode; utf16-be
   utf32le-text string = (text.encode; utf32-le).decode; utf32-le

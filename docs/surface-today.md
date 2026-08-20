@@ -369,11 +369,12 @@ print
 print; values... -> none
 ```
 
-- Accepts zero or more arguments.
-- Converts each argument with canonical scalar display.
-- Concatenates converted values without separators.
-- Writes one trailing newline.
-- Canonical display is implemented for all usable scalar types and `none`.
+- Accepts zero or more arguments whose types implement canonical text display; this is checked
+  semantically rather than deferred to generated Rust.
+- Converts each argument with canonical text display, concatenates the results without separators,
+  and writes one trailing newline.
+- Every usable scalar type and `none` implements that display contract. `bytes`, member-family
+  objects, and result objects do not.
 
 ### Source-declared functions
 

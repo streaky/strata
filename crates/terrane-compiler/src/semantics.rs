@@ -1724,6 +1724,9 @@ fn validate_call_nodes<'a>(
             infer_value_type(unit, value, scoped_bindings)?;
         }
     }
+    if node.kind == SyntaxKind::CallExpression {
+        infer_value_type(unit, node, scoped_bindings)?;
+    }
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
         && callee.kind == SyntaxKind::Name
@@ -2152,6 +2155,7 @@ fn validate_descriptor_value_node(
     }
     if !descriptor_context
         && node.kind == SyntaxKind::Name
+        && node_text(&unit.source, node) != "none"
         && (descriptor_expression_type(package, unit, node).is_some()
             || descriptor_expression_category(package, unit, node).is_some())
     {
@@ -2266,7 +2270,12 @@ fn descriptor_alias(
     aliases: &BTreeMap<String, Vec<DescriptorAlias>>,
     scope: Option<Span>,
 ) -> Option<(String, DescriptorAlias)> {
-    if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
+    if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+        || node
+            .children
+            .iter()
+            .any(|child| child.kind == SyntaxKind::TypeExpression)
+    {
         return None;
     }
     let name = node
@@ -2275,6 +2284,9 @@ fn descriptor_alias(
         .find(|child| child.kind == SyntaxKind::Name)?;
     let initializer = node.children.last()?;
     let descriptor_name = node_text(&unit.source, initializer).trim();
+    if descriptor_name == "none" {
+        return None;
+    }
     let value_type = match initializer.kind {
         SyntaxKind::Name => {
             visible_descriptor_aliases(aliases, unit.source.id(), initializer.span.start)
@@ -2992,6 +3004,16 @@ fn optional_inner(value_type: ValueType) -> Option<ValueType> {
     }
 }
 
+fn ungrouped_expression(mut node: &SyntaxNode) -> &SyntaxNode {
+    while node.kind == SyntaxKind::GroupExpression {
+        let Some(child) = node.children.first() else {
+            break;
+        };
+        node = child;
+    }
+    node
+}
+
 fn membership_names<'a>(
     source: &'a SourceFile,
     node: &'a SyntaxNode,
@@ -2999,6 +3021,8 @@ fn membership_names<'a>(
     let [left, right] = node.children.as_slice() else {
         return None;
     };
+    let left = ungrouped_expression(left);
+    let right = ungrouped_expression(right);
     Some((node_text(source, left), node_text(source, right)))
 }
 
@@ -3014,6 +3038,8 @@ fn condition_proves_present(source: &SourceFile, node: &SyntaxNode, name: &str) 
             return false;
         };
         let operator = source.text()[left.span.end..right.span.start].trim();
+        let left = ungrouped_expression(left);
+        let right = ungrouped_expression(right);
         let names = (node_text(source, left), node_text(source, right));
         return operator == "!="
             && matches!(names, (left, "none") | ("none", left) if left == name);
@@ -3153,6 +3179,9 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
+        if name == "none" {
+            return Ok(Some(ValueType::Scalar(ScalarType::None)));
+        }
         if let Some(binding) = bindings
             .iter()
             .rev()
@@ -3238,13 +3267,20 @@ fn infer_value_type(
             && callee.kind == SyntaxKind::Name
         {
             let name = node_text(&unit.source, callee);
-            if let Some(return_type) = unit
-                .functions
+            if let Some(contract) = unit.functions.iter().find(|contract| contract.name == name) {
+                return Ok(contract.return_type);
+            }
+            if bindings
                 .iter()
-                .find(|contract| contract.name == name)
-                .and_then(|contract| contract.return_type)
+                .rev()
+                .any(|binding| binding.name == name && binding.span.start <= callee.span.start)
             {
-                return Ok(Some(return_type));
+                return Err(failure(
+                    &unit.source,
+                    "T0039",
+                    format!("`{name}` is a value and cannot be called"),
+                    callee.span,
+                ));
             }
             return Ok(None);
         }
