@@ -700,7 +700,19 @@ impl Emitter<'_> {
                         return;
                     };
                     let union_binding = self.union_binding(left);
-                    let value_type = self.value_type(left);
+                    let value_type = if left.kind == SyntaxKind::Name {
+                        let name = self.text(left);
+                        self.unit
+                            .typed_bindings
+                            .iter()
+                            .rev()
+                            .find(|binding| {
+                                binding.name == name && binding.span.start < node.span.start
+                            })
+                            .map(|binding| binding.value_type)
+                    } else {
+                        self.value_type(left)
+                    };
                     let value = if let Some(binding) = union_binding {
                         self.union_value(&binding, right)
                     } else if let Some(value_type) = value_type {
@@ -1238,7 +1250,9 @@ impl Emitter<'_> {
         if let ValueType::ScalarOrNone(scalar) = value_type {
             return if self.value_type(node) == Some(value_type) {
                 self.expression(node)
-            } else if node.kind == SyntaxKind::Name && self.text(node) == "none" {
+            } else if self.text(node).trim() == "none"
+                || self.value_type(node) == Some(ValueType::Scalar(ScalarType::None))
+            {
                 "None".to_owned()
             } else {
                 format!(
@@ -1403,6 +1417,36 @@ impl Emitter<'_> {
         }
     }
 
+    fn optional_none_comparison(
+        &mut self,
+        left: &SyntaxNode,
+        operator: &str,
+        right: &SyntaxNode,
+    ) -> Option<String> {
+        if !matches!(operator, "==" | "!=") {
+            return None;
+        }
+        let left_type = self.value_type(left);
+        let right_type = self.value_type(right);
+        let is_optional = |value_type| {
+            matches!(
+                value_type,
+                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+            )
+        };
+        let left_is_none = self.text(left).trim() == "none"
+            || left_type == Some(ValueType::Scalar(ScalarType::None));
+        let right_is_none = self.text(right).trim() == "none"
+            || right_type == Some(ValueType::Scalar(ScalarType::None));
+        if is_optional(left_type) && right_is_none {
+            return Some(format!("({} {operator} None)", self.expression(left)));
+        }
+        if left_is_none && is_optional(right_type) {
+            return Some(format!("(None {operator} {})", self.expression(right)));
+        }
+        None
+    }
+
     fn binary(&mut self, node: &SyntaxNode) -> String {
         let [left, right] = node.children.as_slice() else {
             return String::new();
@@ -1424,6 +1468,9 @@ impl Emitter<'_> {
                 effects.push(effect);
             }
             return format!("{{ {} {result} }}", effects.join(" "));
+        }
+        if let Some(comparison) = self.optional_none_comparison(left, source_operator, right) {
+            return comparison;
         }
         let comparison = matches!(source_operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
         let left_is_small = self.small_int_binding(left).is_some()
@@ -1614,7 +1661,7 @@ impl Emitter<'_> {
     fn unwrapped_expression(mut expression: String) -> String {
         loop {
             let bytes = expression.as_bytes();
-            if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+            if bytes.len() <= 2 || bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
                 break;
             }
             let mut depth = 0_usize;
@@ -2426,7 +2473,7 @@ impl Emitter<'_> {
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
         if source_name == "none" {
-            return "None".to_owned();
+            return "()".to_owned();
         }
         let narrowed =
             narrowed_value_type(self.unit, node, &self.unit.typed_bindings).or_else(|| {
