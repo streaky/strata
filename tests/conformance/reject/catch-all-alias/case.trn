@@ -1,0 +1,8 @@
+namespace catch-all-alias
+from /core/errors import arithmetic-overflow
+
+function main
+  try
+    throw arithmetic-overflow
+  catch as failure
+    print; >unreachable

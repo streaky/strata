@@ -1,0 +1,6 @@
+namespace parse-callback-signature
+function convert int; value int
+  return value
+function main
+  text string = >1
+  parsed int = text.parse; convert

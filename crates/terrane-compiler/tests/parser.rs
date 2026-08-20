@@ -431,8 +431,7 @@ fn rejects_malformed_declarations_and_reserved_constructs() {
 #[test]
 fn rejects_every_reserved_statement_keyword() {
     for keyword in [
-        "class", "try", "throw", "yield", "match", "unsafe", "rust", "label", "goto", "when",
-        "use", "catch", "finally", "case",
+        "class", "yield", "match", "unsafe", "rust", "label", "goto", "when", "use", "case",
     ] {
         rejected(&format!("{keyword}\n"), "S1090");
     }

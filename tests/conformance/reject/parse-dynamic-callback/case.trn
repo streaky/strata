@@ -1,0 +1,6 @@
+namespace parse-dynamic-callback
+function convert int; source string
+  return 1
+function main
+  text string = >1
+  parsed int = text.parse; (convert)

@@ -1,0 +1,6 @@
+namespace parse-non-string-receiver
+function convert int; value string
+  return 1
+function main
+  value int = 1
+  parsed int = value.parse; convert

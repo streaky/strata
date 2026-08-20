@@ -1,0 +1,9 @@
+namespace unreachable-duplicate-catch
+from /core/errors import arithmetic-overflow
+function main
+  try
+    throw arithmetic-overflow
+  catch arithmetic-overflow
+    print; >first
+  catch arithmetic-overflow
+    print; >unreachable

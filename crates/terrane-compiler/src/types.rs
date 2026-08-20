@@ -21,6 +21,71 @@ pub enum ScalarType {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TypeCategory {
+    Value,
+    Object,
+    Number,
+    Integer,
+    FixedInteger,
+    SignedFixedInteger,
+    UnsignedFixedInteger,
+    Floating,
+}
+
+impl TypeCategory {
+    pub const ABSTRACT_SOURCE_NAMES: [(&'static str, Self); 6] = [
+        ("number", Self::Number),
+        ("integer", Self::Integer),
+        ("fixed-integer", Self::FixedInteger),
+        ("signed-fixed-integer", Self::SignedFixedInteger),
+        ("unsigned-fixed-integer", Self::UnsignedFixedInteger),
+        ("floating", Self::Floating),
+    ];
+
+    #[must_use]
+    pub fn from_source_name(name: &str) -> Option<Self> {
+        Self::ABSTRACT_SOURCE_NAMES
+            .into_iter()
+            .find_map(|(source_name, category)| (source_name == name).then_some(category))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescriptorSchema {
+    pub categories: &'static [TypeCategory],
+}
+
+const VALUE_CATEGORIES: &[TypeCategory] = &[TypeCategory::Value, TypeCategory::Object];
+const INTEGER_CATEGORIES: &[TypeCategory] = &[
+    TypeCategory::Value,
+    TypeCategory::Object,
+    TypeCategory::Number,
+    TypeCategory::Integer,
+];
+const SIGNED_FIXED_CATEGORIES: &[TypeCategory] = &[
+    TypeCategory::Value,
+    TypeCategory::Object,
+    TypeCategory::Number,
+    TypeCategory::Integer,
+    TypeCategory::FixedInteger,
+    TypeCategory::SignedFixedInteger,
+];
+const UNSIGNED_FIXED_CATEGORIES: &[TypeCategory] = &[
+    TypeCategory::Value,
+    TypeCategory::Object,
+    TypeCategory::Number,
+    TypeCategory::Integer,
+    TypeCategory::FixedInteger,
+    TypeCategory::UnsignedFixedInteger,
+];
+const FLOATING_CATEGORIES: &[TypeCategory] = &[
+    TypeCategory::Value,
+    TypeCategory::Object,
+    TypeCategory::Number,
+    TypeCategory::Floating,
+];
+
 impl ScalarType {
     pub const ALL: [Self; 16] = [
         Self::Bool,
@@ -124,21 +189,37 @@ impl ScalarType {
     }
 
     #[must_use]
+    pub const fn descriptor_schema(self) -> DescriptorSchema {
+        let categories = match self {
+            Self::Int => INTEGER_CATEGORIES,
+            Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 | Self::Int128 => {
+                SIGNED_FIXED_CATEGORIES
+            }
+            Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64 | Self::Uint128 => {
+                UNSIGNED_FIXED_CATEGORIES
+            }
+            Self::Float32 | Self::Float64 => FLOATING_CATEGORIES,
+            Self::Bool | Self::String | Self::None => VALUE_CATEGORIES,
+        };
+        DescriptorSchema { categories }
+    }
+
+    #[must_use]
     pub const fn is_integer(self) -> bool {
-        matches!(
-            self,
-            Self::Int
-                | Self::Int8
-                | Self::Int16
-                | Self::Int32
-                | Self::Int64
-                | Self::Int128
-                | Self::Uint8
-                | Self::Uint16
-                | Self::Uint32
-                | Self::Uint64
-                | Self::Uint128
-        )
+        self.conforms_to(TypeCategory::Integer)
+    }
+
+    #[must_use]
+    pub const fn conforms_to(self, category: TypeCategory) -> bool {
+        let categories = self.descriptor_schema().categories;
+        let mut index = 0;
+        while index < categories.len() {
+            if categories[index] as u8 == category as u8 {
+                return true;
+            }
+            index += 1;
+        }
+        false
     }
 }
 

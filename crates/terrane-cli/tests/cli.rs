@@ -20,12 +20,16 @@ fn all_commands_share_the_hello_pipeline() {
     assert!(rust.status.success());
     assert!(rust_again.status.success());
     assert_eq!(rust.stdout, rust_again.stdout);
-    assert_eq!(
-        String::from_utf8(rust.stdout)
-            .unwrap()
-            .replace(terrane_compiler::VERSION, "<version>"),
-        fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap()
+    let displayed_rust = String::from_utf8(rust.stdout)
+        .unwrap()
+        .replace(terrane_compiler::VERSION, "<version>");
+    let authored_rust = fs::read_to_string(hello().parent().unwrap().join("lower.rs")).unwrap();
+    assert!(displayed_rust.starts_with(&authored_rust));
+    assert!(
+        displayed_rust
+            .contains("// Authored generated modules: src/authored/unit-0000.rs, src/main.rs")
     );
+    assert!(displayed_rust.contains("// Vendored support crates: terrane-int-support"));
 
     let check = Command::new(binary)
         .args(["check", hello().to_str().unwrap()])
@@ -110,4 +114,49 @@ fn failures_use_distinct_exit_codes_and_compiler_diagnostics() {
             .unwrap()
             .contains("unresolved name `missing`")
     );
+}
+
+#[test]
+fn uncaught_source_errors_render_causes_and_terrane_frames() {
+    let directory = std::env::temp_dir().join(format!(
+        "terrane-runtime-error-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("cli")
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("case.trn");
+    fs::write(
+        &source,
+        concat!(
+            "namespace runtime-error\n",
+            "from /core/errors import arithmetic-overflow, coercion-error\n",
+            "throws function inner int\n",
+            "  throw arithmetic-overflow\n",
+            "throws function outer int\n",
+            "  try\n",
+            "    return inner;\n",
+            "  catch arithmetic-overflow\n",
+            "    throw coercion-error\n",
+            "function main\n",
+            "  outer;\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_terrane"))
+        .args(["run", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.starts_with(".coercion-error: coercion has no compatible result\n"));
+    assert!(stderr.contains("caused by: .arithmetic-overflow"));
+    assert!(stderr.contains("at /runtime-error::inner (case.trn:4:3)"));
+    assert!(stderr.contains("at /runtime-error::outer (case.trn:7:12)"));
+    assert!(stderr.contains("at /runtime-error::outer (case.trn:9:5)"));
+    assert!(stderr.contains("at /runtime-error::main (case.trn:11:3)"));
+    assert!(!stderr.contains("panicked"));
+    assert!(!stderr.contains("src/authored"));
 }

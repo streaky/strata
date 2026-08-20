@@ -26,6 +26,8 @@ pub enum ArithmeticError {
     },
     NegativeShiftCount,
     ShiftCountTooLarge,
+    InvalidRadix,
+    InvalidRadixText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +58,10 @@ impl fmt::Display for ArithmeticError {
                 "value {source_value} of type {source_type} cannot arrive exactly as {destination_type}: {condition}"
             ),
             Self::NegativeShiftCount => formatter.write_str("negative integer shift count"),
+            Self::InvalidRadix => formatter.write_str("radix must be between 2 and 36"),
+            Self::InvalidRadixText => {
+                formatter.write_str("text is not valid in the selected radix")
+            }
             Self::ShiftCountTooLarge => {
                 formatter.write_str("integer shift count cannot be represented on this target")
             }
@@ -76,6 +82,7 @@ impl ArithmeticError {
                 ".integer-conversion-overflow"
             }
             Self::NegativeShiftCount => ".negative-shift-count",
+            Self::InvalidRadix | Self::InvalidRadixText => ".coercion-error",
             Self::ShiftCountTooLarge => ".resource-error",
         }
     }
@@ -608,6 +615,42 @@ fn fixed_shift_count(value: &impl IntegerSource) -> Result<u32, ArithmeticError>
         return Err(ArithmeticError::NegativeShiftCount);
     }
     value.to_u32().ok_or(ArithmeticError::ShiftCountTooLarge)
+}
+
+fn radix_value(value: &impl IntegerSource) -> Result<u32, ArithmeticError> {
+    let radix = value
+        .integer_value()
+        .to_u32()
+        .ok_or(ArithmeticError::InvalidRadix)?;
+    (2..=36)
+        .contains(&radix)
+        .then_some(radix)
+        .ok_or(ArithmeticError::InvalidRadix)
+}
+
+/// Interprets signed base-N text as an adaptive Terrane integer.
+///
+/// # Errors
+///
+/// Returns [`ArithmeticError::InvalidRadix`] when the base is outside 2–36, or
+/// [`ArithmeticError::InvalidRadixText`] when `text` is not valid in that base.
+pub fn parse_radix(text: &str, radix: &impl IntegerSource) -> Result<Int, ArithmeticError> {
+    let radix = radix_value(radix)?;
+    BigInt::parse_bytes(text.as_bytes(), radix)
+        .map(Int::from_big)
+        .ok_or(ArithmeticError::InvalidRadixText)
+}
+
+/// Renders an integer using lowercase digits in the selected base.
+///
+/// # Errors
+///
+/// Returns [`ArithmeticError::InvalidRadix`] when the base is outside 2–36.
+pub fn format_radix(
+    value: &impl IntegerSource,
+    radix: &impl IntegerSource,
+) -> Result<String, ArithmeticError> {
+    Ok(value.integer_value().to_str_radix(radix_value(radix)?))
 }
 
 /// Destination contract for explicit integer coercions.

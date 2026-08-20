@@ -1,0 +1,15 @@
+namespace abstract-category-membership
+from /core/types import number, integer, fixed-integer, signed-fixed-integer, unsigned-fixed-integer, floating
+function main
+  signed int8 = -1
+  unsigned uint8 = 1
+  adaptive int = 1
+  decimal float32 = 1.5
+  print; signed is a number
+  print; signed is a integer
+  print; signed is a fixed-integer
+  print; signed is a signed-fixed-integer
+  print; signed is a unsigned-fixed-integer
+  print; unsigned is a unsigned-fixed-integer
+  print; adaptive is a fixed-integer
+  print; decimal is a floating

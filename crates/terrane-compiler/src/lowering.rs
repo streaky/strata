@@ -3,56 +3,85 @@ use std::fmt::Write as _;
 use num_bigint::BigInt;
 
 use crate::{
-    ScalarType, SourceFile,
+    ScalarType, SourceFile, TypeCategory,
+    rust_ir::{Item, Module, Program},
     semantics::{
-        CoercionPolicy, ContextualConstant, FunctionContract, SemanticPackage, SemanticUnit,
-        SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, contextual_constant,
-        integer_coercion_call, promoted_integer_type,
+        CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily, SemanticPackage,
+        SemanticUnit, SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, bound_method,
+        contextual_constant, promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
 
-pub(crate) fn emit(package: &SemanticPackage) -> String {
-    let mut output = format!(
-        "// Generated deterministically by Terrane {}.\n",
-        crate::VERSION
-    );
-    emit_global_storage(package, &mut output);
-    for unit in &package.units {
-        let mut emitter = Emitter {
-            package,
-            unit,
-            source: &unit.source,
-            output: String::new(),
-            indent: 0,
-            continue_label: None,
-            loop_counter: 0,
-            return_type: None,
-            parameter_types: Vec::new(),
-            namespace_initializer: None,
-        };
-        emitter.emit_union_types();
-        for node in &unit.tree.root.children {
-            match node.kind {
-                SyntaxKind::Binding | SyntaxKind::Assignment => emitter.namespace_binding(node),
-                SyntaxKind::FunctionDeclaration => emitter.function(node),
-                _ => {}
-            }
-        }
-        if !emitter.output.is_empty() {
-            writeln!(
-                output,
-                "// Source: {}\n// Namespace: {}",
-                display_path(unit.source.path()),
-                unit.namespace.trim_start_matches('/')
-            )
-            .unwrap();
-            output.push_str(&emitter.output);
-        }
+pub(crate) fn lower(package: &SemanticPackage) -> Program {
+    let mut globals = String::new();
+    if package_uses_structured_errors(package) {
+        emit_error_support(&mut globals);
     }
-    output
+    emit_global_storage(package, &mut globals);
+    let modules = package
+        .units
+        .iter()
+        .map(|unit| {
+            let mut emitter = Emitter {
+                package,
+                unit,
+                source: &unit.source,
+                output: String::new(),
+                indent: 0,
+                continue_label: None,
+                loop_counter: 0,
+                return_type: None,
+                parameter_types: Vec::new(),
+                namespace_initializer: None,
+                propagate_errors: false,
+                function_errors: false,
+                try_counter: 0,
+                current_error: None,
+                current_function: None,
+                try_completion: false,
+                in_loop: false,
+            };
+            emitter.emit_union_types();
+            let mut items = Vec::new();
+            if !emitter.output.is_empty() {
+                items.push(Item::generated(&emitter.output));
+                emitter.output.clear();
+            }
+            for node in &unit.tree.root.children {
+                match node.kind {
+                    SyntaxKind::Binding | SyntaxKind::Assignment => {
+                        emitter.namespace_binding(node);
+                    }
+                    SyntaxKind::FunctionDeclaration => emitter.function(node),
+                    _ => {}
+                }
+                if !emitter.output.is_empty() {
+                    items.push(Item::sourced(node.span, &emitter.output));
+                    emitter.output.clear();
+                }
+            }
+            Module {
+                source_path: display_path(unit.source.path()),
+                namespace: unit.namespace.clone(),
+                items,
+            }
+        })
+        .collect();
+    Program {
+        version: crate::VERSION,
+        globals: (!globals.is_empty())
+            .then(|| Item::generated(&globals))
+            .into_iter()
+            .collect(),
+        modules,
+    }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these independent lexical control contexts are saved and restored separately"
+)]
 struct Emitter<'a> {
     package: &'a SemanticPackage,
     unit: &'a SemanticUnit,
@@ -64,6 +93,81 @@ struct Emitter<'a> {
     return_type: Option<ScalarType>,
     parameter_types: Vec<(String, ScalarType)>,
     namespace_initializer: Option<(String, String)>,
+    propagate_errors: bool,
+    function_errors: bool,
+    try_counter: usize,
+    current_error: Option<String>,
+    current_function: Option<String>,
+    try_completion: bool,
+    in_loop: bool,
+}
+
+fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
+    fn contains(node: &SyntaxNode) -> bool {
+        matches!(
+            node.kind,
+            SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
+        ) || node.children.iter().any(contains)
+    }
+    package.units.iter().any(|unit| {
+        unit.functions.iter().any(|contract| contract.throws) || contains(&unit.tree.root)
+    })
+}
+
+fn emit_error_support(output: &mut String) {
+    output.push_str(
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+         enum TerraneErrorKind {\n\
+         ArithmeticOverflow,\nDivisionByZero,\nIntegerConversionOverflow,\nNegativeShiftCount,\n\
+         CoercionError,\nResourceError,\nSourceError,\n}\n\
+         impl TerraneErrorKind {\n\
+         fn from_source_name(name: &str) -> Self {\nmatch name {\n\
+         \".arithmetic-overflow\" => Self::ArithmeticOverflow,\n\
+         \".division-by-zero\" => Self::DivisionByZero,\n\
+         \".integer-conversion-overflow\" => Self::IntegerConversionOverflow,\n\
+         \".negative-shift-count\" => Self::NegativeShiftCount,\n\
+         \".coercion-error\" => Self::CoercionError,\n\
+         \".resource-error\" => Self::ResourceError,\n\
+         _ => Self::SourceError,\n}\n}\n\
+         fn source_name(self) -> &'static str {\nmatch self {\n\
+         Self::ArithmeticOverflow => \".arithmetic-overflow\",\n\
+         Self::DivisionByZero => \".division-by-zero\",\n\
+         Self::IntegerConversionOverflow => \".integer-conversion-overflow\",\n\
+         Self::NegativeShiftCount => \".negative-shift-count\",\n\
+         Self::CoercionError => \".coercion-error\",\n\
+         Self::ResourceError => \".resource-error\",\n\
+         Self::SourceError => \".error\",\n}\n}\n}\n\
+         #[derive(Clone, Debug)]\nstruct TerraneError {\n\
+         kind: TerraneErrorKind,\nmessage: String,\ncause: Option<Box<TerraneError>>,\n\
+         context: Vec<&'static str>,\n}\n\
+         impl TerraneError {\n\
+         fn new(kind: TerraneErrorKind, message: impl Into<String>) -> Self {\n\
+         Self { kind, message: message.into(), cause: None, context: Vec::new() }\n}\n",
+    );
+    output.push_str(
+        "#[allow(dead_code)]\n\
+         fn at(mut self, frame: &'static str) -> Self {\n\
+         self.context.push(frame);\nself\n}\n",
+    );
+    output.push_str(
+        "\
+         fn render(&self) -> String {\n\
+         let mut rendered = format!(\"{}: {}\", self.kind.source_name(), self.message);\n\
+         if let Some(cause) = &self.cause {\nrendered.push_str(\"\\ncaused by: \");\nrendered.push_str(&cause.render());\n}\n\
+         for frame in &self.context {\nrendered.push_str(\"\\nat \");\nrendered.push_str(frame);\n}\nrendered\n}\n}\n\
+         impl std::fmt::Display for TerraneError {\n\
+         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n\
+         formatter.write_str(&self.render())\n}\n}\n\
+         impl From<terrane_int_support::ArithmeticError> for TerraneError {\n\
+         fn from(error: terrane_int_support::ArithmeticError) -> Self {\n\
+         Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())\n}\n}\n\
+         fn __terrane_uncaught(error: TerraneError) -> ! {\n\
+         eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
+         fn __terrane_generated_defect(message: &str) -> ! {\n\
+         eprintln!(\"internal compiler defect: generated program reached an impossible completion: {message}\");\n\
+         std::process::exit(5);\n}\n\
+         #[allow(dead_code)]\nenum TerraneCompletion<T> {\nNormal,\nReturn(T),\nError(TerraneError),\nBreak,\nContinue,\n}\n",
+    );
 }
 
 #[expect(
@@ -106,6 +210,13 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             return_type: None,
             parameter_types: Vec::new(),
             namespace_initializer: None,
+            propagate_errors: false,
+            function_errors: false,
+            try_counter: 0,
+            current_error: None,
+            current_function: None,
+            try_completion: false,
+            in_loop: false,
         };
         let value_type = unit
             .typed_bindings
@@ -157,6 +268,13 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
                 return_type: None,
                 parameter_types: Vec::new(),
                 namespace_initializer: None,
+                propagate_errors: false,
+                function_errors: false,
+                try_counter: 0,
+                current_error: None,
+                current_function: None,
+                try_completion: false,
+                in_loop: false,
             };
             Some(initial_emitter.expression_as(initializer, ValueType::Scalar(scalar)))
         });
@@ -365,13 +483,24 @@ impl Emitter<'_> {
             write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
         }
         self.output.push(')');
-        if let Some(return_type) = contract.return_type
+        let function_errors = contract.throws && contract.name != "main";
+        if function_errors {
+            let result = contract.return_type.map_or("()", rust_type);
+            write!(self.output, " -> Result<{result}, TerraneError>").unwrap();
+        } else if let Some(return_type) = contract.return_type
             && return_type != ScalarType::None
         {
             write!(self.output, " -> {}", rust_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
         let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
+        let outer_function_errors = std::mem::replace(&mut self.function_errors, function_errors);
+        let outer_propagation = std::mem::replace(&mut self.propagate_errors, function_errors);
+        let outer_function = self.current_function.replace(format!(
+            "{}::{}",
+            self.unit.namespace.trim_end_matches('/'),
+            contract.name
+        ));
         let outer_parameter_types = std::mem::replace(
             &mut self.parameter_types,
             contract
@@ -392,8 +521,21 @@ impl Emitter<'_> {
         {
             self.block(block);
         }
+        if function_errors
+            && contract.return_type.is_none_or(|ty| ty == ScalarType::None)
+            && node
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Block)
+                .is_some_and(block_may_fall_through)
+        {
+            self.line("Ok(())");
+        }
         self.return_type = outer_return_type;
+        self.function_errors = outer_function_errors;
+        self.propagate_errors = outer_propagation;
         self.parameter_types = outer_parameter_types;
+        self.current_function = outer_function;
         self.indent -= 1;
         self.line("}");
     }
@@ -551,19 +693,36 @@ impl Emitter<'_> {
             SyntaxKind::WhileStatement => self.while_statement(node),
             SyntaxKind::ForStatement => self.for_statement(node),
             SyntaxKind::ReturnStatement => {
-                if let Some(value) = node.children.first() {
-                    let value = if let Some(return_type) = self.return_type {
-                        self.expression_as(value, ValueType::Scalar(return_type))
-                    } else {
-                        self.expression(value)
-                    };
-                    let value = Self::unwrapped_expression(value);
-                    self.line(&format!("return {value};"));
+                let value = node.children.first().map_or_else(
+                    || "()".to_owned(),
+                    |value| {
+                        let value = if let Some(return_type) = self.return_type {
+                            self.expression_as(value, ValueType::Scalar(return_type))
+                        } else {
+                            self.expression(value)
+                        };
+                        Self::unwrapped_expression(value)
+                    },
+                );
+                if self.try_completion {
+                    self.line(&format!("return TerraneCompletion::Return({value});"));
+                } else if self.function_errors {
+                    self.line(&format!("return Ok({value});"));
+                } else if self.propagate_errors {
+                    self.line(&format!("return Ok(Some({value}));"));
                 } else {
-                    self.line("return;");
+                    self.line(&format!("return {value};"));
                 }
             }
+            SyntaxKind::ThrowStatement => self.throw_statement(node),
+            SyntaxKind::TryStatement => self.try_statement(node),
+            SyntaxKind::BreakStatement if self.try_completion => {
+                self.line("return TerraneCompletion::Break;");
+            }
             SyntaxKind::BreakStatement => self.line("break;"),
+            SyntaxKind::ContinueStatement if self.try_completion => {
+                self.line("return TerraneCompletion::Continue;");
+            }
             SyntaxKind::ContinueStatement => {
                 if let Some(label) = &self.continue_label {
                     self.line(&format!("break '{label};"));
@@ -573,6 +732,221 @@ impl Emitter<'_> {
             }
             _ => {}
         }
+    }
+
+    fn error_kind(&self, node: &SyntaxNode) -> String {
+        self.package
+            .resolve_name_at(self.unit, node.span.start, self.text(node))
+            .and_then(|symbol| symbol.identity.strip_prefix("/core/errors::"))
+            .unwrap_or_else(|| self.text(node).trim().trim_start_matches('.'))
+            .to_owned()
+    }
+
+    fn throw_statement(&mut self, node: &SyntaxNode) {
+        if let Some(current_error) = &self.current_error
+            && node.children.is_empty()
+        {
+            if self.try_completion {
+                self.line(&format!(
+                    "return TerraneCompletion::Error({current_error}.clone());"
+                ));
+            } else if self.propagate_errors {
+                self.line(&format!("return Err({current_error}.clone());"));
+            } else {
+                self.line(&format!("__terrane_uncaught({current_error}.clone());"));
+            }
+            return;
+        }
+        let Some(error_node) = node.children.first() else {
+            return;
+        };
+        let name = self.error_kind(error_node);
+        let context = self.error_context(node);
+        let mut error = format!(
+            "TerraneError::new(TerraneErrorKind::{}, \"{}\").at(\"{context}\")",
+            rust_error_kind(&name),
+            error_message(&name),
+        );
+        if let Some(current_error) = &self.current_error {
+            error = format!(
+                "{{ let mut error = {error}; error.cause = Some(Box::new({current_error}.clone())); error }}"
+            );
+        }
+        if self.try_completion {
+            self.line(&format!("return TerraneCompletion::Error({error});"));
+        } else if self.propagate_errors {
+            self.line(&format!("return Err({error});"));
+        } else {
+            self.line(&format!("__terrane_uncaught({error});"));
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the emitted try/catch/finally control flow is clearer as one auditable state machine"
+    )]
+    fn try_statement(&mut self, node: &SyntaxNode) {
+        let Some(block) = node.children.first() else {
+            return;
+        };
+        let index = self.try_counter;
+        self.try_counter += 1;
+        let result = self.return_type.map_or("()", rust_type);
+        let mutable = if node
+            .children
+            .iter()
+            .any(|child| child.kind == SyntaxKind::FinallyClause)
+        {
+            "mut "
+        } else {
+            ""
+        };
+        self.line(&format!(
+            "let {mutable}__terrane_completion_{index}: TerraneCompletion<{result}> = (|| {{"
+        ));
+        self.indent += 1;
+        self.line(&format!(
+            "let __terrane_try_{index}: TerraneCompletion<{result}> = (|| {{"
+        ));
+        self.indent += 1;
+        let outer_completion = std::mem::replace(&mut self.try_completion, true);
+        let outer_propagation = std::mem::replace(&mut self.propagate_errors, true);
+        let outer_function_errors = std::mem::replace(&mut self.function_errors, false);
+        self.block(block);
+        if block_may_fall_through(block) {
+            self.line("TerraneCompletion::Normal");
+        }
+        self.function_errors = outer_function_errors;
+        self.propagate_errors = outer_propagation;
+        self.indent -= 1;
+        self.line("})();");
+        self.line(&format!("match __terrane_try_{index} {{"));
+        self.indent += 1;
+        self.line("TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),");
+        self.line("TerraneCompletion::Break => return TerraneCompletion::Break,");
+        self.line("TerraneCompletion::Continue => return TerraneCompletion::Continue,");
+        self.line("TerraneCompletion::Normal => {}");
+        self.line(&format!(
+            "TerraneCompletion::Error(__terrane_error_{index}) => {{"
+        ));
+        self.indent += 1;
+        self.line(&format!("let mut __terrane_handled_{index} = false;"));
+        for clause in node
+            .children
+            .iter()
+            .filter(|child| child.kind == SyntaxKind::CatchClause)
+        {
+            let descriptor = clause
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::Name);
+            let condition = descriptor.map_or_else(
+                || format!("!__terrane_handled_{index}"),
+                |descriptor| {
+                    let kind = self.error_kind(descriptor);
+                    if kind == "error" {
+                        format!("!__terrane_handled_{index}")
+                    } else {
+                        format!(
+                            "!__terrane_handled_{index} && __terrane_error_{index}.kind == TerraneErrorKind::{}",
+                            rust_error_kind(&kind)
+                        )
+                    }
+                },
+            );
+            self.line(&format!("if {condition} {{"));
+            self.indent += 1;
+            self.line(&format!("__terrane_handled_{index} = true;"));
+            let outer_error = self
+                .current_error
+                .replace(format!("__terrane_error_{index}"));
+            if let Some(catch_block) = clause.children.last() {
+                self.block(catch_block);
+            }
+            self.current_error = outer_error;
+            self.indent -= 1;
+            self.line("}");
+        }
+        self.try_completion = outer_completion;
+        self.line(&format!("if !__terrane_handled_{index} {{"));
+        self.indent += 1;
+        self.line(&format!(
+            "return TerraneCompletion::Error(__terrane_error_{index});"
+        ));
+        self.indent -= 1;
+        self.line("}");
+        self.indent -= 1;
+        self.line("}");
+        self.indent -= 1;
+        self.line("}");
+        self.line("TerraneCompletion::Normal");
+        self.indent -= 1;
+        self.line("})();");
+        if let Some(finally) = node
+            .children
+            .iter()
+            .find(|child| child.kind == SyntaxKind::FinallyClause)
+            .and_then(|clause| clause.children.first())
+        {
+            self.line(&format!(
+                "let __terrane_finally_{index}: TerraneCompletion<{result}> = (|| {{"
+            ));
+            self.indent += 1;
+            let outer_completion = std::mem::replace(&mut self.try_completion, true);
+            let outer_propagation = std::mem::replace(&mut self.propagate_errors, true);
+            let outer_function_errors = std::mem::replace(&mut self.function_errors, false);
+            self.block(finally);
+            if block_may_fall_through(finally) {
+                self.line("TerraneCompletion::Normal");
+            }
+            self.function_errors = outer_function_errors;
+            self.propagate_errors = outer_propagation;
+            self.try_completion = outer_completion;
+            self.indent -= 1;
+            self.line("})();");
+            self.line(&format!("match __terrane_finally_{index} {{"));
+            self.indent += 1;
+            self.line("TerraneCompletion::Normal => {}");
+            self.line(&format!(
+                "replacement => __terrane_completion_{index} = replacement,"
+            ));
+            self.indent -= 1;
+            self.line("}");
+        }
+        self.line(&format!("match __terrane_completion_{index} {{"));
+        self.indent += 1;
+        if statement_may_fall_through(node) {
+            self.line("TerraneCompletion::Normal => {}");
+        } else {
+            self.line("TerraneCompletion::Normal => __terrane_generated_defect(\"non-fallthrough try completed normally\"),");
+        }
+        if self.try_completion {
+            self.line(
+                "TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),",
+            );
+            self.line("TerraneCompletion::Error(error) => return TerraneCompletion::Error(error),");
+        } else if self.function_errors {
+            self.line("TerraneCompletion::Return(value) => return Ok(value),");
+            self.line("TerraneCompletion::Error(error) => return Err(error),");
+        } else if self.propagate_errors {
+            self.line("TerraneCompletion::Return(value) => return Ok(Some(value)),");
+            self.line("TerraneCompletion::Error(error) => return Err(error),");
+        } else {
+            self.line("TerraneCompletion::Return(value) => return value,");
+            self.line("TerraneCompletion::Error(error) => __terrane_uncaught(error),");
+        }
+        if self.in_loop {
+            self.line("TerraneCompletion::Break => break,");
+            if let Some(label) = &self.continue_label {
+                self.line(&format!("TerraneCompletion::Continue => break '{label},"));
+            } else {
+                self.line("TerraneCompletion::Continue => continue,");
+            }
+        } else {
+            self.line("TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect(\"loop control escaped a non-loop try\"),");
+        }
+        self.indent -= 1;
+        self.line("}");
     }
 
     fn binding(&mut self, node: &SyntaxNode) {
@@ -717,7 +1091,9 @@ impl Emitter<'_> {
         self.line(&format!("while {condition} {{"));
         self.indent += 1;
         let outer_continue = self.continue_label.take();
+        let outer_loop = std::mem::replace(&mut self.in_loop, true);
         self.block(block);
+        self.in_loop = outer_loop;
         self.continue_label = outer_continue;
         self.indent -= 1;
         self.line("}");
@@ -741,7 +1117,9 @@ impl Emitter<'_> {
                 ));
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();
+                let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
+                self.in_loop = outer_loop;
                 self.continue_label = outer_continue;
                 self.indent -= 1;
                 self.line("}");
@@ -756,7 +1134,9 @@ impl Emitter<'_> {
                 self.line(&format!("'{label}: {{"));
                 self.indent += 1;
                 let outer_continue = self.continue_label.replace(label);
+                let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
+                self.in_loop = outer_loop;
                 self.continue_label = outer_continue;
                 self.indent -= 1;
                 self.line("}");
@@ -1039,9 +1419,8 @@ impl Emitter<'_> {
             } else {
                 right
             };
-            return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_{operation}({left}, {right}))"
-            );
+            let call = format!("terrane_int_support::fixed_{operation}({left}, {right})");
+            return self.fallible(call, node);
         }
         if let Some(operation_type) = self.numeric_operation_type(left, right) {
             let left = self.expression_as(left, ValueType::Scalar(operation_type));
@@ -1065,6 +1444,26 @@ impl Emitter<'_> {
             return String::new();
         };
         let descriptor_type = self.descriptor_type(descriptor);
+        let descriptor_category =
+            crate::semantics::descriptor_expression_category(self.package, self.unit, descriptor);
+        if let Some(binding) = self.union_binding(value)
+            && let Some(category) = descriptor_category
+        {
+            let union_name = union_type_name(&binding);
+            let expression = self.expression(value);
+            let matching = binding
+                .destination_arms
+                .iter()
+                .enumerate()
+                .filter(|(_, arm)| arm.conforms_to(category))
+                .map(|(index, _)| format!("{union_name}::Arm{index}(_)"))
+                .collect::<Vec<_>>();
+            return if matching.is_empty() {
+                format!("{{ let _ = &{expression}; false }}")
+            } else {
+                format!("matches!(&{expression}, {})", matching.join(" | "))
+            };
+        }
         if let Some(binding) = self.union_binding(value)
             && let Some(descriptor) = descriptor_type
             && let Some(index) = binding
@@ -1077,6 +1476,9 @@ impl Emitter<'_> {
             return format!("matches!(&{expression}, {union_name}::Arm{index}(_))");
         }
         let value_type = self.value_type(value);
+        if let Some(category) = descriptor_category {
+            return self.category_membership(value, value_type, category);
+        }
         if let Some(destination) = descriptor_type
             && let Some(result) = contextual_constant(self.source, value, destination)
         {
@@ -1099,6 +1501,33 @@ impl Emitter<'_> {
             format!("let _ = &{expression};")
         } else {
             Self::discarded_expression(self.expression(value))
+        };
+        format!("{{ {effect} {result} }}")
+    }
+
+    fn category_membership(
+        &mut self,
+        node: &SyntaxNode,
+        value_type: Option<ValueType>,
+        category: TypeCategory,
+    ) -> String {
+        if let Some(ValueType::ScalarOrNone(inner)) = value_type {
+            let value = self.expression(node);
+            return if inner.conforms_to(category) {
+                format!("({value}).is_some()")
+            } else {
+                format!("{{ let _ = {value}; false }}")
+            };
+        }
+        let result = matches!(
+            value_type,
+            Some(ValueType::Scalar(value)) if value.conforms_to(category)
+        );
+        let effect = if node.kind == SyntaxKind::Name {
+            let expression = Self::unwrapped_expression(self.expression(node));
+            format!("let _ = &{expression};")
+        } else {
+            Self::discarded_expression(self.expression(node))
         };
         format!("{{ {effect} {result} }}")
     }
@@ -1224,12 +1653,73 @@ impl Emitter<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "all call forms share one ordering and error-propagation path"
+    )]
     fn call(&mut self, node: &SyntaxNode) -> String {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
-        if let Some(coercion) = self.integer_coercion(callee, arguments) {
-            return coercion;
+        if let Some(method) = bound_method(self.source, callee) {
+            let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
+                .expect("validated bound method receiver");
+            let receiver = self.expression(receiver_node);
+            if method.family == MemberFamily::Coerce {
+                return self.integer_coercion(&method, receiver_node, callee, arguments);
+            }
+            let argument = arguments
+                .children
+                .first()
+                .and_then(|argument| argument.children.last())
+                .map(|value| self.expression(value))
+                .unwrap_or_default();
+            let callback_throws = method.family == MemberFamily::Parse
+                && arguments
+                    .children
+                    .first()
+                    .and_then(|argument| argument.children.last())
+                    .and_then(|callback| self.contract_for_call(callback))
+                    .is_some_and(|contract| contract.throws);
+            let call = match method.family {
+                MemberFamily::Parse => format!("{argument}({receiver})"),
+                MemberFamily::Radix
+                    if self.value_type(receiver_node)
+                        == Some(ValueType::Scalar(ScalarType::String)) =>
+                {
+                    format!("terrane_int_support::parse_radix(&({receiver}), &({argument}))")
+                }
+                MemberFamily::Radix => {
+                    format!("terrane_int_support::format_radix(&({receiver}), &({argument}))")
+                }
+                MemberFamily::Coerce => unreachable!(),
+            };
+            return if method.family == MemberFamily::Parse && !callback_throws {
+                if method.child == "checked" {
+                    format!("Some({call})")
+                } else {
+                    call
+                }
+            } else if method.child == "checked" {
+                format!("({call}).ok()")
+            } else if method.family == MemberFamily::Parse {
+                let context = self.error_context(node);
+                if self.try_completion {
+                    format!(
+                        "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at(\"{context}\")) }}"
+                    )
+                } else if self.propagate_errors {
+                    format!(
+                        "({call}).map_err(|error| TerraneError::from(error).at(\"{context}\"))?"
+                    )
+                } else {
+                    format!(
+                        "({call}).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at(\"{context}\")))"
+                    )
+                }
+            } else {
+                self.fallible(call, node)
+            };
         }
         let mut values = arguments
             .children
@@ -1316,7 +1806,51 @@ impl Emitter<'_> {
         let name = contract
             .as_ref()
             .map_or_else(|| self.expression(callee), function_name);
-        format!("{name}({})", values.join(", "))
+        let call = format!("{name}({})", values.join(", "));
+        if contract.is_some_and(|contract| contract.throws) {
+            let context = self.error_context(node);
+            if self.try_completion {
+                format!(
+                    "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(error.at(\"{context}\")) }}"
+                )
+            } else if self.propagate_errors {
+                format!("({call}).map_err(|error| error.at(\"{context}\"))?")
+            } else {
+                format!(
+                    "({call}).unwrap_or_else(|error| __terrane_uncaught(error.at(\"{context}\")))"
+                )
+            }
+        } else {
+            call
+        }
+    }
+
+    fn fallible(&self, call: impl AsRef<str>, node: &SyntaxNode) -> String {
+        let call = call.as_ref();
+        let context = self.error_context(node);
+        if self.try_completion {
+            format!(
+                "match {call} {{ Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at(\"{context}\")) }}"
+            )
+        } else if self.propagate_errors {
+            format!("({call}).map_err(|error| TerraneError::from(error).at(\"{context}\"))?")
+        } else if package_uses_structured_errors(self.package) {
+            format!(
+                "({call}).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at(\"{context}\")))"
+            )
+        } else {
+            format!("terrane_int_support::unwrap_or_fail({call})")
+        }
+    }
+
+    fn error_context(&self, node: &SyntaxNode) -> String {
+        let (line, column) = self.source.line_column(node.span.start);
+        let location = format!("{}:{line}:{column}", display_path(self.source.path()));
+        self.current_function
+            .as_ref()
+            .map_or(location.clone(), |function| {
+                format!("{function} ({location})")
+            })
     }
 
     fn numeric_destination(
@@ -1333,9 +1867,7 @@ impl Emitter<'_> {
                 } else {
                     "exact_int_f64"
                 };
-                return format!(
-                    "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}({value}))"
-                );
+                return self.fallible(format!("terrane_int_support::{helper}({value})"), node);
             }
             return if source == ScalarType::Uint128 {
                 format!("terrane_int_support::adaptive(&({value}))")
@@ -1344,9 +1876,12 @@ impl Emitter<'_> {
             };
         }
         if source == ScalarType::Int && destination.is_integer() {
-            return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::coerce::<{}>(&({value})))",
-                rust_type(destination)
+            return self.fallible(
+                format!(
+                    "terrane_int_support::coerce::<{}>(&({value}))",
+                    rust_type(destination)
+                ),
+                node,
             );
         }
         if source == ScalarType::Int {
@@ -1355,9 +1890,7 @@ impl Emitter<'_> {
             } else {
                 "exact_f64"
             };
-            return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}(&({value})))"
-            );
+            return self.fallible(format!("terrane_int_support::{helper}(&({value}))"), node);
         }
         if source.is_integer() && destination.is_integer() {
             if integer_range_contains(destination, source) {
@@ -1380,9 +1913,7 @@ impl Emitter<'_> {
             } else {
                 "exact_f64"
             };
-            return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}(&({value})))"
-            );
+            return self.fallible(format!("terrane_int_support::{helper}(&({value}))"), node);
         }
         if destination.is_integer() {
             let helper = if source == ScalarType::Float32 {
@@ -1390,9 +1921,12 @@ impl Emitter<'_> {
             } else {
                 "exact_from_f64"
             };
-            return format!(
-                "terrane_int_support::unwrap_or_fail(terrane_int_support::{helper}::<{}>({value}))",
-                rust_type(destination)
+            return self.fallible(
+                format!(
+                    "terrane_int_support::{helper}::<{}>({value})",
+                    rust_type(destination)
+                ),
+                node,
             );
         }
         format!(
@@ -1400,14 +1934,26 @@ impl Emitter<'_> {
         )
     }
 
-    fn integer_coercion(&mut self, callee: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
-        let (receiver, policy) = integer_coercion_call(self.source, callee)?;
+    fn integer_coercion(
+        &mut self,
+        method: &crate::BoundMethod,
+        receiver: &SyntaxNode,
+        callee: &SyntaxNode,
+        arguments: &SyntaxNode,
+    ) -> String {
+        let policy = match method.child {
+            "default" => CoercionPolicy::Default,
+            child => CoercionPolicy::from_member(child)
+                .expect("validated coercion family child must select a policy"),
+        };
         let destination = arguments
             .children
             .first()
             .and_then(|argument| argument.children.last())
             .unwrap_or_else(|| &arguments.children[0]);
-        let destination = self.descriptor_type(destination)?;
+        let destination = self
+            .descriptor_type(destination)
+            .expect("validated coercion destination must resolve to a scalar descriptor");
         let receiver_is_borrowed = receiver.kind == SyntaxKind::Name
             && self.lazy_namespace_binding_type(receiver).is_some();
         if policy == CoercionPolicy::Default
@@ -1415,16 +1961,15 @@ impl Emitter<'_> {
             && let Some(ValueType::Scalar(source)) = self.value_type(receiver)
         {
             if source == destination {
-                return Some(
-                    if destination == ScalarType::Int && self.small_int_binding(receiver).is_some()
-                    {
-                        self.adaptive_expression(receiver)
-                    } else {
-                        self.expression(receiver)
-                    },
-                );
+                return if destination == ScalarType::Int
+                    && self.small_int_binding(receiver).is_some()
+                {
+                    self.adaptive_expression(receiver)
+                } else {
+                    self.expression(receiver)
+                };
             }
-            return Some(self.numeric_destination(receiver, source, destination));
+            return self.numeric_destination(receiver, source, destination);
         }
         let helper = match policy {
             CoercionPolicy::Default => "coerce",
@@ -1442,11 +1987,11 @@ impl Emitter<'_> {
             "terrane_int_support::{helper}::<{}>({source})",
             rust_type(destination)
         );
-        Some(if policy == CoercionPolicy::Default {
-            format!("terrane_int_support::unwrap_or_fail({call})")
+        if policy == CoercionPolicy::Default {
+            self.fallible(call, callee)
         } else {
             call
-        })
+        }
     }
 
     fn descriptor_identity(&self, node: &SyntaxNode) -> Option<String> {
@@ -1929,8 +2474,96 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
     }
 }
 
+fn block_may_fall_through(block: &SyntaxNode) -> bool {
+    block.children.last().is_none_or(statement_may_fall_through)
+}
+
+fn statement_may_fall_through(statement: &SyntaxNode) -> bool {
+    match statement.kind {
+        SyntaxKind::ReturnStatement
+        | SyntaxKind::ThrowStatement
+        | SyntaxKind::BreakStatement
+        | SyntaxKind::ContinueStatement => false,
+        SyntaxKind::IfStatement => {
+            let mut branches = statement.children.iter().skip(1);
+            let Some(first) = branches.next() else {
+                return true;
+            };
+            let first_falls_through = first
+                .children
+                .last()
+                .filter(|child| child.kind == SyntaxKind::Block)
+                .map_or_else(|| block_may_fall_through(first), block_may_fall_through);
+            let mut has_else = false;
+            let mut any_falls_through = first_falls_through;
+            for branch in branches {
+                has_else |= branch.kind == SyntaxKind::ElseClause;
+                any_falls_through |= branch
+                    .children
+                    .last()
+                    .filter(|child| child.kind == SyntaxKind::Block)
+                    .is_none_or(block_may_fall_through);
+            }
+            !has_else || any_falls_through
+        }
+        SyntaxKind::TryStatement => {
+            let try_falls_through = statement
+                .children
+                .first()
+                .is_none_or(block_may_fall_through);
+            let catch_falls_through = statement
+                .children
+                .iter()
+                .filter(|child| child.kind == SyntaxKind::CatchClause)
+                .filter_map(|clause| {
+                    clause
+                        .children
+                        .iter()
+                        .find(|child| child.kind == SyntaxKind::Block)
+                })
+                .any(block_may_fall_through);
+            let finally_returns = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::FinallyClause)
+                .and_then(|clause| clause.children.first())
+                .is_some_and(|block| !block_may_fall_through(block));
+            !finally_returns && (try_falls_through || catch_falls_through)
+        }
+        _ => true,
+    }
+}
+
+fn rust_error_kind(kind: &str) -> &'static str {
+    match kind {
+        "arithmetic-overflow" => "ArithmeticOverflow",
+        "division-by-zero" => "DivisionByZero",
+        "integer-conversion-overflow" => "IntegerConversionOverflow",
+        "negative-shift-count" => "NegativeShiftCount",
+        "coercion-error" => "CoercionError",
+        "resource-error" => "ResourceError",
+        _ => "SourceError",
+    }
+}
+
+fn error_message(kind: &str) -> &'static str {
+    match kind {
+        "arithmetic-overflow" => "fixed-width integer arithmetic overflow",
+        "division-by-zero" => "integer division by zero",
+        "integer-conversion-overflow" => "integer conversion overflow",
+        "negative-shift-count" => "negative integer shift count",
+        "coercion-error" => "coercion has no compatible result",
+        "resource-error" => "integer shift count cannot be represented on this target",
+        _ => "source error",
+    }
+}
+
 fn function_name(contract: &FunctionContract) -> String {
-    rust_name(&contract.name)
+    if contract.name == "main" {
+        "main".to_owned()
+    } else {
+        rust_name(&contract.name)
+    }
 }
 
 fn namespace_binding_name(file: u32, name: &str) -> String {
@@ -1942,13 +2575,56 @@ fn global_binding_name(name: &str) -> String {
 }
 
 fn rust_name(name: &str) -> String {
-    let mut output = String::with_capacity(name.len());
-    for character in name.chars() {
-        if character == '-' {
-            output.push('_');
-        } else {
-            output.push(character);
-        }
+    let readable_identifier = name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    let keyword = matches!(
+        name,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+    );
+    if readable_identifier && !keyword {
+        return name.replace('-', "_");
+    }
+    let mut output = String::from("__trn_");
+    for byte in name.bytes() {
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
     }
     output
 }

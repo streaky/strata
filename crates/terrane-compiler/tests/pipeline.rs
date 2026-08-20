@@ -7,6 +7,15 @@ fn hello_lowers_deterministically() {
     let first = terrane_compiler::compile(PathBuf::from("case.trn"), HELLO.to_owned()).unwrap();
     let second = terrane_compiler::compile(PathBuf::from("case.trn"), HELLO.to_owned()).unwrap();
     assert_eq!(first.rust, second.rust);
+    assert_eq!(first.rust_files, second.rust_files);
+    assert_eq!(
+        first
+            .rust_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["src/authored/unit-0000.rs", "src/main.rs"]
+    );
     assert!(
         first
             .rust

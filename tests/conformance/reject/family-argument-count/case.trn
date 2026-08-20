@@ -1,0 +1,4 @@
+namespace family-argument-count
+function main
+  value int = 15
+  print; (value.radix; 16, 2)

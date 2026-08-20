@@ -91,14 +91,40 @@ fn manifest_file_and_package_directory_use_the_shared_cli_pipeline() {
         .find(|path| path.file_name().is_some_and(|name| name == ".trn"))
         .unwrap();
     assert_eq!(build_root.parent(), Some(package.0.as_path()));
-    let metadata = fs::read_to_string(
-        executable_path
-            .ancestors()
-            .nth(3)
-            .unwrap()
-            .join("terrane-build.toml"),
-    )
-    .unwrap();
+    let generated_project = fs::read_dir(build_root.join("build"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let metadata = fs::read_to_string(generated_project.join("terrane-build.toml")).unwrap();
     assert!(metadata.contains("path = \"app/main.trn\""));
     assert!(metadata.contains("path = \"support/support.trn\""));
+    assert!(
+        generated_project
+            .join("src/authored/unit-0000.rs")
+            .is_file()
+    );
+    assert!(
+        generated_project
+            .join("src/authored/unit-0001.rs")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read(generated_project.join("support/terrane-int-support/src/lib.rs")).unwrap(),
+        fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../terrane-int-support/src/lib.rs")
+        )
+        .unwrap()
+    );
+    fs::remove_dir_all(build_root.join("cache/target")).unwrap();
+    let cached_build = Command::new(executable)
+        .args(["build", package.0.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(cached_build.status.success());
+    assert_eq!(
+        PathBuf::from(String::from_utf8(cached_build.stdout).unwrap().trim()),
+        executable_path
+    );
 }

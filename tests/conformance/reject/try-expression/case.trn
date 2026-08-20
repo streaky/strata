@@ -1,0 +1,6 @@
+namespace try-expression
+function main
+  try 1
+    print; >body
+  finally
+    print; >done

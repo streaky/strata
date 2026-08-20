@@ -4,7 +4,7 @@ use num_bigint::BigInt;
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxTree};
-use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, lexer, parser};
+use crate::{Diagnostic, Package, ScalarType, SourceFile, Span, TypeCategory, lexer, parser};
 
 pub const BOOTSTRAP_VERSION: &str = "1";
 
@@ -46,6 +46,14 @@ impl Symbol {
     }
 
     #[must_use]
+    pub fn descriptor_category(&self) -> Option<TypeCategory> {
+        (self.kind == SymbolKind::TypeDescriptor)
+            .then(|| self.identity.strip_prefix("/core/types::"))
+            .flatten()
+            .and_then(TypeCategory::from_source_name)
+    }
+
+    #[must_use]
     pub fn available_in_function_body(&self) -> bool {
         self.kind != SymbolKind::Binding || self.constant || self.global
     }
@@ -84,6 +92,20 @@ impl std::fmt::Display for ValueType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemberFamily {
+    Coerce,
+    Parse,
+    Radix,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundMethod {
+    pub receiver: Span,
+    pub family: MemberFamily,
+    pub child: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CoercionPolicy {
     Default,
     Checked,
@@ -92,7 +114,7 @@ pub(crate) enum CoercionPolicy {
 }
 
 impl CoercionPolicy {
-    fn from_member(member: &str) -> Option<Self> {
+    pub(crate) fn from_member(member: &str) -> Option<Self> {
         match member {
             "checked" => Some(Self::Checked),
             "wrap" => Some(Self::Wrap),
@@ -143,6 +165,7 @@ pub struct FunctionContract {
     pub span: Span,
     pub parameters: Vec<ParameterContract>,
     pub return_type: Option<ScalarType>,
+    pub throws: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -190,6 +213,7 @@ pub struct SemanticUnit {
     pub typed_bindings: Vec<TypedBinding>,
     /// Function contracts declared by every source unit in this unit's namespace.
     pub functions: Vec<FunctionContract>,
+    function_aliases: BTreeMap<String, FunctionContract>,
     descriptor_aliases: BTreeMap<String, Vec<DescriptorAlias>>,
     pub unreachable_spans: Vec<Span>,
     pub evaluation_steps: Vec<EvaluationStep>,
@@ -313,6 +337,7 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
+            function_aliases: BTreeMap::new(),
             descriptor_aliases: BTreeMap::new(),
             unreachable_spans: Vec::new(),
             evaluation_steps: Vec::new(),
@@ -386,7 +411,9 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     };
     validate_initializer_dependencies(&semantic)?;
     validate_references(&semantic)?;
+    validate_error_clauses(&semantic)?;
     analyze_types(&mut semantic)?;
+    infer_throwing_effects(&mut semantic);
     validate_constant_reassignment(&semantic)?;
     validate_global_definite_assignment(&semantic)?;
     record_binding_mutability(&mut semantic);
@@ -398,6 +425,97 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         unit.evaluation_steps = collect_evaluation_steps(&unit.source, &unit.tree.root);
     }
     Ok(semantic)
+}
+
+fn validate_error_clauses(package: &SemanticPackage) -> Result<(), SemanticFailure> {
+    fn visit(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        in_catch: bool,
+    ) -> Result<(), SemanticFailure> {
+        if node.kind == SyntaxKind::ThrowStatement && node.children.is_empty() && !in_catch {
+            return Err(failure(
+                &unit.source,
+                "T0020",
+                "bare `throw` is only valid inside a catch clause",
+                node.span,
+            ));
+        }
+        if node.kind == SyntaxKind::TryStatement {
+            let mut caught = BTreeSet::new();
+            let mut catches_all = false;
+            for clause in node
+                .children
+                .iter()
+                .filter(|child| child.kind == SyntaxKind::CatchClause)
+            {
+                if let Some(alias) = clause
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::CatchBinding)
+                {
+                    return Err(failure(
+                        &unit.source,
+                        "T0027",
+                        "catch aliases are unavailable until error values expose source-level members",
+                        alias.span,
+                    ));
+                }
+                let Some(descriptor) = clause
+                    .children
+                    .first()
+                    .filter(|child| child.kind == SyntaxKind::Name)
+                else {
+                    if catches_all {
+                        return Err(failure(
+                            &unit.source,
+                            "T0022",
+                            "catch-all clause is unreachable",
+                            clause.span,
+                        ));
+                    }
+                    catches_all = true;
+                    continue;
+                };
+                let name = node_text(&unit.source, descriptor);
+                let symbol = package.resolve_name_at(unit, descriptor.span.start, name);
+                let valid = symbol.is_some_and(|symbol| {
+                    symbol.kind == SymbolKind::ErrorObject
+                        || (symbol.kind == SymbolKind::Interface
+                            && symbol.identity == "/core/errors::error")
+                });
+                if !valid {
+                    return Err(failure(
+                        &unit.source,
+                        "T0021",
+                        format!("`{name}` is not an error descriptor"),
+                        descriptor.span,
+                    ));
+                }
+                let identity = &symbol.expect("validated error symbol").identity;
+                if catches_all || !caught.insert(identity.clone()) {
+                    return Err(failure(
+                        &unit.source,
+                        "T0022",
+                        format!("catch clause for `{name}` is unreachable"),
+                        clause.span,
+                    ));
+                }
+                catches_all = identity == "/core/errors::error";
+            }
+        }
+        for child in &node.children {
+            let child_in_catch = in_catch || node.kind == SyntaxKind::CatchClause;
+            visit(package, unit, child, child_in_catch)?;
+        }
+        Ok(())
+    }
+
+    for unit in &package.units {
+        visit(package, unit, &unit.tree.root, false)?;
+    }
+    Ok(())
 }
 
 fn populate_namespace_function_contracts(package: &mut SemanticPackage) {
@@ -417,6 +535,36 @@ fn populate_namespace_function_contracts(package: &mut SemanticPackage) {
             .zip(&functions)
             .filter(|(candidate, _)| *candidate == namespace)
             .flat_map(|(_, functions)| functions.iter().cloned())
+            .collect();
+    }
+}
+
+fn populate_function_aliases(package: &mut SemanticPackage) {
+    let contracts = package
+        .units
+        .iter()
+        .flat_map(|unit| unit.functions.iter())
+        .map(|contract| {
+            (
+                (contract.span.file, contract.span.start, contract.span.end),
+                contract.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for unit in &mut package.units {
+        unit.function_aliases = package
+            .namespaces
+            .get(&unit.namespace)
+            .into_iter()
+            .flat_map(|namespace| &namespace.symbols)
+            .filter_map(|(visible_name, symbol)| {
+                let span = symbol.declaration_span?;
+                (symbol.kind == SymbolKind::Function)
+                    .then(|| contracts.get(&(span.file, span.start, span.end)))
+                    .flatten()
+                    .cloned()
+                    .map(|contract| (visible_name.clone(), contract))
+            })
             .collect();
     }
 }
@@ -968,6 +1116,16 @@ fn validate_references(package: &SemanticPackage) -> Result<(), SemanticFailure>
                         continue;
                     }
                     visit(package, unit, child)?;
+                }
+            }
+            SyntaxKind::CatchClause => {
+                if let Some(descriptor) = node.children.first() {
+                    visit(package, unit, descriptor)?;
+                }
+                if let Some(block) = node.children.last()
+                    && block.kind == SyntaxKind::Block
+                {
+                    visit(package, unit, block)?;
                 }
             }
             SyntaxKind::Argument => {
@@ -1767,6 +1925,7 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         package.units[index].functions = functions;
     }
     populate_namespace_function_contracts(package);
+    populate_function_aliases(package);
     validate_descriptor_value_uses(package)?;
 
     for index in 0..package.units.len() {
@@ -1794,12 +1953,13 @@ fn validate_descriptor_value_node(
     if node.kind == SyntaxKind::TypeMembershipExpression
         && let Some(descriptor) = node.children.get(1)
         && descriptor_expression_type(package, unit, descriptor).is_none()
+        && descriptor_expression_category(package, unit, descriptor).is_none()
     {
         return Err(failure(
             &unit.source,
             "T0001",
             format!(
-                "`{}` does not resolve to a scalar type descriptor",
+                "`{}` does not resolve to a type descriptor",
                 node_text(&unit.source, descriptor).trim()
             ),
             descriptor.span,
@@ -1807,7 +1967,8 @@ fn validate_descriptor_value_node(
     }
     if !descriptor_context
         && node.kind == SyntaxKind::Name
-        && descriptor_expression_type(package, unit, node).is_some()
+        && (descriptor_expression_type(package, unit, node).is_some()
+            || descriptor_expression_category(package, unit, node).is_some())
     {
         return Err(failure(
             &unit.source,
@@ -1857,6 +2018,25 @@ pub(crate) fn descriptor_expression_type(
                 node.children
                     .first()
                     .and_then(|child| descriptor_expression_type(package, unit, child))
+            }),
+        _ => None,
+    }
+}
+
+pub(crate) fn descriptor_expression_category(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<TypeCategory> {
+    let name = node_text(&unit.source, node).trim();
+    match node.kind {
+        SyntaxKind::Name | SyntaxKind::TypeExpression => package
+            .resolve_name_at(unit, node.span.start, name)
+            .and_then(Symbol::descriptor_category)
+            .or_else(|| {
+                node.children
+                    .first()
+                    .and_then(|child| descriptor_expression_category(package, unit, child))
             }),
         _ => None,
     }
@@ -2047,12 +2227,173 @@ fn analyze_function_contract(
             });
         }
     }
+    let throws = node.children.iter().any(|child| {
+        child.kind == SyntaxKind::DeclarationQualifier && node_text(&unit.source, child) == "throws"
+    });
     Ok(FunctionContract {
         name: node_text(&unit.source, name_node).to_owned(),
         span: node.span,
         parameters,
         return_type,
+        throws,
     })
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixed-point call graph and its local traversals form one auditable effect analysis"
+)]
+fn infer_throwing_effects(package: &mut SemanticPackage) {
+    type FunctionKey = (u32, usize, usize);
+
+    fn key(span: Span) -> FunctionKey {
+        (span.file, span.start, span.end)
+    }
+
+    fn direct_errors(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+    ) -> BTreeSet<String> {
+        if node.kind == SyntaxKind::FunctionDeclaration {
+            return BTreeSet::new();
+        }
+        if node.kind == SyntaxKind::ThrowStatement {
+            return node
+                .children
+                .first()
+                .and_then(|error| {
+                    package.resolve_name_at(unit, error.span.start, node_text(&unit.source, error))
+                })
+                .map(|symbol| symbol.identity.clone())
+                .into_iter()
+                .collect();
+        }
+        if node.kind == SyntaxKind::TryStatement {
+            let mut errors = node
+                .children
+                .first()
+                .map_or_else(BTreeSet::new, |block| direct_errors(package, unit, block));
+            let mut clauses_finished = false;
+            for child in node.children.iter().skip(1) {
+                if child.kind == SyntaxKind::CatchClause {
+                    let descriptor = child
+                        .children
+                        .first()
+                        .filter(|candidate| candidate.kind == SyntaxKind::Name);
+                    if let Some(descriptor) = descriptor
+                        && let Some(symbol) = package.resolve_name_at(
+                            unit,
+                            descriptor.span.start,
+                            node_text(&unit.source, descriptor),
+                        )
+                    {
+                        if symbol.identity == "/core/errors::error" {
+                            errors.clear();
+                        } else {
+                            errors.remove(&symbol.identity);
+                        }
+                    } else {
+                        errors.clear();
+                    }
+                    if let Some(block) = child.children.last() {
+                        errors.extend(direct_errors(package, unit, block));
+                    }
+                    clauses_finished = true;
+                } else if child.kind == SyntaxKind::FinallyClause {
+                    if let Some(block) = child.children.last() {
+                        errors.extend(direct_errors(package, unit, block));
+                    }
+                } else if !clauses_finished {
+                    errors.extend(direct_errors(package, unit, child));
+                }
+            }
+            return errors;
+        }
+        node.children
+            .iter()
+            .flat_map(|child| direct_errors(package, unit, child))
+            .collect()
+    }
+
+    fn callees(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        node: &SyntaxNode,
+        output: &mut BTreeSet<FunctionKey>,
+    ) {
+        if node.kind == SyntaxKind::FunctionDeclaration {
+            return;
+        }
+        if node.kind == SyntaxKind::CallExpression
+            && let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::Name
+            && let Some(symbol) =
+                package.resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))
+            && symbol.kind == SymbolKind::Function
+            && let Some(span) = symbol.declaration_span
+        {
+            output.insert(key(span));
+        }
+        for child in &node.children {
+            callees(package, unit, child, output);
+        }
+    }
+
+    let mut effects = BTreeMap::<FunctionKey, bool>::new();
+    let mut edges = BTreeMap::<FunctionKey, BTreeSet<FunctionKey>>::new();
+    for unit in &package.units {
+        for function in unit
+            .tree
+            .root
+            .children
+            .iter()
+            .filter(|node| node.kind == SyntaxKind::FunctionDeclaration)
+        {
+            let function_key = key(function.span);
+            let declared = unit
+                .functions
+                .iter()
+                .find(|contract| contract.span == function.span)
+                .is_some_and(|contract| contract.throws);
+            effects.insert(
+                function_key,
+                declared
+                    || function
+                        .children
+                        .iter()
+                        .any(|child| !direct_errors(package, unit, child).is_empty()),
+            );
+            let mut function_callees = BTreeSet::new();
+            for child in &function.children {
+                callees(package, unit, child, &mut function_callees);
+            }
+            edges.insert(function_key, function_callees);
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for (function, callees) in &edges {
+            let inferred = effects[function]
+                || callees
+                    .iter()
+                    .any(|callee| effects.get(callee).copied().unwrap_or(false));
+            if inferred && !effects[function] {
+                effects.insert(*function, true);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for unit in &mut package.units {
+        for contract in &mut unit.functions {
+            contract.throws = effects.get(&key(contract.span)).copied().unwrap_or(false);
+        }
+    }
 }
 
 fn resolve_scalar_type(
@@ -2355,11 +2696,11 @@ fn infer_value_type(
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
             .map(|binding| binding.value_type));
     }
-    if coercion_family_receiver(unit, node) {
+    if member_family_receiver(unit, node) {
         return Err(failure(
             &unit.source,
             "T0018",
-            "`.coerce` and its policy members are not storable values before bound methods exist",
+            "member-family selections must be invoked in the same expression",
             node.span,
         ));
     }
@@ -2367,6 +2708,9 @@ fn infer_value_type(
         return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
+        if let Some(value_type) = infer_parse_or_radix_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
         if let Some(value_type) = infer_integer_coercion_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
@@ -2480,6 +2824,7 @@ fn infer_unary_type(
             "unary operator requires a scalar operand",
         ));
     };
+
     let operator = unit.source.text()[node.span.start..operand_node.span.start].trim();
     let valid = match operator {
         "-" => operand.is_integer() || matches!(operand, ScalarType::Float32 | ScalarType::Float64),
@@ -2498,6 +2843,117 @@ fn infer_unary_type(
         ScalarType::Bool
     } else {
         operand
+    }))
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "family receiver, callback, argument, and result contracts remain auditable together"
+)]
+fn infer_parse_or_radix_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let Some(callee) = node.children.first() else {
+        return Ok(None);
+    };
+    let Some(method) = bound_method(&unit.source, callee) else {
+        return Ok(None);
+    };
+    if method.family == MemberFamily::Coerce {
+        return Ok(None);
+    }
+    let arguments = node.children.get(1);
+    let arguments = arguments.map_or(&[][..], |arguments| arguments.children.as_slice());
+    if arguments.len() != 1 {
+        return Err(failure(
+            &unit.source,
+            "T0023",
+            format!(
+                "`.{}` requires exactly one argument",
+                match method.family {
+                    MemberFamily::Parse => "parse",
+                    MemberFamily::Radix => "radix",
+                    MemberFamily::Coerce => unreachable!(),
+                }
+            ),
+            node.span,
+        ));
+    }
+    let receiver = find_node_by_span(&unit.tree.root, method.receiver)
+        .expect("bound method receiver belongs to this syntax tree");
+    let argument = arguments[0].children.last().unwrap_or(&arguments[0]);
+    if method.family == MemberFamily::Radix {
+        let argument_type = infer_value_type(unit, argument, bindings)?;
+        if !matches!(argument_type, Some(ValueType::Scalar(scalar)) if scalar.is_integer()) {
+            return Err(failure(
+                &unit.source,
+                "T0024",
+                "`.radix` requires an integer radix argument",
+                argument.span,
+            ));
+        }
+        let receiver_type = infer_value_type(unit, receiver, bindings)?;
+        return match receiver_type {
+            Some(ValueType::Scalar(ScalarType::String)) => {
+                Ok(Some(ValueType::Scalar(ScalarType::Int)))
+            }
+            Some(ValueType::Scalar(scalar)) if scalar.is_integer() => {
+                Ok(Some(ValueType::Scalar(ScalarType::String)))
+            }
+            _ => Err(failure(
+                &unit.source,
+                "T0024",
+                "`.radix` requires a string or numeric receiver",
+                receiver.span,
+            )),
+        };
+    }
+    let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if receiver_type != Some(ValueType::Scalar(ScalarType::String)) {
+        return Err(failure(
+            &unit.source,
+            "T0024",
+            "`.parse` requires a string receiver",
+            receiver.span,
+        ));
+    }
+    let callback = arguments[0].children.last().unwrap_or(&arguments[0]);
+    if callback.kind != SyntaxKind::Name {
+        return Err(failure(
+            &unit.source,
+            "T0025",
+            "`.parse` requires a statically resolvable function name",
+            callback.span,
+        ));
+    }
+    let callback_name = node_text(&unit.source, callback);
+    let Some(contract) = unit.function_aliases.get(callback_name) else {
+        return Err(failure(
+            &unit.source,
+            "T0025",
+            format!("`{callback_name}` does not resolve to a parse callback"),
+            callback.span,
+        ));
+    };
+    if contract.parameters.len() != 1
+        || contract.parameters[0].value_type != Some(ScalarType::String)
+        || contract.return_type.is_none()
+    {
+        return Err(failure(
+            &unit.source,
+            "T0026",
+            format!(
+                "parse callback `{callback_name}` must take one `string` value and declare a return"
+            ),
+            callback.span,
+        ));
+    }
+    let result = contract.return_type.expect("checked above");
+    Ok(Some(if method.child == "checked" {
+        ValueType::ScalarOrNone(result)
+    } else {
+        ValueType::Scalar(result)
     }))
 }
 
@@ -2623,6 +3079,47 @@ fn integer_coercion_result_type(
     }
 }
 
+pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<BoundMethod> {
+    if callee.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
+    let member_name = node_text(source, member);
+    let direct = match member_name {
+        "coerce" => Some((MemberFamily::Coerce, "default")),
+        "parse" => Some((MemberFamily::Parse, "default")),
+        "radix" => Some((MemberFamily::Radix, "default")),
+        _ => None,
+    };
+    if let Some((family, child)) = direct {
+        return Some(BoundMethod {
+            receiver: receiver.span,
+            family,
+            child,
+        });
+    }
+    if receiver.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
+    let [source_node, family_node] = receiver.children.as_slice() else {
+        return None;
+    };
+    let selection = match (node_text(source, family_node), member_name) {
+        ("coerce", "checked") => (MemberFamily::Coerce, "checked"),
+        ("coerce", "wrap") => (MemberFamily::Coerce, "wrap"),
+        ("coerce", "saturate") => (MemberFamily::Coerce, "saturate"),
+        ("parse", "checked") => (MemberFamily::Parse, "checked"),
+        _ => return None,
+    };
+    Some(BoundMethod {
+        receiver: source_node.span,
+        family: selection.0,
+        child: selection.1,
+    })
+}
+
 /// Resolves the canonical `.coerce` callable family and its selected policy child.
 ///
 /// The returned policy is shared semantic metadata for analysis and lowering; the
@@ -2631,22 +3128,21 @@ pub(crate) fn integer_coercion_call<'a>(
     source: &SourceFile,
     callee: &'a SyntaxNode,
 ) -> Option<(&'a SyntaxNode, CoercionPolicy)> {
-    if callee.kind != SyntaxKind::MemberExpression {
+    let method = bound_method(source, callee)?;
+    if method.family != MemberFamily::Coerce {
         return None;
     }
-    let [receiver, member] = callee.children.as_slice() else {
-        return None;
+    let policy = match method.child {
+        "default" => CoercionPolicy::Default,
+        child => CoercionPolicy::from_member(child)?,
     };
-    let member = node_text(source, member);
-    if member == "coerce" {
-        return Some((receiver, CoercionPolicy::Default));
-    }
-    let [source_node, family] = receiver.children.as_slice() else {
-        return None;
+    let receiver = callee.children.first()?;
+    let source_node = if method.child == "default" {
+        receiver
+    } else {
+        receiver.children.first()?
     };
-    (receiver.kind == SyntaxKind::MemberExpression && node_text(source, family) == "coerce")
-        .then(|| CoercionPolicy::from_member(member).map(|policy| (source_node, policy)))
-        .flatten()
+    Some((source_node, policy))
 }
 
 fn invalid_coercion_policy(unit: &SemanticUnit, callee: &SyntaxNode) -> Option<String> {
@@ -2665,6 +3161,17 @@ fn coercion_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
     };
     node.kind == SyntaxKind::MemberExpression
         && (node_text(&unit.source, member) == "coerce" || coercion_family_receiver(unit, receiver))
+}
+
+fn member_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+    let [receiver, member] = node.children.as_slice() else {
+        return false;
+    };
+    node.kind == SyntaxKind::MemberExpression
+        && (matches!(
+            node_text(&unit.source, member),
+            "coerce" | "parse" | "radix"
+        ) || member_family_receiver(unit, receiver))
 }
 
 fn obsolete_integer_coercion_member<'a>(
@@ -3286,6 +3793,10 @@ fn populate_scope(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "lexical scope construction handles each syntax-owned scope in one traversal"
+)]
 fn populate_node(
     unit: &SemanticUnit,
     namespaces: &BTreeMap<String, Namespace>,
@@ -3348,6 +3859,27 @@ fn populate_node(
                 )?;
             }
         }
+        SyntaxKind::CatchClause => {
+            let catch_index = scopes.len();
+            scopes.push(LexicalScope {
+                span: node.span,
+                parent: Some(index),
+                symbols: BTreeMap::new(),
+            });
+            if let Some(block) = node.children.last()
+                && block.kind == SyntaxKind::Block
+            {
+                add_lexical_scope(
+                    unit,
+                    namespaces,
+                    globals,
+                    scopes,
+                    block,
+                    Some(catch_index),
+                    false,
+                )?;
+            }
+        }
         SyntaxKind::ElseClause => {
             for child in &node.children {
                 if child.kind == SyntaxKind::Block {
@@ -3375,7 +3907,10 @@ fn populate_node(
                         Some(index),
                         false,
                     )?;
-                } else if child.kind == SyntaxKind::ElseClause {
+                } else if matches!(
+                    child.kind,
+                    SyntaxKind::ElseClause | SyntaxKind::CatchClause | SyntaxKind::FinallyClause
+                ) {
                     populate_node(unit, namespaces, globals, scopes, index, child)?;
                 }
             }
@@ -3725,6 +4260,7 @@ fn validate_flow_statement(
             validate_return(unit, statement, contract, bindings)?;
             Ok(false)
         }
+        SyntaxKind::ThrowStatement => Ok(false),
         SyntaxKind::BreakStatement | SyntaxKind::ContinueStatement => {
             if loop_depth == 0 {
                 let keyword = node_text(&unit.source, statement);
@@ -3739,6 +4275,44 @@ fn validate_flow_statement(
         }
         SyntaxKind::IfStatement => {
             validate_if_flow(unit, statement, contract, bindings, loop_depth, unreachable)
+        }
+        SyntaxKind::TryStatement => {
+            let try_falls_through = if let Some(block) = statement.children.first() {
+                validate_flow_block(unit, block, contract, bindings, loop_depth, unreachable)?
+            } else {
+                true
+            };
+            let mut catch_falls_through = false;
+            for clause in statement
+                .children
+                .iter()
+                .filter(|child| child.kind == SyntaxKind::CatchClause)
+            {
+                if let Some(block) = clause
+                    .children
+                    .iter()
+                    .find(|child| child.kind == SyntaxKind::Block)
+                {
+                    catch_falls_through |= validate_flow_block(
+                        unit,
+                        block,
+                        contract,
+                        bindings,
+                        loop_depth,
+                        unreachable,
+                    )?;
+                }
+            }
+            if let Some(finally) = statement
+                .children
+                .iter()
+                .find(|child| child.kind == SyntaxKind::FinallyClause)
+                .and_then(|clause| clause.children.first())
+                && !validate_flow_block(unit, finally, contract, bindings, loop_depth, unreachable)?
+            {
+                return Ok(false);
+            }
+            Ok(try_falls_through || catch_falls_through)
         }
         SyntaxKind::WhileStatement => {
             if let Some(condition) = statement.children.first() {
@@ -4140,6 +4714,11 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "float32".to_owned(),
         "float64".to_owned(),
     ];
+    types.extend(
+        TypeCategory::ABSTRACT_SOURCE_NAMES
+            .into_iter()
+            .map(|(name, _)| name.to_owned()),
+    );
     for prefix in ["int", "uint"] {
         for width in [8, 16, 32, 64, 128] {
             types.push(format!("{prefix}{width}"));
