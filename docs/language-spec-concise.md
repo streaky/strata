@@ -364,6 +364,7 @@ backing_object: real - type returns it, 'is a' compares it, identity survives re
 - Type descriptors are semantic objects with stable canonical identity, not ordinary values. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
 
 Union destinations choose an exact type match first, otherwise the unique arm admitted by contextual constant typing or numeric destination conversion. Multiple admitted arms are a compile-time ambiguity; arm order never decides.
+- `T|none` is a declared type anywhere a source type is accepted: bindings, parameters, and returns. A direct guard `value != none`, `none != value`, or `not (value is a none)` narrows that named binding to `T` in the guarded block; `and`/`or` combinations do not, and assignment invalidates the fact.
 
 ## INTEGER
 
@@ -585,6 +586,7 @@ contains: 'text.contains;' anywhere (default) | contains.start | contains.end; a
 contains_v1: exactly start and end; any/all await variadics or collections; 'at' awaits an index-unit decision
 find: separate family; default -> text-range|none, find.all -> list of text-range, find.count -> int
 empty_search: contains empty -> true; find empty -> first zero-width grapheme boundary; find.all empty -> every grapheme boundary including both ends; count = graphemes + 1
+literal_search_boundary: non-empty find/contains operate on scalar sequences, not only grapheme boundaries; a match may end inside a grapheme
 trim_modes: default Unicode whitespace; literal argument removes exactly one matching selected prefix/suffix
 case_mapping: upper/lower default, .first, and upper.words are locale-independent Unicode operations; case-fold is explicit and locale-independent
 normalise: explicit nfc/nfd/nfkc/nfkd children

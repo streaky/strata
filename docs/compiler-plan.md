@@ -1007,9 +1007,11 @@ iterate as `uint8`, and deliberately lack scalar display. Explicit UTF-8 byte, s
 grapheme views produce distinct counts for one multi-scalar grapheme. Compiler-owned
 UTF-8, UTF-16 little-/big-endian, and UTF-32 little-/big-endian encoding objects all
 round-trip through generated crates, while invalid input exits through the typed
-`decode-error` value with its observed byte offset. The support profile pins Unicode
-16.0.0. Byte indexing and slicing remain sequenced with the range/index contract rather
-than acquiring an implementation-defined bounds policy here.
+`decode-error` value with its observed byte offset. Unicode behavior currently comes from
+the three support-crate dependencies selected by Cargo; no compiler toolchain profile pins
+one Unicode data version across them yet, so that milestone-11 deliverable remains open.
+Byte indexing and slicing remain sequenced with the range/index contract rather than
+acquiring an implementation-defined bounds policy here.
 
 
 ### Milestone 12 — String transformation and search families

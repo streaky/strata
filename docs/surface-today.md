@@ -44,16 +44,25 @@ Terrane package
 │   │   │   │   └── float64                   canonical descriptor
 │   │   │   ├── string                         type descriptor
 │   │   │   ├── none                           type descriptor
-│   │   │   └── bytes                          implemented type descriptor
-│   │   └── /core/errors
-│   │       ├── error                          catch-all structural interface
-│   │       ├── arithmetic-overflow            catchable error object
-│   │       ├── division-by-zero               catchable error object
-│   │       ├── integer-conversion-overflow    catchable error object
-│   │       ├── negative-shift-count           catchable error object
-│   │       ├── resource-error                 catchable error object
-│   │       └── coercion-error                 catchable error object
-│   └── /core/collections                      empty namespace; name only
+│   │   │   ├── bytes                          implemented type descriptor
+│   │   │   ├── overflow-result                compiler-supplied result type
+│   │   │   └── div-rem-result                 compiler-supplied result type
+│   │   ├── /core/errors
+│   │   │   ├── error                          catch-all structural interface
+│   │   │   ├── arithmetic-overflow            catchable error object
+│   │   │   ├── division-by-zero               catchable error object
+│   │   │   ├── integer-conversion-overflow    catchable error object
+│   │   │   ├── negative-shift-count           catchable error object
+│   │   │   ├── resource-error                 catchable error object
+│   │   │   ├── coercion-error                 catchable error object
+│   │   │   └── decode-error                   catchable error object
+│   │   ├── /core/encodings
+│   │   │   ├── utf8                           encoding object
+│   │   │   ├── utf16-le                       encoding object
+│   │   │   ├── utf16-be                       encoding object
+│   │   │   ├── utf32-le                       encoding object
+│   │   │   └── utf32-be                       encoding object
+│   │   └── /core/collections                  empty namespace; name only
 ├── default prelude
 │   ├── print                                  binding to /core/output::print
 │   ├── bool                                   type name for /core/types::bool
@@ -61,7 +70,12 @@ Terrane package
 │   ├── float                                  type spelling for /core/types::float64
 │   ├── string                                 type name for /core/types::string
 │   ├── bytes                                  type name for /core/types::bytes
-│   └── none                                   type name for /core/types::none
+│   ├── none                                   type name for /core/types::none
+│   ├── utf8                                   encoding name for /core/encodings::utf8
+│   ├── utf16-le                               encoding name for /core/encodings::utf16-le
+│   ├── utf16-be                               encoding name for /core/encodings::utf16-be
+│   ├── utf32-le                               encoding name for /core/encodings::utf32-le
+│   └── utf32-be                               encoding name for /core/encodings::utf32-be
 └── source-declared package surface
     ├── namespace                              hierarchical object container
     │   ├── variable                           namespace-local value
@@ -276,7 +290,7 @@ string value
     └── value is a string -> bool
 ```
 
-`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. String transformation, search, normalization, and case folding lower through the pinned support runtime. Empty-pattern search, split, and replacement use logical extended-grapheme boundaries: `find.all` includes both ends, `split` returns the graphemes without synthetic empty strings, and `replace` inserts at every boundary. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
+`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. String transformation, search, normalization, and case folding lower through the pinned support runtime. Empty-pattern search, split, and replacement use logical extended-grapheme boundaries: `find.all` includes both ends, `split` returns the graphemes without synthetic empty strings, and `replace` inserts at every boundary. The compiler-owned `list of string` and `list of text-range` results currently expose `.length` only; they are not indexable or iterable until the range/index and general iterator milestones. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
 
 ### `none`
 

@@ -1724,6 +1724,7 @@ function parse int|parse-error; source string
 
 The spelling `optional<thing>` is not part of the language: write `thing|none`. `none` is not automatically admitted into every type.
 Where a destination type is a union, an exact type match wins. Otherwise the compiler selects the unique arm that admits the value under the contextual-constant or numeric destination rules. If two or more arms admit it, the destination is ambiguous and compilation fails naming those arms; source order never breaks the tie. Thus an `int8` value selects `int8` from `int8|int`, while the constant `5` is ambiguous in `int8|int32`.
+A `T|none` destination is valid wherever a declared source type is valid, including binding declarations, parameter types, and function return types. It is not restricted to inferred results or compiler-owned checked operations.
 
 The word `of` applies a parameterised type constructor using the language's fixed constructor-application grammar:
 
@@ -2297,6 +2298,7 @@ else
 ```
 
 No trailing colon or parentheses are required.
+A direct presence guard narrows a named `T|none` binding to `T` within the guarded block. The recognized guard forms are `value != none`, `none != value`, and `not (value is a none)`, with parentheses permitted around the complete test or its operands. Narrowing is structural rather than inferred from arbitrary Boolean equivalence: combining a presence test with another condition using `and` or `or` does not establish narrowing. The fact is scoped to the guarded block and its nested scopes; assigning that name within the block invalidates the fact from that assignment onward.
 
 ### 14.2 `while`
 
@@ -2685,6 +2687,7 @@ String indexing should either return graphemes or be rejected in favour of expli
 String search uses literal Unicode text, not regular expressions. `contains` returns `bool`; its default child searches anywhere, while `contains.start` and `contains.end` test the logical start and end of the stored sequence. Those names are independent of writing direction: right-to-left text still starts at logical index zero. An empty pattern is contained everywhere, including at both ends.
 
 `find` is a separate family because it returns `text-range | none` rather than a boolean. Its default child returns the first non-overlapping match, `find.all` returns a `list of text-range`, and `find.count` returns that list's length. Each range retains its immutable source and exposes checked byte, scalar, and grapheme views. For an empty pattern, `find` returns the zero-width range at the first grapheme boundary; `find.all` returns every grapheme boundary, including both ends, so `find.count` is the grapheme count plus one.
+Non-empty literal search compares the stored Unicode scalar sequence and is not constrained to grapheme boundaries. For example, searching decomposed `e` plus U+0301 for `e` succeeds and returns a range ending inside that grapheme cluster; the range's checked grapheme view consequently counts the partial cluster as one. Callers that require whole-grapheme matching must compare grapheme views explicitly.
 
 `trim` removes Unicode whitespace from both ends by default; `trim.start` and `trim.end` select one logical end. When supplied a literal argument, the selected operation removes exactly one matching prefix or suffix and otherwise returns the receiver unchanged.
 
