@@ -6070,16 +6070,40 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
 enum BindingEvent {
     Read {
         loops: Vec<Span>,
+        branches: Vec<Span>,
     },
     Write {
         span: Span,
-        definite: bool,
         loops: Vec<Span>,
+        branches: Vec<Span>,
     },
 }
 
 fn span_key(span: Span) -> (u32, usize, usize) {
     (span.file, span.start, span.end)
+}
+
+fn binding_event_child_repeats(node: &SyntaxNode, index: usize) -> bool {
+    match node.kind {
+        SyntaxKind::WhileStatement => true,
+        SyntaxKind::ForStatement if node.children.len() == 3 => index == 2,
+        SyntaxKind::ForStatement if node.children.len() == 4 => index != 0,
+        _ => false,
+    }
+}
+
+fn binding_event_child_enters_branch(node: &SyntaxNode, child: &SyntaxNode) -> bool {
+    child.kind == SyntaxKind::Block
+        && matches!(
+            node.kind,
+            SyntaxKind::IfStatement
+                | SyntaxKind::ElseClause
+                | SyntaxKind::WhileStatement
+                | SyntaxKind::ForStatement
+                | SyntaxKind::TryStatement
+                | SyntaxKind::CatchClause
+                | SyntaxKind::FinallyClause
+        )
 }
 
 fn collect_binding_events(
@@ -6088,8 +6112,8 @@ fn collect_binding_events(
     node: &SyntaxNode,
     events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
     declaration_name: bool,
-    conditional: bool,
     loops: &mut Vec<Span>,
+    branches: &mut Vec<Span>,
 ) {
     if node.kind == SyntaxKind::Name {
         if !declaration_name
@@ -6102,6 +6126,7 @@ fn collect_binding_events(
                 .or_default()
                 .push(BindingEvent::Read {
                     loops: loops.clone(),
+                    branches: branches.clone(),
                 });
         }
         return;
@@ -6133,24 +6158,13 @@ fn collect_binding_events(
         let plain_assignment_target =
             assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
         if !plain_assignment_target {
-            let child_conditional = conditional
-                || matches!(
-                    node.kind,
-                    SyntaxKind::IfStatement
-                        | SyntaxKind::ElseClause
-                        | SyntaxKind::WhileStatement
-                        | SyntaxKind::ForStatement
-                        | SyntaxKind::TryStatement
-                        | SyntaxKind::CatchClause
-                );
-            let repeats = match node.kind {
-                SyntaxKind::WhileStatement => true,
-                SyntaxKind::ForStatement if node.children.len() == 3 => index == 2,
-                SyntaxKind::ForStatement if node.children.len() == 4 => index != 0,
-                _ => false,
-            };
+            let repeats = binding_event_child_repeats(node, index);
+            let enters_branch = binding_event_child_enters_branch(node, child);
             if repeats {
                 loops.push(node.span);
+            }
+            if enters_branch {
+                branches.push(child.span);
             }
             collect_binding_events(
                 package,
@@ -6158,9 +6172,12 @@ fn collect_binding_events(
                 child,
                 events,
                 declares_child,
-                child_conditional,
                 loops,
+                branches,
             );
+            if enters_branch {
+                branches.pop();
+            }
             if repeats {
                 loops.pop();
             }
@@ -6175,8 +6192,8 @@ fn collect_binding_events(
             .or_default()
             .push(BindingEvent::Write {
                 span: node.span,
-                definite: true,
                 loops: loops.clone(),
+                branches: branches.clone(),
             });
     } else if let Some(target) = assignment_target
         && let Some(declaration_span) = package
@@ -6188,8 +6205,8 @@ fn collect_binding_events(
             .or_default()
             .push(BindingEvent::Write {
                 span: node.span,
-                definite: !conditional,
                 loops: loops.clone(),
+                branches: branches.clone(),
             });
     }
 }
@@ -6203,11 +6220,15 @@ fn record_binding_events(package: &mut SemanticPackage) {
             &unit.tree.root,
             &mut events,
             false,
-            false,
+            &mut Vec::new(),
             &mut Vec::new(),
         );
     }
     package.binding_events = events;
+}
+
+fn paths_are_comparable(left: &[Span], right: &[Span]) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 
 pub(crate) fn binding_store_value_is_read(
@@ -6218,26 +6239,40 @@ pub(crate) fn binding_store_value_is_read(
     let Some(events) = package.binding_events.get(&span_key(declaration_span)) else {
         return false;
     };
-    let Some((store, store_loops)) = events.iter().enumerate().find_map(|(index, event)| {
-        let BindingEvent::Write { span, loops, .. } = event else {
-            return None;
-        };
-        (*span == store_span).then_some((index, loops))
-    }) else {
+    let Some((store, store_loops, store_branches)) =
+        events.iter().enumerate().find_map(|(index, event)| {
+            let BindingEvent::Write {
+                span,
+                loops,
+                branches,
+            } = event
+            else {
+                return None;
+            };
+            (*span == store_span).then_some((index, loops, branches))
+        })
+    else {
         return false;
     };
     for event in &events[store + 1..] {
         match event {
-            BindingEvent::Read { .. } => return true,
-            BindingEvent::Write { definite: true, .. } => return false,
-            BindingEvent::Write {
-                definite: false, ..
-            } => {}
+            BindingEvent::Read { branches, .. }
+                if paths_are_comparable(store_branches, branches) =>
+            {
+                return true;
+            }
+            BindingEvent::Write { branches, .. } if store_branches.starts_with(branches) => {
+                return false;
+            }
+            BindingEvent::Read { .. } | BindingEvent::Write { .. } => {}
         }
     }
     !store_loops.is_empty()
         && events.iter().any(|event| {
-            let BindingEvent::Read { loops: read_loops } = event else {
+            let BindingEvent::Read {
+                loops: read_loops, ..
+            } = event
+            else {
                 return false;
             };
             store_loops
