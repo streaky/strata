@@ -310,6 +310,19 @@ fn lex_line(
                     index += 1;
                 }
                 if terminated {
+                    if let Some((escape_start, escape_end)) =
+                        invalid_bytes_escape(&line[start + 2..index - 1])
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            "L0012",
+                            "invalid bytes escape; use `\\\\`, `\\'`, `\\n`, `\\r`, `\\t`, or `\\xHH`",
+                            Span::new(
+                                source.id(),
+                                base + start + 2 + escape_start,
+                                base + start + 2 + escape_end,
+                            ),
+                        ));
+                    }
                     push_token(
                         source,
                         tokens,
@@ -650,6 +663,32 @@ fn lex_line(
             }
         }
     }
+}
+
+fn invalid_bytes_escape(value: &str) -> Option<(usize, usize)> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        match bytes.get(index).copied() {
+            Some(b'\\' | b'\'' | b'n' | b'r' | b't') => index += 1,
+            Some(b'x')
+                if bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit)
+                    && bytes.get(index + 2).is_some_and(u8::is_ascii_hexdigit) =>
+            {
+                index += 3;
+            }
+            Some(b'x') => return Some((start, (index + 3).min(bytes.len()))),
+            Some(_) => return Some((start, index + 1)),
+            None => return Some((start, index)),
+        }
+    }
+    None
 }
 
 fn check_indent(

@@ -8,7 +8,8 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
         SemanticPackage, SemanticUnit, SymbolKind, TypedBinding, ValueType,
-        binding_span_is_mutated, bound_method, contextual_constant, promoted_integer_type,
+        binding_span_is_mutated, bound_method, contextual_constant, is_narrowed_text_range,
+        promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -90,8 +91,8 @@ struct Emitter<'a> {
     indent: usize,
     continue_label: Option<String>,
     loop_counter: usize,
-    return_type: Option<ScalarType>,
-    parameter_types: Vec<(String, ScalarType)>,
+    return_type: Option<ValueType>,
+    parameter_types: Vec<(String, ValueType)>,
     namespace_initializer: Option<(String, String)>,
     propagate_errors: bool,
     function_errors: bool,
@@ -103,14 +104,19 @@ struct Emitter<'a> {
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
-    fn contains(node: &SyntaxNode) -> bool {
+    fn contains(source: &SourceFile, node: &SyntaxNode) -> bool {
         matches!(
             node.kind,
             SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
-        ) || node.children.iter().any(contains)
+        ) || (node.kind == SyntaxKind::MemberExpression
+            && node.children.get(1).is_some_and(|member| {
+                &source.text()[member.span.start..member.span.end] == "decode"
+            }))
+            || node.children.iter().any(|child| contains(source, child))
     }
     package.units.iter().any(|unit| {
-        unit.functions.iter().any(|contract| contract.throws) || contains(&unit.tree.root)
+        unit.functions.iter().any(|contract| contract.throws)
+            || contains(&unit.source, &unit.tree.root)
     })
 }
 
@@ -119,7 +125,7 @@ fn emit_error_support(output: &mut String) {
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
          enum TerraneErrorKind {\n\
          ArithmeticOverflow,\nDivisionByZero,\nIntegerConversionOverflow,\nNegativeShiftCount,\n\
-         CoercionError,\nResourceError,\nSourceError,\n}\n\
+         CoercionError,\nDecodeError,\nResourceError,\nSourceError,\n}\n\
          impl TerraneErrorKind {\n\
          fn from_source_name(name: &str) -> Self {\nmatch name {\n\
          \".arithmetic-overflow\" => Self::ArithmeticOverflow,\n\
@@ -127,6 +133,7 @@ fn emit_error_support(output: &mut String) {
          \".integer-conversion-overflow\" => Self::IntegerConversionOverflow,\n\
          \".negative-shift-count\" => Self::NegativeShiftCount,\n\
          \".coercion-error\" => Self::CoercionError,\n\
+         \".decode-error\" => Self::DecodeError,\n\
          \".resource-error\" => Self::ResourceError,\n\
          _ => Self::SourceError,\n}\n}\n\
          fn source_name(self) -> &'static str {\nmatch self {\n\
@@ -135,6 +142,7 @@ fn emit_error_support(output: &mut String) {
          Self::IntegerConversionOverflow => \".integer-conversion-overflow\",\n\
          Self::NegativeShiftCount => \".negative-shift-count\",\n\
          Self::CoercionError => \".coercion-error\",\n\
+         Self::DecodeError => \".decode-error\",\n\
          Self::ResourceError => \".resource-error\",\n\
          Self::SourceError => \".error\",\n}\n}\n}\n\
          #[derive(Clone, Debug)]\nstruct TerraneError {\n\
@@ -161,6 +169,9 @@ fn emit_error_support(output: &mut String) {
          impl From<terrane_int_support::ArithmeticError> for TerraneError {\n\
          fn from(error: terrane_int_support::ArithmeticError) -> Self {\n\
          Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())\n}\n}\n\
+         impl From<terrane_string_support::DecodeError> for TerraneError {\n\
+         fn from(error: terrane_string_support::DecodeError) -> Self {\n\
+         Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(\".decode-error: \"))\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
          eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
          fn __terrane_generated_defect(message: &str) -> ! {\n\
@@ -478,19 +489,23 @@ impl Emitter<'_> {
             if index != 0 {
                 self.output.push_str(", ");
             }
-            let ty = parameter.value_type.map_or("i128", rust_type);
+            let ty = parameter
+                .value_type
+                .map_or_else(|| "i128".to_owned(), rust_value_type);
             let mutable = if parameter.mutable { "mut " } else { "" };
             write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
         }
         self.output.push(')');
         let function_errors = contract.throws && contract.name != "main";
         if function_errors {
-            let result = contract.return_type.map_or("()", rust_type);
+            let result = contract
+                .return_type
+                .map_or_else(|| "()".to_owned(), rust_value_type);
             write!(self.output, " -> Result<{result}, TerraneError>").unwrap();
         } else if let Some(return_type) = contract.return_type
-            && return_type != ScalarType::None
+            && return_type != ValueType::Scalar(ScalarType::None)
         {
-            write!(self.output, " -> {}", rust_type(return_type)).unwrap();
+            write!(self.output, " -> {}", rust_value_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
         let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
@@ -522,7 +537,9 @@ impl Emitter<'_> {
             self.block(block);
         }
         if function_errors
-            && contract.return_type.is_none_or(|ty| ty == ScalarType::None)
+            && contract
+                .return_type
+                .is_none_or(|ty| ty == ValueType::Scalar(ScalarType::None))
             && node
                 .children
                 .iter()
@@ -697,7 +714,7 @@ impl Emitter<'_> {
                     || "()".to_owned(),
                     |value| {
                         let value = if let Some(return_type) = self.return_type {
-                            self.expression_as(value, ValueType::Scalar(return_type))
+                            self.expression_as(value, return_type)
                         } else {
                             self.expression(value)
                         };
@@ -791,7 +808,9 @@ impl Emitter<'_> {
         };
         let index = self.try_counter;
         self.try_counter += 1;
-        let result = self.return_type.map_or("()", rust_type);
+        let result = self
+            .return_type
+            .map_or_else(|| "()".to_owned(), rust_value_type);
         let mutable = if node
             .children
             .iter()
@@ -1042,34 +1061,47 @@ impl Emitter<'_> {
             return;
         };
         let operator = &self.source.text()[value.span.end..node.span.end];
-        let operation = if operator.trim() == "++" { "+" } else { "-" };
+        let addition = operator.trim() == "++";
+        let value_type = self.value_type(value);
         if let Some(storage) = self.global_storage(value) {
-            let one = if self.is_adaptive_expression(value) {
-                "terrane_int_support::Int::from(1_i128)"
-            } else {
-                "1"
-            };
             self.line("{");
             self.indent += 1;
             self.line(&format!(
                 "let mut value = {storage}.lock().expect(\"program-global lock poisoned\");"
             ));
             let failure = self.uninitialized_global_failure(value);
-            self.line(&format!(
-                "*value = Some(value.clone().unwrap_or_else(|| {failure}) {operation} {one});"
-            ));
+            let current = format!("value.clone().unwrap_or_else(|| {failure})");
+            let updated = self.postfix_updated_value(&current, value_type, addition, node);
+            self.line(&format!("*value = Some({updated});"));
             self.indent -= 1;
             self.line("}");
             return;
         }
         let target = self.expression(value);
-        if self.is_adaptive_expression(value) {
-            self.line(&format!(
-                "{target} = {target}.clone() {operation} terrane_int_support::Int::from(1_i128);"
-            ));
-        } else {
-            self.line(&format!("{target} {operation}= 1;"));
+        let updated = self.postfix_updated_value(&target, value_type, addition, node);
+        self.line(&format!("{target} = {updated};"));
+    }
+
+    fn postfix_updated_value(
+        &self,
+        value: &str,
+        value_type: Option<ValueType>,
+        addition: bool,
+        node: &SyntaxNode,
+    ) -> String {
+        if value_type == Some(ValueType::Scalar(ScalarType::Int)) {
+            let operator = if addition { "+" } else { "-" };
+            return format!("{value}.clone() {operator} terrane_int_support::Int::from(1_i128)");
         }
+        if matches!(value_type, Some(ValueType::Scalar(ty)) if ty.is_integer()) {
+            let helper = if addition {
+                "fixed_addition"
+            } else {
+                "fixed_subtraction"
+            };
+            return self.fallible(format!("terrane_int_support::{helper}({value}, 1)"), node);
+        }
+        unreachable!("semantic analysis validated postfix integer target");
     }
 
     fn if_statement(&mut self, node: &SyntaxNode) {
@@ -1632,7 +1664,7 @@ impl Emitter<'_> {
                         self.parameter_types
                             .iter()
                             .find(|(parameter, _)| parameter == name)
-                            .map(|(_, value_type)| ValueType::Scalar(*value_type))
+                            .map(|(_, value_type)| *value_type)
                     })
             }
             SyntaxKind::TypeExpression
@@ -1892,7 +1924,7 @@ impl Emitter<'_> {
                 let value = argument.children.last().unwrap_or(argument);
                 let parameter = &contract.parameters[index];
                 ordered[index] = Some(if let Some(ty) = parameter.value_type {
-                    self.expression_as(value, ValueType::Scalar(ty))
+                    self.expression_as(value, ty)
                 } else {
                     self.expression(value)
                 });
@@ -2082,12 +2114,14 @@ impl Emitter<'_> {
             .map(|value| self.expression(value))
             .collect::<Vec<_>>();
         let result = match (family.as_str(), child.as_str()) {
-            ("trim", mode) => {
-                let helper = match mode {
-                    "default" => "trim",
-                    "start" => "trim_start",
-                    "end" => "trim_end",
-                    _ => unreachable!(),
+            ("trim", "default") => {
+                format!("terrane_string_support::trim(&({receiver}))")
+            }
+            ("trim", mode @ ("start" | "end")) => {
+                let helper = if mode == "start" {
+                    "trim_start"
+                } else {
+                    "trim_end"
                 };
                 let pattern = values
                     .first()
@@ -2150,12 +2184,13 @@ impl Emitter<'_> {
                     values[0]
                 )
             }
-            ("decode", _) => {
+            ("decode", _) => self.fallible(
                 format!(
-                    "terrane_string_support::decode_or_fail(&({receiver}), {})",
+                    "terrane_string_support::decode(&({receiver}), {})",
                     values[0]
-                )
-            }
+                ),
+                node,
+            ),
             _ => unreachable!("semantic analysis validated string family"),
         };
         let _ = node;
@@ -2266,7 +2301,11 @@ impl Emitter<'_> {
         let fallible = child == "default"
             || matches!(
                 family,
-                ArithmeticFamily::Divide | ArithmeticFamily::Remainder | ArithmeticFamily::DivRem
+                ArithmeticFamily::Divide
+                    | ArithmeticFamily::Remainder
+                    | ArithmeticFamily::DivRem
+                    | ArithmeticFamily::ShiftLeft
+                    | ArithmeticFamily::ShiftRight
             );
         if fallible {
             self.fallible(expression, call)
@@ -2387,16 +2426,14 @@ impl Emitter<'_> {
 
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
-        let encoding = match source_name {
-            "utf8" => Some("Utf8"),
-            "utf16-le" => Some("Utf16Le"),
-            "utf16-be" => Some("Utf16Be"),
-            "utf32-le" => Some("Utf32Le"),
-            "utf32-be" => Some("Utf32Be"),
-            _ => None,
-        };
-        if let Some(encoding) = encoding {
-            return format!("terrane_string_support::Encoding::{encoding}");
+        if source_name == "none" {
+            return "None".to_owned();
+        }
+        if is_narrowed_text_range(self.unit, node, &self.unit.typed_bindings) {
+            return format!(
+                "{}.as_ref().expect(\"semantic text-range narrowing\")",
+                rust_name(source_name)
+            );
         }
         if let Some((_, local)) = self
             .namespace_initializer
@@ -2404,6 +2441,22 @@ impl Emitter<'_> {
             .filter(|(name, _)| name == source_name)
         {
             return local.clone();
+        }
+        let resolved = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, source_name);
+        let encoding = resolved
+            .and_then(|symbol| symbol.identity.strip_prefix("/core/encodings::"))
+            .and_then(|name| match name {
+                "utf8" => Some("Utf8"),
+                "utf16-le" => Some("Utf16Le"),
+                "utf16-be" => Some("Utf16Be"),
+                "utf32-le" => Some("Utf32Le"),
+                "utf32-be" => Some("Utf32Be"),
+                _ => None,
+            });
+        if let Some(encoding) = encoding {
+            return format!("terrane_string_support::Encoding::{encoding}");
         }
         let Some(symbol) = self
             .package
@@ -2549,10 +2602,13 @@ impl Emitter<'_> {
             }) {
                 let destination = contract.parameters[index].value_type;
                 let value = destination
-                    .and_then(|destination| {
-                        contextual_constant(&owner.source, default, destination)
-                            .and_then(Result::ok)
-                            .map(|constant| lower_contextual_constant(constant, destination))
+                    .and_then(|destination| match destination {
+                        ValueType::Scalar(destination) => {
+                            contextual_constant(&owner.source, default, destination)
+                                .and_then(Result::ok)
+                                .map(|constant| lower_contextual_constant(constant, destination))
+                        }
+                        _ => None,
                     })
                     .unwrap_or_else(|| literal_or_text(&owner.source, default));
                 values[index] = Some(value);
@@ -2817,6 +2873,26 @@ fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
 
+fn rust_value_type(ty: ValueType) -> String {
+    match ty {
+        ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
+        ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
+        ValueType::OverflowResult(scalar) => {
+            format!("terrane_int_support::OverflowResult<{}>", rust_type(scalar))
+        }
+        ValueType::DivRemResult(scalar) => {
+            format!("terrane_int_support::DivRemResult<{}>", rust_type(scalar))
+        }
+        ValueType::StringView(crate::semantics::TextUnit::Bytes) => "Vec<u8>".to_owned(),
+        ValueType::StringView(_) | ValueType::TextRangeView(_) => "String".to_owned(),
+        ValueType::StringList => "Vec<String>".to_owned(),
+        ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
+        ValueType::TextRange => "terrane_string_support::TextRange".to_owned(),
+        ValueType::TextRangeOrNone => "Option<terrane_string_support::TextRange>".to_owned(),
+        ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
+    }
+}
+
 const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
@@ -2929,6 +3005,7 @@ fn rust_error_kind(kind: &str) -> &'static str {
         "integer-conversion-overflow" => "IntegerConversionOverflow",
         "negative-shift-count" => "NegativeShiftCount",
         "coercion-error" => "CoercionError",
+        "decode-error" => "DecodeError",
         "resource-error" => "ResourceError",
         _ => "SourceError",
     }
@@ -2941,6 +3018,7 @@ fn error_message(kind: &str) -> &'static str {
         "integer-conversion-overflow" => "integer conversion overflow",
         "negative-shift-count" => "negative integer shift count",
         "coercion-error" => "coercion has no compatible result",
+        "decode-error" => "invalid byte sequence for selected encoding",
         "resource-error" => "integer shift count cannot be represented on this target",
         _ => "source error",
     }

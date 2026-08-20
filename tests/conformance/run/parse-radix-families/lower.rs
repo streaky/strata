@@ -6,6 +6,7 @@ DivisionByZero,
 IntegerConversionOverflow,
 NegativeShiftCount,
 CoercionError,
+DecodeError,
 ResourceError,
 SourceError,
 }
@@ -17,6 +18,7 @@ match name {
 ".integer-conversion-overflow" => Self::IntegerConversionOverflow,
 ".negative-shift-count" => Self::NegativeShiftCount,
 ".coercion-error" => Self::CoercionError,
+".decode-error" => Self::DecodeError,
 ".resource-error" => Self::ResourceError,
 _ => Self::SourceError,
 }
@@ -28,6 +30,7 @@ Self::DivisionByZero => ".division-by-zero",
 Self::IntegerConversionOverflow => ".integer-conversion-overflow",
 Self::NegativeShiftCount => ".negative-shift-count",
 Self::CoercionError => ".coercion-error",
+Self::DecodeError => ".decode-error",
 Self::ResourceError => ".resource-error",
 Self::SourceError => ".error",
 }
@@ -70,6 +73,11 @@ formatter.write_str(&self.render())
 impl From<terrane_int_support::ArithmeticError> for TerraneError {
 fn from(error: terrane_int_support::ArithmeticError) -> Self {
 Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())
+}
+}
+impl From<terrane_string_support::DecodeError> for TerraneError {
+fn from(error: terrane_string_support::DecodeError) -> Self {
+Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(".decode-error: "))
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {

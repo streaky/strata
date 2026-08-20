@@ -3,7 +3,8 @@
 // Namespace: text-families
 fn main() {
     let text: String = String::from("  Straße  ");
-    println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::trim(&(text), None))));
+    println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::trim(&(text)))));
+    println!("{}{}", terrane_scalar_support::scalar_text(&(terrane_string_support::trim_start(&(text), None))), terrane_scalar_support::scalar_text(&(terrane_string_support::trim_end(&(text), None))));
     println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::case_fold(&(text)))));
     println!("{}{}", terrane_scalar_support::scalar_text(&(terrane_string_support::upper_first(&(String::from("straße"))))), terrane_scalar_support::scalar_text(&(terrane_string_support::upper_words(&(String::from("hello world"))))));
     println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::lower_first(&(String::from("Hello"))))));

@@ -16,10 +16,10 @@ fn main() {
     println!("{}{}", terrane_scalar_support::scalar_text(&(terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_division(small, 3)))), terrane_scalar_support::scalar_text(&(terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_remainder(small, 7)))));
     let negated: terrane_int_support::OverflowResult<i8> = terrane_int_support::fixed_negation_overflowing(small);
     println!("{}{}", terrane_scalar_support::scalar_text(&(negated.value)), terrane_scalar_support::scalar_text(&(negated.overflowed)));
-    println!("{}", terrane_scalar_support::scalar_text(&(terrane_int_support::fixed_shift_left_wrap(small, &(1)))));
-    terrane_int_support::fixed_shift_right_checked(small, &(2));
+    println!("{}", terrane_scalar_support::scalar_text(&(terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_shift_left_wrap(small, &(1))))));
+    terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_shift_right_checked(small, &(2)));
     let mut count: i8 = 1;
-    count += 1;
-    count -= 1;
+    count = terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_addition(count, 1));
+    count = terrane_int_support::unwrap_or_fail(terrane_int_support::fixed_subtraction(count, 1));
     println!("{}", terrane_scalar_support::scalar_text(&(count)));
 }

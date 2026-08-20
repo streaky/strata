@@ -2,6 +2,7 @@ namespace text-families
 function main
   text string = '  Straße  '
   print; (text.trim;)
+  print; (text.trim.start;), (text.trim.end;)
   print; (text.case-fold;)
   print; ('straße'.upper.first;), ('hello world'.upper.words;)
   print; ('Hello'.lower.first;)

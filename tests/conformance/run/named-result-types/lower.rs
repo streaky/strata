@@ -97,45 +97,24 @@ Break,
 Continue,
 }
 // Source: case.trn
-// Namespace: catch-arithmetic-overflow
+// Namespace: named-result-types
+fn pass() -> terrane_int_support::OverflowResult<i8> {
+    let small: i8 = 120;
+    let result: terrane_int_support::OverflowResult<i8> = terrane_int_support::fixed_addition_overflowing(small, 10);
+    return result;
+}
+fn divide() -> Result<terrane_int_support::DivRemResult<i8>, TerraneError> {
+    let small: i8 = 7;
+    return Ok((terrane_int_support::fixed_div_rem(small, 3)).map_err(|error| TerraneError::from(error).at("/named-result-types::divide (case.trn:9:10)"))?);
+}
 fn main() {
-    let mut __terrane_completion_0: TerraneCompletion<()> = (|| {
-        let __terrane_try_0: TerraneCompletion<()> = (|| {
-            let mut value: i8 = 127;
-            value = match terrane_int_support::fixed_addition(value, 1) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at("/catch-arithmetic-overflow::main (case.trn:7:13)")) };
-            println!("{}", terrane_scalar_support::scalar_text(&(value)));
-            TerraneCompletion::Normal
-        })();
-        match __terrane_try_0 {
-            TerraneCompletion::Return(value) => return TerraneCompletion::Return(value),
-            TerraneCompletion::Break => return TerraneCompletion::Break,
-            TerraneCompletion::Continue => return TerraneCompletion::Continue,
-            TerraneCompletion::Normal => {}
-            TerraneCompletion::Error(__terrane_error_0) => {
-                let mut __terrane_handled_0 = false;
-                if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::ArithmeticOverflow {
-                    __terrane_handled_0 = true;
-                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
-                }
-                if !__terrane_handled_0 {
-                    return TerraneCompletion::Error(__terrane_error_0);
-                }
-            }
-        }
-        TerraneCompletion::Normal
-    })();
-    let __terrane_finally_0: TerraneCompletion<()> = (|| {
-        println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
-        TerraneCompletion::Normal
-    })();
-    match __terrane_finally_0 {
-        TerraneCompletion::Normal => {}
-        replacement => __terrane_completion_0 = replacement,
-    }
-    match __terrane_completion_0 {
-        TerraneCompletion::Normal => {}
-        TerraneCompletion::Return(value) => return value,
-        TerraneCompletion::Error(error) => __terrane_uncaught(error),
-        TerraneCompletion::Break | TerraneCompletion::Continue => __terrane_generated_defect("loop control escaped a non-loop try"),
+    let result: terrane_int_support::OverflowResult<i8> = pass();
+    println!("{}{}", terrane_scalar_support::scalar_text(&(result.value)), terrane_scalar_support::scalar_text(&(result.overflowed)));
+    let pair: terrane_int_support::DivRemResult<i8> = (divide()).unwrap_or_else(|error| __terrane_uncaught(error.at("/named-result-types::main (case.trn:13:10)")));
+    println!("{}{}", terrane_scalar_support::scalar_text(&(pair.quotient)), terrane_scalar_support::scalar_text(&(pair.remainder)));
+    let text: String = String::from("banana");
+    let found: Option<terrane_string_support::TextRange> = terrane_string_support::find(&(text), &(String::from("ana")));
+    if found != None {
+        println!("{}", terrane_scalar_support::scalar_text(&((found.as_ref().expect("semantic text-range narrowing")).text().to_owned())));
     }
 }

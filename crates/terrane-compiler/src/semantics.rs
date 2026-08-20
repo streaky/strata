@@ -238,7 +238,7 @@ pub struct FunctionContract {
     pub name: String,
     pub span: Span,
     pub parameters: Vec<ParameterContract>,
-    pub return_type: Option<ScalarType>,
+    pub return_type: Option<ValueType>,
     pub throws: bool,
 }
 
@@ -246,7 +246,7 @@ pub struct FunctionContract {
 pub struct ParameterContract {
     pub name: String,
     pub span: Span,
-    pub value_type: Option<ScalarType>,
+    pub value_type: Option<ValueType>,
     pub optional: bool,
     pub mutable: bool,
 }
@@ -283,6 +283,7 @@ pub struct SemanticUnit {
     pub source: SourceFile,
     pub tree: SyntaxTree,
     pub namespace: String,
+    prelude: bool,
     pub scopes: Vec<LexicalScope>,
     pub typed_bindings: Vec<TypedBinding>,
     /// Function contracts declared by every source unit in this unit's namespace.
@@ -408,6 +409,7 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
             source: source.clone(),
             tree: parsed.tree,
             namespace,
+            prelude: package.prelude,
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
@@ -1625,6 +1627,10 @@ fn validate_string_member_expression(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "call validation remains one traversal so every call form shares lexical scope and contracts"
+)]
 fn validate_call_nodes<'a>(
     package: &SemanticPackage,
     unit: &'a SemanticUnit,
@@ -1653,6 +1659,49 @@ fn validate_call_nodes<'a>(
         for argument in &arguments.children {
             let value = argument.children.last().unwrap_or(argument);
             infer_value_type(unit, value, scoped_bindings)?;
+        }
+    }
+    if node.kind == SyntaxKind::CallExpression
+        && let [callee, arguments] = node.children.as_slice()
+        && callee.kind == SyntaxKind::Name
+        && package
+            .resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))
+            .is_some_and(|symbol| symbol.identity == "/core/output::print")
+    {
+        for argument in &arguments.children {
+            let value = argument.children.last().unwrap_or(argument);
+            let value_type = infer_value_type(unit, value, scoped_bindings)?;
+            if !matches!(
+                value_type,
+                Some(ValueType::Scalar(
+                    ScalarType::Bool
+                        | ScalarType::Int
+                        | ScalarType::Int8
+                        | ScalarType::Int16
+                        | ScalarType::Int32
+                        | ScalarType::Int64
+                        | ScalarType::Int128
+                        | ScalarType::Uint8
+                        | ScalarType::Uint16
+                        | ScalarType::Uint32
+                        | ScalarType::Uint64
+                        | ScalarType::Uint128
+                        | ScalarType::Float32
+                        | ScalarType::Float64
+                        | ScalarType::String
+                        | ScalarType::None
+                ))
+            ) {
+                return Err(failure(
+                    &unit.source,
+                    "T0035",
+                    format!(
+                        "`print` requires a text-displayable scalar value, found {}",
+                        value_type.map_or_else(|| "unknown".to_owned(), |ty| ty.to_string())
+                    ),
+                    value.span,
+                ));
+            }
         }
     }
     if node.kind == SyntaxKind::CallExpression
@@ -1823,7 +1872,6 @@ fn resolved_call_type(
     contracts
         .get(&(declaration.file, declaration.start, declaration.end))?
         .return_type
-        .map(ValueType::Scalar)
 }
 
 fn validate_call_arguments(
@@ -1889,7 +1937,7 @@ fn validate_call_arguments(
         let value = argument.children.last().unwrap_or(argument);
         let actual = infer_value_type(unit, value, bindings)?;
         if let (Some(expected), Some(actual)) = (parameter.value_type, actual) {
-            validate_numeric_destination(
+            validate_value_destination(
                 &unit.source,
                 &parameter.name,
                 expected,
@@ -1941,7 +1989,7 @@ fn call_site_bindings(
             parameter.value_type.map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
-                value_type: ValueType::Scalar(value_type),
+                value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
                 mutable: false,
@@ -2068,6 +2116,15 @@ fn validate_descriptor_value_node(
                     ..node.children[1].span.start - node.span.start]
                     .trim()
                     == "is")
+            || (node.kind == SyntaxKind::BinaryExpression
+                && node.children.len() == 2
+                && matches!(
+                    node_text(&unit.source, node)[node.children[0].span.end - node.span.start
+                        ..node.children[1].span.start - node.span.start]
+                        .trim(),
+                    "==" | "!="
+                )
+                && node_text(&unit.source, child).trim() == "none")
             || (node.kind == SyntaxKind::CallExpression
                 && index == 1
                 && node.children.first().is_some_and(|callee| {
@@ -2190,7 +2247,7 @@ fn collect_typed_bindings(
             parameter.value_type.map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
-                value_type: ValueType::Scalar(value_type),
+                value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
                 mutable: false,
@@ -2252,7 +2309,7 @@ fn analyze_function_contract(
         .children
         .iter()
         .find(|child| child.kind == SyntaxKind::TypeExpression)
-        .map(|type_node| resolve_scalar_type(&unit.source, type_node, aliases))
+        .map(|type_node| declared_value_type(unit, type_node, aliases))
         .transpose()?;
     let mut parameters = Vec::new();
     let mut optional_seen = false;
@@ -2274,9 +2331,9 @@ fn analyze_function_contract(
                 .iter()
                 .find(|child| child.kind == SyntaxKind::TypeExpression);
             let value_type = type_node
-                .map(|node| resolve_scalar_type(&unit.source, node, aliases))
+                .map(|type_node| declared_value_type(unit, type_node, aliases))
                 .transpose()?;
-            let default = parameter.children.iter().rev().find(|child| {
+            let default = parameter.children.iter().find(|child| {
                 child.span != parameter_name.span && child.kind != SyntaxKind::TypeExpression
             });
             let optional = default.is_some();
@@ -2291,11 +2348,20 @@ fn analyze_function_contract(
                 ));
             }
             if let (Some(expected), Some(default)) = (value_type, default) {
-                validate_numeric_destination(
+                let actual =
+                    infer_value_type(unit, default, &unit.typed_bindings)?.ok_or_else(|| {
+                        failure(
+                            &unit.source,
+                            "T0006",
+                            "parameter default has no value",
+                            default.span,
+                        )
+                    })?;
+                validate_value_destination(
                     &unit.source,
                     node_text(&unit.source, parameter_name),
                     expected,
-                    infer_value_type(unit, default, &[])?.unwrap_or(ValueType::Scalar(expected)),
+                    actual,
                     default,
                     "T0006",
                 )?;
@@ -2494,6 +2560,10 @@ fn resolve_scalar_type(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "binding analysis keeps destination selection and initialization validation together"
+)]
 fn analyze_binding_node(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2553,23 +2623,39 @@ fn analyze_binding_node(
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
-        let type_name = node_text(&unit.source, type_node).trim();
-        let ty = if let Some(ty) = unit.descriptor_alias_at(type_name, type_node.span.start) {
-            ty
-        } else if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
-            select_union_destination(unit, type_node, initializer, inferred)?
+        let value_type = if let (Some(inferred), Some(initializer), Ok(_)) = (
+            inferred,
+            initializer,
+            union_destination_candidates(unit, type_node),
+        ) {
+            ValueType::Scalar(select_union_destination(
+                unit,
+                type_node,
+                initializer,
+                inferred,
+            )?)
         } else {
-            return Err(failure(
-                &unit.source,
-                "T0001",
-                format!("`{type_name}` does not resolve to a scalar type descriptor"),
-                type_node.span,
-            ));
+            declared_value_type(
+                unit,
+                type_node,
+                &visible_descriptor_aliases(
+                    &unit.descriptor_aliases,
+                    unit.source.id(),
+                    type_node.span.start,
+                ),
+            )?
         };
         if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
-            validate_numeric_destination(&unit.source, &name, ty, inferred, initializer, "T0002")?;
+            validate_value_destination(
+                &unit.source,
+                &name,
+                value_type,
+                inferred,
+                initializer,
+                "T0002",
+            )?;
         }
-        ValueType::Scalar(ty)
+        value_type
     } else if let Some(inferred) = inferred {
         inferred
     } else {
@@ -2591,6 +2677,31 @@ fn analyze_binding_node(
         mutable: false,
     });
     Ok(())
+}
+
+fn declared_value_type(
+    unit: &SemanticUnit,
+    type_node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Result<ValueType, SemanticFailure> {
+    let type_name = node_text(&unit.source, type_node).trim();
+    for (constructor, construct) in [
+        (
+            "overflow-result of ",
+            ValueType::OverflowResult as fn(ScalarType) -> ValueType,
+        ),
+        (
+            "div-rem-result of ",
+            ValueType::DivRemResult as fn(ScalarType) -> ValueType,
+        ),
+    ] {
+        if let Some(argument) = type_name.strip_prefix(constructor)
+            && let Some(scalar) = aliases.get(argument).copied()
+        {
+            return Ok(construct(scalar));
+        }
+    }
+    resolve_scalar_type(&unit.source, type_node, aliases).map(ValueType::Scalar)
 }
 
 fn union_destination_candidates(
@@ -2728,6 +2839,28 @@ fn validate_numeric_destination(
     ))
 }
 
+fn validate_value_destination(
+    source: &SourceFile,
+    name: &str,
+    expected: ValueType,
+    actual: ValueType,
+    value: &SyntaxNode,
+    mismatch_code: &'static str,
+) -> Result<(), SemanticFailure> {
+    if let ValueType::Scalar(expected) = expected {
+        return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
+    }
+    if expected == actual {
+        return Ok(());
+    }
+    Err(failure(
+        source,
+        mismatch_code,
+        format!("`{name}` requires `{expected}`, found `{actual}`"),
+        value.span,
+    ))
+}
+
 fn destination_mismatch_message(
     code: &str,
     name: &str,
@@ -2747,6 +2880,58 @@ const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
 
+fn enclosed_by_guard(
+    source: &SourceFile,
+    current: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if current.kind == SyntaxKind::IfStatement
+        && let Some(condition) = current.children.first()
+        && let Some(block) = current.children.iter().find(|child| {
+            child.kind == SyntaxKind::Block
+                && child.span.start <= position
+                && position <= child.span.end
+        })
+    {
+        let condition = node_text(source, condition)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if condition == format!("{name} != none")
+            || condition == format!("none != {name}")
+            || condition == format!("not ({name} is none)")
+        {
+            return true;
+        }
+        return enclosed_by_guard(source, block, position, name);
+    }
+    current
+        .children
+        .iter()
+        .filter(|child| child.span.start <= position && position <= child.span.end)
+        .any(|child| enclosed_by_guard(source, child, position, name))
+}
+pub(crate) fn is_narrowed_text_range(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> bool {
+    let name = node_text(&unit.source, node);
+    if !bindings.iter().rev().any(|binding| {
+        binding.name == name
+            && binding.span.start <= node.span.start
+            && binding.value_type == ValueType::TextRangeOrNone
+    }) {
+        return false;
+    }
+
+    enclosed_by_guard(&unit.source, &unit.tree.root, node.span.start, name)
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "value inference centralizes the precedence among syntax forms and typed member families"
+)]
 fn infer_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2772,17 +2957,47 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
-        if matches!(
-            name,
-            "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
-        ) {
-            return Ok(Some(ValueType::Encoding));
-        }
-        return Ok(bindings
+        if let Some(binding) = bindings
             .iter()
             .rev()
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-            .map(|binding| binding.value_type));
+        {
+            return Ok(Some(
+                if binding.value_type == ValueType::TextRangeOrNone
+                    && is_narrowed_text_range(unit, node, bindings)
+                {
+                    ValueType::TextRange
+                } else {
+                    binding.value_type
+                },
+            ));
+        }
+        let resolved_encoding = lexical_scope_chain(unit, node.span.start)
+            .find_map(|scope| {
+                scope.symbols.get(name)?.iter().rev().find(|symbol| {
+                    symbol
+                        .declaration_span
+                        .is_none_or(|span| span.end <= node.span.start)
+                })
+            })
+            .map(|symbol| symbol.identity.as_str())
+            .or_else(|| {
+                unit.prelude.then_some(name).and_then(|name| {
+                    matches!(
+                        name,
+                        "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
+                    )
+                    .then_some(name)
+                })
+            })
+            .is_some_and(|identity| {
+                identity.starts_with("/core/encodings::")
+                    || matches!(
+                        identity,
+                        "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
+                    )
+            });
+        return Ok(resolved_encoding.then_some(ValueType::Encoding));
     }
     if member_family_receiver(unit, node) {
         return Err(failure(
@@ -2839,7 +3054,7 @@ fn infer_value_type(
                 .find(|contract| contract.name == name)
                 .and_then(|contract| contract.return_type)
             {
-                return Ok(Some(ValueType::Scalar(return_type)));
+                return Ok(Some(return_type));
             }
             return Ok(None);
         }
@@ -2994,6 +3209,7 @@ fn infer_string_call_type(
             | "lower"
             | "normalise"
             | "case-fold"
+            | "split"
             | "replace"
             | "encode"
             | "decode"
@@ -3017,10 +3233,10 @@ fn infer_string_call_type(
         .children
         .get(1)
         .map_or(&[][..], |arguments| arguments.children.as_slice());
-    let (minimum, maximum) = match family {
-        "trim" => (0, 1),
-        "upper" | "lower" | "normalise" | "case-fold" => (0, 0),
-        "replace" => (2, 2),
+    let (minimum, maximum) = match (family, child) {
+        ("trim", "default") | ("upper" | "lower" | "normalise" | "case-fold", _) => (0, 0),
+        ("trim", "start" | "end") => (0, 1),
+        ("replace", _) => (2, 2),
         _ => (1, 1),
     };
     if arguments.len() < minimum || arguments.len() > maximum {
@@ -3205,19 +3421,21 @@ fn infer_parse_or_radix_type(
         ));
     };
     if contract.parameters.len() != 1
-        || contract.parameters[0].value_type != Some(ScalarType::String)
-        || contract.return_type.is_none()
+        || contract.parameters[0].value_type != Some(ValueType::Scalar(ScalarType::String))
+        || !matches!(contract.return_type, Some(ValueType::Scalar(_)))
     {
         return Err(failure(
             &unit.source,
             "T0026",
             format!(
-                "parse callback `{callback_name}` must take one `string` value and declare a return"
+                "parse callback `{callback_name}` must take one `string` value and declare a scalar return"
             ),
             callback.span,
         ));
     }
-    let result = contract.return_type.expect("checked above");
+    let Some(ValueType::Scalar(result)) = contract.return_type else {
+        unreachable!("checked above")
+    };
     Ok(Some(if method.child == "checked" {
         ValueType::ScalarOrNone(result)
     } else {
@@ -3327,7 +3545,7 @@ fn infer_arithmetic_family_type(
                         | ArithmeticFamily::DivRem
                 )
         }
-        "wrap" => fixed && !matches!(family, ArithmeticFamily::DivRem | ArithmeticFamily::Negate),
+        "wrap" => fixed && family != ArithmeticFamily::DivRem,
         "saturate" | "overflowing" => {
             fixed
                 && !matches!(
@@ -3596,12 +3814,10 @@ fn member_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
         return false;
     };
     if node_text(&unit.source, member) == "remainder"
-        && receiver.kind == SyntaxKind::Name
-        && unit.typed_bindings.iter().rev().any(|binding| {
-            binding.name == node_text(&unit.source, receiver)
-                && binding.span.start <= receiver.span.start
-                && matches!(binding.value_type, ValueType::DivRemResult(_))
-        })
+        && matches!(
+            infer_value_type(unit, receiver, &unit.typed_bindings),
+            Ok(Some(ValueType::DivRemResult(_)))
+        )
     {
         return false;
     }
@@ -3640,6 +3856,10 @@ fn obsolete_integer_coercion_member<'a>(
         })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "binary inference keeps operator precedence, optional equality, and numeric promotion auditable"
+)]
 fn infer_binary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -3656,6 +3876,18 @@ fn infer_binary_type(
     let right = infer_value_type(unit, right_node, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
     if operator == "is" {
+        return Ok(ValueType::Scalar(ScalarType::Bool));
+    }
+    if matches!(operator, "==" | "!=")
+        && ((matches!(
+            left,
+            Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+        ) && node_text(&unit.source, right_node).trim() == "none")
+            || (matches!(
+                right,
+                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+            ) && node_text(&unit.source, left_node).trim() == "none"))
+    {
         return Ok(ValueType::Scalar(ScalarType::Bool));
     }
     let comparison = matches!(operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
@@ -4955,7 +5187,7 @@ fn validate_return(
                     value.span,
                 ));
             };
-            validate_numeric_destination(
+            validate_value_destination(
                 &unit.source,
                 &contract.name,
                 expected,
@@ -5178,6 +5410,8 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "none".to_owned(),
         "float32".to_owned(),
         "float64".to_owned(),
+        "overflow-result".to_owned(),
+        "div-rem-result".to_owned(),
     ];
     types.extend(
         TypeCategory::ABSTRACT_SOURCE_NAMES
@@ -5205,6 +5439,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             "integer-conversion-overflow",
             "negative-shift-count",
             "coercion-error",
+            "decode-error",
         ],
         SymbolKind::ErrorObject,
     );

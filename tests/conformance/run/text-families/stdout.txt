@@ -1,4 +1,5 @@
 Straße
+Straße    Straße
   strasse  
 StraßeHello World
 hello

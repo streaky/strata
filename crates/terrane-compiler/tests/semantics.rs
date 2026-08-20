@@ -241,6 +241,7 @@ fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
         [
             "arithmetic-overflow",
             "coercion-error",
+            "decode-error",
             "division-by-zero",
             "error",
             "integer-conversion-overflow",
@@ -872,10 +873,19 @@ fn records_typed_parameters_defaults_and_return_contracts() {
 
     let contract = &analyzed.units[0].functions[0];
     assert_eq!(contract.name, "connect");
-    assert_eq!(contract.return_type, Some(ScalarType::Bool));
-    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::String));
+    assert_eq!(
+        contract.return_type,
+        Some(ValueType::Scalar(ScalarType::Bool))
+    );
+    assert_eq!(
+        contract.parameters[0].value_type,
+        Some(ValueType::Scalar(ScalarType::String))
+    );
     assert!(!contract.parameters[0].optional);
-    assert_eq!(contract.parameters[1].value_type, Some(ScalarType::Int));
+    assert_eq!(
+        contract.parameters[1].value_type,
+        Some(ValueType::Scalar(ScalarType::Int))
+    );
     assert!(contract.parameters[1].optional);
 }
 
@@ -896,8 +906,14 @@ fn imported_descriptor_aliases_resolve_function_contracts() {
     .unwrap();
 
     let contract = &analyzed.units[0].functions[0];
-    assert_eq!(contract.return_type, Some(ScalarType::Uint8));
-    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::Uint8));
+    assert_eq!(
+        contract.return_type,
+        Some(ValueType::Scalar(ScalarType::Uint8))
+    );
+    assert_eq!(
+        contract.parameters[0].value_type,
+        Some(ValueType::Scalar(ScalarType::Uint8))
+    );
 
     let failure = analyze(&package(
         false,

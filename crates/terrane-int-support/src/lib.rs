@@ -468,6 +468,11 @@ pub trait FixedWidthArithmetic: Sized + Copy {
     /// # Errors
     /// Returns division by zero when `rhs` is zero.
     fn overflowing_division(self, rhs: Self) -> Result<(Self, bool), ArithmeticError>;
+    /// Computes Euclidean quotient and remainder with one division.
+    ///
+    /// # Errors
+    /// Returns division by zero when `rhs` is zero.
+    fn checked_div_rem(self, rhs: Self) -> Result<Option<(Self, Self)>, ArithmeticError>;
     /// # Errors
     /// Returns division by zero when `rhs` is zero.
     fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError>;
@@ -505,7 +510,13 @@ macro_rules! fixed_width_arithmetic {
             fn overflowing_multiplication(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
             fn checked_negation(self) -> Option<Self> { self.checked_neg() }
             fn wrapping_negation(self) -> Self { self.wrapping_neg() }
-            fn saturating_negation(self) -> Self { self.checked_neg().unwrap_or(<$type>::MAX) }
+            fn saturating_negation(self) -> Self {
+                self.checked_neg().unwrap_or(if <$type>::MIN == 0 {
+                    <$type>::MIN
+                } else {
+                    <$type>::MAX
+                })
+            }
             fn overflowing_negation(self) -> (Self, bool) { self.overflowing_neg() }
             fn checked_division(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
                 if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_div_euclid(rhs)) }
@@ -522,6 +533,18 @@ macro_rules! fixed_width_arithmetic {
             }
             fn overflowing_division(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
                 if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_div_euclid(rhs)) }
+            }
+            fn checked_div_rem(self, rhs: Self) -> Result<Option<(Self, Self)>, ArithmeticError> {
+                if rhs == 0 {
+                    return Err(ArithmeticError::DivisionByZero);
+                }
+                let Some(quotient) = self.checked_div_euclid(rhs) else {
+                    return Ok(None);
+                };
+                let remainder = self
+                    .checked_sub(quotient.checked_mul(rhs).expect("representable Euclidean product"))
+                    .expect("representable Euclidean remainder");
+                Ok(Some((quotient, remainder)))
             }
             fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
                 if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_rem_euclid(rhs)) }
@@ -610,11 +633,8 @@ pub fn fixed_div_rem<T: FixedWidthArithmetic>(
     left: T,
     right: T,
 ) -> Result<DivRemResult<T>, ArithmeticError> {
-    let quotient = left
-        .checked_division(right)?
-        .ok_or(ArithmeticError::ArithmeticOverflow)?;
-    let remainder = left
-        .checked_remainder(right)?
+    let (quotient, remainder) = left
+        .checked_div_rem(right)?
         .ok_or(ArithmeticError::ArithmeticOverflow)?;
     Ok(DivRemResult {
         quotient,
@@ -814,29 +834,49 @@ pub fn fixed_negation_overflowing<T: FixedWidthArithmetic>(value: T) -> Overflow
     let (value, overflowed) = value.overflowing_negation();
     OverflowResult { value, overflowed }
 }
+/// Shifts left when the count is nonnegative and representable by the backend.
+///
+/// # Errors
+///
+/// Returns a shift-count error for a negative or unrepresentably large count.
 pub fn fixed_shift_left_checked<T: FixedWidthArithmetic>(
     left: T,
     right: &impl IntegerSource,
-) -> Option<T> {
-    fixed_shift_count(right)
-        .ok()
-        .and_then(|count| left.checked_left_shift(count))
+) -> Result<Option<T>, ArithmeticError> {
+    fixed_shift_count(right).map(|count| left.checked_left_shift(count))
 }
-pub fn fixed_shift_left_wrap<T: FixedWidthArithmetic>(left: T, right: &impl IntegerSource) -> T {
-    let count = fixed_shift_count(right).unwrap_or(0);
-    left.wrapping_left_shift(count)
+/// Shifts left with wrapping value semantics and an explicit count policy.
+///
+/// # Errors
+///
+/// Returns a shift-count error for a negative or unrepresentably large count.
+pub fn fixed_shift_left_wrap<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Result<T, ArithmeticError> {
+    fixed_shift_count(right).map(|count| left.wrapping_left_shift(count))
 }
+/// Shifts right when the count is nonnegative and representable by the backend.
+///
+/// # Errors
+///
+/// Returns a shift-count error for a negative or unrepresentably large count.
 pub fn fixed_shift_right_checked<T: FixedWidthArithmetic>(
     left: T,
     right: &impl IntegerSource,
-) -> Option<T> {
-    fixed_shift_count(right)
-        .ok()
-        .and_then(|count| left.checked_right_shift(count))
+) -> Result<Option<T>, ArithmeticError> {
+    fixed_shift_count(right).map(|count| left.checked_right_shift(count))
 }
-pub fn fixed_shift_right_wrap<T: FixedWidthArithmetic>(left: T, right: &impl IntegerSource) -> T {
-    let count = fixed_shift_count(right).unwrap_or(0);
-    left.wrapping_right_shift(count)
+/// Shifts right with wrapping value semantics and an explicit count policy.
+///
+/// # Errors
+///
+/// Returns a shift-count error for a negative or unrepresentably large count.
+pub fn fixed_shift_right_wrap<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Result<T, ArithmeticError> {
+    fixed_shift_count(right).map(|count| left.wrapping_right_shift(count))
 }
 
 /// Converts an integer value to the exact representation used by coercion policies.

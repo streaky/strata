@@ -97,13 +97,13 @@ Break,
 Continue,
 }
 // Source: case.trn
-// Namespace: catch-arithmetic-overflow
+// Namespace: catch-decode-error
 fn main() {
-    let mut __terrane_completion_0: TerraneCompletion<()> = (|| {
+    let raw: Vec<u8> = Vec::from([255]);
+    let __terrane_completion_0: TerraneCompletion<()> = (|| {
         let __terrane_try_0: TerraneCompletion<()> = (|| {
-            let mut value: i8 = 127;
-            value = match terrane_int_support::fixed_addition(value, 1) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at("/catch-arithmetic-overflow::main (case.trn:7:13)")) };
-            println!("{}", terrane_scalar_support::scalar_text(&(value)));
+            let decoded: String = match terrane_string_support::decode(&(raw), terrane_string_support::Encoding::Utf8) { Ok(value) => value, Err(error) => return TerraneCompletion::Error(TerraneError::from(error).at("/catch-decode-error::main (case.trn:6:15)")) };
+            println!("{}", terrane_scalar_support::scalar_text(&(decoded)));
             TerraneCompletion::Normal
         })();
         match __terrane_try_0 {
@@ -113,9 +113,9 @@ fn main() {
             TerraneCompletion::Normal => {}
             TerraneCompletion::Error(__terrane_error_0) => {
                 let mut __terrane_handled_0 = false;
-                if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::ArithmeticOverflow {
+                if !__terrane_handled_0 && __terrane_error_0.kind == TerraneErrorKind::DecodeError {
                     __terrane_handled_0 = true;
-                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught"))));
+                    println!("{}", terrane_scalar_support::scalar_text(&(String::from("caught decode"))));
                 }
                 if !__terrane_handled_0 {
                     return TerraneCompletion::Error(__terrane_error_0);
@@ -124,14 +124,6 @@ fn main() {
         }
         TerraneCompletion::Normal
     })();
-    let __terrane_finally_0: TerraneCompletion<()> = (|| {
-        println!("{}", terrane_scalar_support::scalar_text(&(String::from("finally"))));
-        TerraneCompletion::Normal
-    })();
-    match __terrane_finally_0 {
-        TerraneCompletion::Normal => {}
-        replacement => __terrane_completion_0 = replacement,
-    }
     match __terrane_completion_0 {
         TerraneCompletion::Normal => {}
         TerraneCompletion::Return(value) => return value,

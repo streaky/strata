@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
@@ -35,6 +36,18 @@ pub enum Encoding {
     Utf32Le,
     Utf32Be,
 }
+impl Encoding {
+    #[must_use]
+    pub const fn source_name(self) -> &'static str {
+        match self {
+            Self::Utf8 => "utf8",
+            Self::Utf16Le => "utf16-le",
+            Self::Utf16Be => "utf16-be",
+            Self::Utf32Le => "utf32-le",
+            Self::Utf32Be => "utf32-be",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodeError {
@@ -45,8 +58,9 @@ impl std::fmt::Display for DecodeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            ".decode-error: invalid {:?} sequence at byte offset {}",
-            self.encoding, self.byte_offset
+            ".decode-error: invalid {} sequence at byte offset {}",
+            self.encoding.source_name(),
+            self.byte_offset
         )
     }
 }
@@ -55,7 +69,7 @@ impl std::error::Error for DecodeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextRange {
-    source: String,
+    source: Arc<str>,
     start: usize,
     end: usize,
 }
@@ -141,17 +155,24 @@ pub fn decode(value: &[u8], encoding: Encoding) -> Result<String, DecodeError> {
                     byte_offset: value.len() - 1,
                 });
             }
-            let units = chunks
-                .map(|chunk| match encoding {
-                    Encoding::Utf16Le => u16::from_le_bytes([chunk[0], chunk[1]]),
-                    Encoding::Utf16Be => u16::from_be_bytes([chunk[0], chunk[1]]),
-                    _ => unreachable!(),
-                })
-                .collect::<Vec<_>>();
-            String::from_utf16(&units).map_err(|_| DecodeError {
-                encoding,
-                byte_offset: 0,
-            })
+            let units = chunks.map(|chunk| match encoding {
+                Encoding::Utf16Le => u16::from_le_bytes([chunk[0], chunk[1]]),
+                Encoding::Utf16Be => u16::from_be_bytes([chunk[0], chunk[1]]),
+                _ => unreachable!(),
+            });
+            let mut result = String::new();
+            for (index, scalar) in char::decode_utf16(units).enumerate() {
+                match scalar {
+                    Ok(scalar) => result.push(scalar),
+                    Err(_) => {
+                        return Err(DecodeError {
+                            encoding,
+                            byte_offset: index * 2,
+                        });
+                    }
+                }
+            }
+            Ok(result)
         }
         Encoding::Utf32Le | Encoding::Utf32Be => {
             let chunks = value.chunks_exact(4);
@@ -193,17 +214,8 @@ pub fn decode_or_fail(value: &[u8], encoding: Encoding) -> String {
 }
 
 #[must_use]
-pub fn trim(value: &str, pattern: Option<&str>) -> String {
-    pattern.map_or_else(
-        || value.trim().to_owned(),
-        |pattern| {
-            value
-                .strip_prefix(pattern)
-                .and_then(|value| value.strip_suffix(pattern))
-                .unwrap_or(value)
-                .to_owned()
-        },
-    )
+pub fn trim(value: &str) -> String {
+    value.trim().to_owned()
 }
 
 #[must_use]
@@ -224,8 +236,9 @@ pub fn trim_end(value: &str, pattern: Option<&str>) -> String {
 
 #[must_use]
 pub fn find(value: &str, pattern: &str) -> Option<TextRange> {
-    value.find(pattern).map(|start| TextRange {
-        source: value.to_owned(),
+    let source = Arc::<str>::from(value);
+    source.find(pattern).map(|start| TextRange {
+        source,
         start,
         end: start + pattern.len(),
     })
@@ -233,10 +246,11 @@ pub fn find(value: &str, pattern: &str) -> Option<TextRange> {
 
 #[must_use]
 pub fn find_all(value: &str, pattern: &str) -> Vec<TextRange> {
-    value
+    let source = Arc::<str>::from(value);
+    source
         .match_indices(pattern)
         .map(|(start, matched)| TextRange {
-            source: value.to_owned(),
+            source: Arc::clone(&source),
             start,
             end: start + matched.len(),
         })
