@@ -4422,6 +4422,20 @@ This permits runtime traces and crash reports to resolve to the exact generated 
 ---
 
 ## 29. Source maps and diagnostic translation
+Terrane source warnings are non-blocking diagnostics: they are reported by the compiler but do not
+change the success of `check`, `rust`, `build`, or `run`. Backend warnings remain denied for
+compiler-owned and generated Rust. Conformance manifests may name an expected-warning file; when
+they do, warning code, source-relative span, severity, message, order, and multiplicity are matched
+exactly.
+
+Binding-use analysis is resolved by declaration identity and recorded once per semantic unit, so
+shadowing does not merge unrelated bindings and later lowering does not repeatedly scan whole
+syntax trees. `W4001` reports an initialized local binding whose value is never read. `W4002`
+reports an initial or later assignment whose stored value cannot reach a subsequent read before a
+definite replacement. Conditional stores do not by themselves kill the incoming value. Generated
+Rust explicitly consumes dead stores and unused loop targets so source-level warnings do not leak
+into opaque `rustc` warning failures.
+
 
 ### 29.1 Bidirectional maps
 
