@@ -152,7 +152,10 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
     let names = enabled.prelude_bindings.keys().cloned().collect::<Vec<_>>();
     assert_eq!(
         names,
-        ["bool", "bytes", "float", "int", "none", "print", "string"]
+        [
+            "bool", "bytes", "float", "int", "none", "print", "string", "utf16-be", "utf16-le",
+            "utf32-be", "utf32-le", "utf8",
+        ]
     );
 
     let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
@@ -1356,7 +1359,7 @@ fn string_length_has_integer_type_and_rejects_other_receivers() {
     assert_eq!(failure.diagnostics[0].code, "T0013");
     assert_eq!(
         failure.diagnostics[0].message,
-        "`.length` requires `string`, found `int`"
+        "`.length` requires `string` or `bytes`, found `int`"
     );
 }
 

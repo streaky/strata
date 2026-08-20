@@ -1,0 +1,4 @@
+namespace reject-adaptive-wrap
+function main
+  value int = 1
+  print; (value.add.wrap; 1)

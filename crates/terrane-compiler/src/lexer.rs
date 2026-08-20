@@ -293,6 +293,39 @@ fn lex_line(
                     break;
                 }
             }
+            b'b' if bytes.get(index + 1) == Some(&b'\'') => {
+                index += 2;
+                let mut escaped = false;
+                let mut terminated = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\'' && !escaped {
+                        index += 1;
+                        terminated = true;
+                        break;
+                    }
+                    escaped = bytes[index] == b'\\' && !escaped;
+                    if bytes[index] != b'\\' {
+                        escaped = false;
+                    }
+                    index += 1;
+                }
+                if terminated {
+                    push_token(
+                        source,
+                        tokens,
+                        TokenKind::String,
+                        base + start,
+                        base + index,
+                        attachment(line, start, index),
+                    );
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        "L0007",
+                        "unterminated bytes literal",
+                        Span::new(source.id(), base + start, base + index),
+                    ));
+                }
+            }
             byte if byte.is_ascii_alphabetic() => {
                 index += 1;
                 while index < bytes.len() {

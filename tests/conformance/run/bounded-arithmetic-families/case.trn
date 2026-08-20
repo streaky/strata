@@ -1,0 +1,23 @@
+namespace bounded-arithmetic-families
+from /core/types import int8, int
+function main
+  small int8 = 120
+  wrapped int8 = small.add.wrap; 10
+  print; wrapped
+  overflowed = small.add.overflowing; 10
+  print; overflowed.value, overflowed.overflowed
+  pair = ( -7).div-rem; 3
+  print; pair.quotient, pair.remainder
+  exact int = 5
+  print; (exact.multiply; 9)
+  small.subtract.checked; 20
+  print; (small.multiply.saturate; 2)
+  print; (small.divide; 3), (small.remainder; 7)
+  negated = small.negate.overflowing;
+  print; negated.value, negated.overflowed
+  print; (small.shift-left.wrap; 1)
+  small.shift-right.checked; 2
+  count int8 = 1
+  count++
+  count--
+  print; count

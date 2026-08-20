@@ -1,0 +1,11 @@
+namespace bytes-views-encoding
+function main
+  text string = 'é'
+  print; text.length, text.bytes.length, text.scalars.length, text.graphemes.length
+  encoded bytes = text.encode; utf8
+  decoded string = encoded.decode; utf8
+  print; decoded
+  raw bytes = b'abc'
+  for byte in raw
+    print; byte
+  print; raw.length, (raw.decode; utf8)

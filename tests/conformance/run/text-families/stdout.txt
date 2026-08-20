@@ -1,0 +1,8 @@
+Straße
+  strasse  
+StraßeHello World
+hello
+é
+bXna
+17
+truetrue

@@ -29,6 +29,17 @@ pub enum ArithmeticError {
     InvalidRadix,
     InvalidRadixText,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OverflowResult<T> {
+    pub value: T,
+    pub overflowed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DivRemResult<T> {
+    pub quotient: T,
+    pub remainder: T,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FloatRounding {
@@ -201,6 +212,18 @@ impl Int {
         Ok(Self::from_big(
             self.as_big() - quotient.as_big() * rhs.as_big(),
         ))
+    }
+    /// Computes the Euclidean quotient and remainder together.
+    ///
+    /// # Errors
+    /// Returns [`ArithmeticError::DivisionByZero`] for a zero divisor.
+    pub fn div_rem(&self, rhs: &Self) -> Result<DivRemResult<Self>, ArithmeticError> {
+        let quotient = self.euclidean_div(rhs)?;
+        let remainder = Self::from_big(self.as_big() - quotient.as_big() * rhs.as_big());
+        Ok(DivRemResult {
+            quotient,
+            remainder,
+        })
     }
 
     /// Exact left shift.
@@ -427,6 +450,12 @@ pub trait FixedWidthArithmetic: Sized + Copy {
     #[must_use]
     fn saturating_multiplication(self, rhs: Self) -> Self;
     fn overflowing_multiplication(self, rhs: Self) -> (Self, bool);
+    fn checked_negation(self) -> Option<Self>;
+    #[must_use]
+    fn wrapping_negation(self) -> Self;
+    #[must_use]
+    fn saturating_negation(self) -> Self;
+    fn overflowing_negation(self) -> (Self, bool);
     /// # Errors
     /// Returns division by zero when `rhs` is zero.
     fn checked_division(self, rhs: Self) -> Result<Option<Self>, ArithmeticError>;
@@ -452,7 +481,11 @@ pub trait FixedWidthArithmetic: Sized + Copy {
     /// Returns division by zero when `rhs` is zero.
     fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError>;
     fn checked_left_shift(self, count: u32) -> Option<Self>;
+    #[must_use]
+    fn wrapping_left_shift(self, count: u32) -> Self;
     fn checked_right_shift(self, count: u32) -> Option<Self>;
+    #[must_use]
+    fn wrapping_right_shift(self, count: u32) -> Self;
 }
 
 macro_rules! fixed_width_arithmetic {
@@ -470,35 +503,45 @@ macro_rules! fixed_width_arithmetic {
             fn wrapping_multiplication(self, rhs: Self) -> Self { self.wrapping_mul(rhs) }
             fn saturating_multiplication(self, rhs: Self) -> Self { self.saturating_mul(rhs) }
             fn overflowing_multiplication(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
+            fn checked_negation(self) -> Option<Self> { self.checked_neg() }
+            fn wrapping_negation(self) -> Self { self.wrapping_neg() }
+            fn saturating_negation(self) -> Self { self.checked_neg().unwrap_or(<$type>::MAX) }
+            fn overflowing_negation(self) -> (Self, bool) { self.overflowing_neg() }
             fn checked_division(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_div(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_div_euclid(rhs)) }
             }
             fn wrapping_division(self, rhs: Self) -> Result<Self, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_div(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_div_euclid(rhs)) }
             }
             fn saturating_division(self, rhs: Self) -> Result<Self, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.saturating_div(rhs)) }
+                if rhs == 0 {
+                    Err(ArithmeticError::DivisionByZero)
+                } else {
+                    Ok(self.checked_div_euclid(rhs).unwrap_or(<$type>::MAX))
+                }
             }
             fn overflowing_division(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_div(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_div_euclid(rhs)) }
             }
             fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_rem(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.checked_rem_euclid(rhs)) }
             }
             fn wrapping_remainder(self, rhs: Self) -> Result<Self, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem_euclid(rhs)) }
             }
             fn saturating_remainder(self, rhs: Self) -> Result<Self, ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.wrapping_rem_euclid(rhs)) }
             }
             fn overflowing_remainder(self, rhs: Self) -> Result<(Self, bool), ArithmeticError> {
-                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_rem(rhs)) }
+                if rhs == 0 { Err(ArithmeticError::DivisionByZero) } else { Ok(self.overflowing_rem_euclid(rhs)) }
             }
             fn checked_left_shift(self, count: u32) -> Option<Self> {
                 self.checked_shl(count)
                     .filter(|shifted| shifted.checked_shr(count) == Some(self))
             }
+            fn wrapping_left_shift(self, count: u32) -> Self { self.wrapping_shl(count) }
             fn checked_right_shift(self, count: u32) -> Option<Self> { self.checked_shr(count) }
+            fn wrapping_right_shift(self, count: u32) -> Self { self.wrapping_shr(count) }
         }
     )+};
 }
@@ -558,6 +601,27 @@ pub fn fixed_remainder<T: FixedWidthArithmetic>(left: T, right: T) -> Result<T, 
         .ok_or(ArithmeticError::ArithmeticOverflow)
 }
 
+/// Computes the quotient and remainder in one operation.
+///
+/// # Errors
+///
+/// Returns division by zero or arithmetic overflow.
+pub fn fixed_div_rem<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<DivRemResult<T>, ArithmeticError> {
+    let quotient = left
+        .checked_division(right)?
+        .ok_or(ArithmeticError::ArithmeticOverflow)?;
+    let remainder = left
+        .checked_remainder(right)?
+        .ok_or(ArithmeticError::ArithmeticOverflow)?;
+    Ok(DivRemResult {
+        quotient,
+        remainder,
+    })
+}
+
 /// Applies Terrane's checked default left-shift policy to a fixed-width integer.
 ///
 /// # Errors
@@ -584,6 +648,195 @@ pub fn fixed_shift_right<T: FixedWidthArithmetic>(
     let count = fixed_shift_count(right)?;
     left.checked_right_shift(count)
         .ok_or(ArithmeticError::ShiftCountTooLarge)
+}
+macro_rules! fixed_policy_helpers {
+    (
+        $checked:ident, $wrap:ident, $saturate:ident, $overflowing:ident,
+        $checked_method:ident, $wrap_method:ident, $saturate_method:ident, $overflowing_method:ident
+    ) => {
+        pub fn $checked<T: FixedWidthArithmetic>(left: T, right: T) -> Option<T> {
+            left.$checked_method(right)
+        }
+        pub fn $wrap<T: FixedWidthArithmetic>(left: T, right: T) -> T {
+            left.$wrap_method(right)
+        }
+        pub fn $saturate<T: FixedWidthArithmetic>(left: T, right: T) -> T {
+            left.$saturate_method(right)
+        }
+        pub fn $overflowing<T: FixedWidthArithmetic>(left: T, right: T) -> OverflowResult<T> {
+            let (value, overflowed) = left.$overflowing_method(right);
+            OverflowResult { value, overflowed }
+        }
+    };
+}
+
+fixed_policy_helpers!(
+    fixed_addition_checked,
+    fixed_addition_wrap,
+    fixed_addition_saturate,
+    fixed_addition_overflowing,
+    checked_addition,
+    wrapping_addition,
+    saturating_addition,
+    overflowing_addition
+);
+fixed_policy_helpers!(
+    fixed_subtraction_checked,
+    fixed_subtraction_wrap,
+    fixed_subtraction_saturate,
+    fixed_subtraction_overflowing,
+    checked_subtraction,
+    wrapping_subtraction,
+    saturating_subtraction,
+    overflowing_subtraction
+);
+fixed_policy_helpers!(
+    fixed_multiplication_checked,
+    fixed_multiplication_wrap,
+    fixed_multiplication_saturate,
+    fixed_multiplication_overflowing,
+    checked_multiplication,
+    wrapping_multiplication,
+    saturating_multiplication,
+    overflowing_multiplication
+);
+
+/// Applies checked division.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_division_checked<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<Option<T>, ArithmeticError> {
+    left.checked_division(right)
+}
+/// Applies wrapping division.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_division_wrap<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<T, ArithmeticError> {
+    left.wrapping_division(right)
+}
+/// Applies saturating division.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_division_saturate<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<T, ArithmeticError> {
+    left.saturating_division(right)
+}
+/// Applies overflowing division.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_division_overflowing<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<OverflowResult<T>, ArithmeticError> {
+    let (value, overflowed) = left.overflowing_division(right)?;
+    Ok(OverflowResult { value, overflowed })
+}
+/// Applies checked remainder.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_remainder_checked<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<Option<T>, ArithmeticError> {
+    left.checked_remainder(right)
+}
+/// Applies wrapping remainder.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_remainder_wrap<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<T, ArithmeticError> {
+    left.wrapping_remainder(right)
+}
+/// Applies saturating remainder.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_remainder_saturate<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<T, ArithmeticError> {
+    left.saturating_remainder(right)
+}
+/// Applies overflowing remainder.
+///
+/// # Errors
+///
+/// Returns division by zero.
+pub fn fixed_remainder_overflowing<T: FixedWidthArithmetic>(
+    left: T,
+    right: T,
+) -> Result<OverflowResult<T>, ArithmeticError> {
+    let (value, overflowed) = left.overflowing_remainder(right)?;
+    Ok(OverflowResult { value, overflowed })
+}
+/// Applies checked negation.
+///
+/// # Errors
+///
+/// Returns arithmetic overflow when the value cannot be negated.
+pub fn fixed_negation<T: FixedWidthArithmetic>(value: T) -> Result<T, ArithmeticError> {
+    value
+        .checked_negation()
+        .ok_or(ArithmeticError::ArithmeticOverflow)
+}
+pub fn fixed_negation_checked<T: FixedWidthArithmetic>(value: T) -> Option<T> {
+    value.checked_negation()
+}
+pub fn fixed_negation_wrap<T: FixedWidthArithmetic>(value: T) -> T {
+    value.wrapping_negation()
+}
+pub fn fixed_negation_saturate<T: FixedWidthArithmetic>(value: T) -> T {
+    value.saturating_negation()
+}
+pub fn fixed_negation_overflowing<T: FixedWidthArithmetic>(value: T) -> OverflowResult<T> {
+    let (value, overflowed) = value.overflowing_negation();
+    OverflowResult { value, overflowed }
+}
+pub fn fixed_shift_left_checked<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Option<T> {
+    fixed_shift_count(right)
+        .ok()
+        .and_then(|count| left.checked_left_shift(count))
+}
+pub fn fixed_shift_left_wrap<T: FixedWidthArithmetic>(left: T, right: &impl IntegerSource) -> T {
+    let count = fixed_shift_count(right).unwrap_or(0);
+    left.wrapping_left_shift(count)
+}
+pub fn fixed_shift_right_checked<T: FixedWidthArithmetic>(
+    left: T,
+    right: &impl IntegerSource,
+) -> Option<T> {
+    fixed_shift_count(right)
+        .ok()
+        .and_then(|count| left.checked_right_shift(count))
+}
+pub fn fixed_shift_right_wrap<T: FixedWidthArithmetic>(left: T, right: &impl IntegerSource) -> T {
+    let count = fixed_shift_count(right).unwrap_or(0);
+    left.wrapping_right_shift(count)
 }
 
 /// Converts an integer value to the exact representation used by coercion policies.

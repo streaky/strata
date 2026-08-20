@@ -80,6 +80,22 @@ pub struct SemanticPackage {
 pub enum ValueType {
     Scalar(ScalarType),
     ScalarOrNone(ScalarType),
+    OverflowResult(ScalarType),
+    DivRemResult(ScalarType),
+    StringView(TextUnit),
+    StringList,
+    TextRange,
+    TextRangeView(TextUnit),
+    TextRangeOrNone,
+    TextRangeList,
+    Encoding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextUnit {
+    Bytes,
+    Scalars,
+    Graphemes,
 }
 
 impl std::fmt::Display for ValueType {
@@ -87,6 +103,63 @@ impl std::fmt::Display for ValueType {
         match self {
             Self::Scalar(ty) => ty.fmt(formatter),
             Self::ScalarOrNone(ty) => write!(formatter, "{ty}|none"),
+            Self::OverflowResult(ty) => write!(formatter, "overflow-result of {ty}"),
+            Self::DivRemResult(ty) => write!(formatter, "div-rem-result of {ty}"),
+            Self::StringView(TextUnit::Bytes) => formatter.write_str("string.bytes"),
+            Self::StringView(TextUnit::Scalars) => formatter.write_str("string.scalars"),
+            Self::StringView(TextUnit::Graphemes) => formatter.write_str("string.graphemes"),
+            Self::StringList => formatter.write_str("list of string"),
+            Self::TextRange => formatter.write_str("text-range"),
+            Self::TextRangeView(TextUnit::Bytes) => formatter.write_str("text-range.bytes"),
+            Self::TextRangeView(TextUnit::Scalars) => formatter.write_str("text-range.scalars"),
+            Self::TextRangeView(TextUnit::Graphemes) => formatter.write_str("text-range.graphemes"),
+            Self::TextRangeOrNone => formatter.write_str("text-range|none"),
+            Self::TextRangeList => formatter.write_str("list of text-range"),
+            Self::Encoding => formatter.write_str("encoding"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArithmeticFamily {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    DivRem,
+    Negate,
+    ShiftLeft,
+    ShiftRight,
+}
+
+impl ArithmeticFamily {
+    pub(crate) const fn source_name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Subtract => "subtract",
+            Self::Multiply => "multiply",
+            Self::Divide => "divide",
+            Self::Remainder => "remainder",
+            Self::DivRem => "div-rem",
+            Self::Negate => "negate",
+            Self::ShiftLeft => "shift-left",
+            Self::ShiftRight => "shift-right",
+        }
+    }
+
+    fn from_source_name(name: &str) -> Option<Self> {
+        match name {
+            "add" => Some(Self::Add),
+            "subtract" => Some(Self::Subtract),
+            "multiply" => Some(Self::Multiply),
+            "divide" => Some(Self::Divide),
+            "remainder" => Some(Self::Remainder),
+            "div-rem" => Some(Self::DivRem),
+            "negate" => Some(Self::Negate),
+            "shift-left" => Some(Self::ShiftLeft),
+            "shift-right" => Some(Self::ShiftRight),
+            _ => None,
         }
     }
 }
@@ -96,6 +169,7 @@ pub enum MemberFamily {
     Coerce,
     Parse,
     Radix,
+    Arithmetic(ArithmeticFamily),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1986,6 +2060,7 @@ fn validate_descriptor_value_node(
             || node.kind == SyntaxKind::TypeExpression
             || node.kind == SyntaxKind::ImportDeclaration
             || (node.kind == SyntaxKind::TypeMembershipExpression && index == 1)
+            || (node.kind == SyntaxKind::MemberExpression && index == 1)
             || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) && index == 0)
             || (node.kind == SyntaxKind::BinaryExpression
                 && node.children.len() == 2
@@ -2132,10 +2207,17 @@ fn collect_typed_bindings(
         && let Some(name) = target.children.first()
     {
         collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
+        let item_type = if infer_value_type(unit, collection, visible_bindings)?
+            == Some(ValueType::Scalar(ScalarType::Bytes))
+        {
+            ValueType::Scalar(ScalarType::Uint8)
+        } else {
+            ValueType::Scalar(ScalarType::String)
+        };
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
-            value_type: ValueType::Scalar(ScalarType::String),
+            value_type: item_type,
             destination_arms: Vec::new(),
             storage_type: None,
             mutable: false,
@@ -2690,6 +2772,12 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
+        if matches!(
+            name,
+            "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
+        ) {
+            return Ok(Some(ValueType::Encoding));
+        }
         return Ok(bindings
             .iter()
             .rev()
@@ -2708,6 +2796,12 @@ fn infer_value_type(
         return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
+        if let Some(value_type) = infer_string_call_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
+        if let Some(value_type) = infer_arithmetic_family_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
         if let Some(value_type) = infer_parse_or_radix_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
@@ -2772,6 +2866,58 @@ fn infer_member_value_type(
     }
     let member_name = node_text(&unit.source, member);
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+        let view = match member_name {
+            "bytes" => Some(TextUnit::Bytes),
+            "scalars" => Some(TextUnit::Scalars),
+            "graphemes" => Some(TextUnit::Graphemes),
+            _ => None,
+        };
+        if let Some(view) = view {
+            return Ok(Some(ValueType::StringView(view)));
+        }
+    }
+    if receiver_type == Some(ValueType::TextRange) {
+        return Ok(match member_name {
+            "text" => Some(ValueType::Scalar(ScalarType::String)),
+            "bytes" => Some(ValueType::TextRangeView(TextUnit::Bytes)),
+            "scalars" => Some(ValueType::TextRangeView(TextUnit::Scalars)),
+            "graphemes" => Some(ValueType::TextRangeView(TextUnit::Graphemes)),
+            _ => None,
+        });
+    }
+    if matches!(receiver_type, Some(ValueType::TextRangeView(_)))
+        && matches!(member_name, "start" | "end")
+    {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    if matches!(
+        receiver_type,
+        Some(
+            ValueType::StringView(_) | ValueType::StringList | ValueType::Scalar(ScalarType::Bytes)
+        )
+    ) && member_name == "length"
+    {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    match (receiver_type, member_name) {
+        (Some(ValueType::OverflowResult(ty)), "value")
+        | (Some(ValueType::DivRemResult(ty)), "quotient" | "remainder") => {
+            return Ok(Some(ValueType::Scalar(ty)));
+        }
+        (Some(ValueType::OverflowResult(_)), "overflowed") => {
+            return Ok(Some(ValueType::Scalar(ScalarType::Bool)));
+        }
+        (Some(ValueType::OverflowResult(_) | ValueType::DivRemResult(_)), _) => {
+            return Err(failure(
+                &unit.source,
+                "T0031",
+                format!("result object has no member `.{member_name}`"),
+                member.span,
+            ));
+        }
+        _ => {}
+    }
     if matches!(member_name, "round" | "floor" | "ceiling" | "truncate") {
         if matches!(
             receiver_type,
@@ -2790,14 +2936,17 @@ fn infer_member_value_type(
         return Ok(None);
     }
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
-    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+    if matches!(
+        receiver_type,
+        Some(ValueType::Scalar(ScalarType::String | ScalarType::Bytes))
+    ) {
         return Ok(Some(ValueType::Scalar(ScalarType::Int)));
     }
     Err(failure(
         &unit.source,
         "T0013",
         format!(
-            "`.length` requires `string`, found `{}`",
+            "`.length` requires `string` or `bytes`, found `{}`",
             receiver_type
                 .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
         ),
@@ -2805,6 +2954,122 @@ fn infer_member_value_type(
     ))
 }
 
+#[allow(clippy::too_many_lines)]
+fn infer_string_call_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let Some(callee) = node.children.first() else {
+        return Ok(None);
+    };
+    let [receiver, member] = callee.children.as_slice() else {
+        return Ok(None);
+    };
+    if callee.kind != SyntaxKind::MemberExpression {
+        return Ok(None);
+    }
+    let mut subject = receiver;
+    let mut family = node_text(&unit.source, member);
+    let mut child = "default";
+    if receiver.kind == SyntaxKind::MemberExpression
+        && let [nested_subject, nested_family] = receiver.children.as_slice()
+    {
+        let candidate = node_text(&unit.source, nested_family);
+        if matches!(
+            candidate,
+            "trim" | "contains" | "find" | "normalise" | "upper" | "lower"
+        ) {
+            subject = nested_subject;
+            family = candidate;
+            child = node_text(&unit.source, member);
+        }
+    }
+    if !matches!(
+        family,
+        "trim"
+            | "contains"
+            | "find"
+            | "upper"
+            | "lower"
+            | "normalise"
+            | "case-fold"
+            | "replace"
+            | "encode"
+            | "decode"
+    ) {
+        return Ok(None);
+    }
+    let subject_type = infer_value_type(unit, subject, bindings)?;
+    let receiver_valid = match family {
+        "decode" => subject_type == Some(ValueType::Scalar(ScalarType::Bytes)),
+        _ => subject_type == Some(ValueType::Scalar(ScalarType::String)),
+    };
+    if !receiver_valid {
+        return Err(failure(
+            &unit.source,
+            "T0032",
+            format!("`.{family}` is not available on this receiver"),
+            subject.span,
+        ));
+    }
+    let arguments = node
+        .children
+        .get(1)
+        .map_or(&[][..], |arguments| arguments.children.as_slice());
+    let (minimum, maximum) = match family {
+        "trim" => (0, 1),
+        "upper" | "lower" | "normalise" | "case-fold" => (0, 0),
+        "replace" => (2, 2),
+        _ => (1, 1),
+    };
+    if arguments.len() < minimum || arguments.len() > maximum {
+        return Err(failure(
+            &unit.source,
+            "T0023",
+            format!("`.{family}` received the wrong number of arguments"),
+            node.span,
+        ));
+    }
+    for argument in arguments {
+        let argument = argument.children.last().unwrap_or(argument);
+        let expected = if matches!(family, "encode" | "decode") {
+            ValueType::Encoding
+        } else {
+            ValueType::Scalar(ScalarType::String)
+        };
+        if infer_value_type(unit, argument, bindings)? != Some(expected) {
+            return Err(failure(
+                &unit.source,
+                "T0033",
+                format!("`.{family}` received an incompatible argument"),
+                argument.span,
+            ));
+        }
+    }
+    let result = match (family, child) {
+        ("contains", "default" | "start" | "end") => ValueType::Scalar(ScalarType::Bool),
+        ("find", "default") => ValueType::TextRangeOrNone,
+        ("find", "all") => ValueType::TextRangeList,
+        ("find", "count") => ValueType::Scalar(ScalarType::Int),
+        ("split", "default") => ValueType::StringList,
+        ("encode", "default") => ValueType::Scalar(ScalarType::Bytes),
+        ("decode" | "case-fold" | "replace", "default")
+        | ("trim", "default" | "start" | "end")
+        | ("upper", "default" | "first" | "words")
+        | ("lower", "default" | "first")
+        | ("normalise", "nfc" | "nfd" | "nfkc" | "nfkd") => ValueType::Scalar(ScalarType::String),
+        _ => {
+            return Err(failure(
+                &unit.source,
+                "T0034",
+                format!("`.{family}.{child}` is not available"),
+                callee.span,
+            ));
+        }
+    };
+    Ok(Some(result))
+}
 fn infer_unary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2860,7 +3125,10 @@ fn infer_parse_or_radix_type(
     let Some(method) = bound_method(&unit.source, callee) else {
         return Ok(None);
     };
-    if method.family == MemberFamily::Coerce {
+    if matches!(
+        method.family,
+        MemberFamily::Coerce | MemberFamily::Arithmetic(_)
+    ) {
         return Ok(None);
     }
     let arguments = node.children.get(1);
@@ -2874,7 +3142,7 @@ fn infer_parse_or_radix_type(
                 match method.family {
                     MemberFamily::Parse => "parse",
                     MemberFamily::Radix => "radix",
-                    MemberFamily::Coerce => unreachable!(),
+                    MemberFamily::Coerce | MemberFamily::Arithmetic(_) => unreachable!(),
                 }
             ),
             node.span,
@@ -2955,6 +3223,152 @@ fn infer_parse_or_radix_type(
     } else {
         ValueType::Scalar(result)
     }))
+}
+
+#[allow(clippy::too_many_lines)]
+fn infer_arithmetic_family_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let Some(callee) = node.children.first() else {
+        return Ok(None);
+    };
+    let Some(method) = bound_method(&unit.source, callee) else {
+        return Ok(None);
+    };
+    let MemberFamily::Arithmetic(family) = method.family else {
+        return Ok(None);
+    };
+    let receiver = find_node_by_span(&unit.tree.root, method.receiver)
+        .expect("bound arithmetic receiver belongs to this syntax tree");
+    let Some(ValueType::Scalar(receiver_type)) = infer_value_type(unit, receiver, bindings)? else {
+        return Err(failure(
+            &unit.source,
+            "T0027",
+            format!("`.{}` requires an integer receiver", family.source_name()),
+            receiver.span,
+        ));
+    };
+    if !receiver_type.is_integer() {
+        return Err(failure(
+            &unit.source,
+            "T0027",
+            format!("`.{}` requires an integer receiver", family.source_name()),
+            receiver.span,
+        ));
+    }
+    if family == ArithmeticFamily::Negate
+        && !matches!(
+            receiver_type,
+            ScalarType::Int
+                | ScalarType::Int8
+                | ScalarType::Int16
+                | ScalarType::Int32
+                | ScalarType::Int64
+                | ScalarType::Int128
+        )
+    {
+        return Err(failure(
+            &unit.source,
+            "T0027",
+            "`.negate` is not available on unsigned integers",
+            receiver.span,
+        ));
+    }
+    let arguments = node.children.get(1);
+    let arguments = arguments.map_or(&[][..], |arguments| arguments.children.as_slice());
+    let expected = usize::from(family != ArithmeticFamily::Negate);
+    if arguments.len() != expected {
+        return Err(failure(
+            &unit.source,
+            "T0023",
+            format!(
+                "`.{}` requires exactly {expected} argument{}",
+                family.source_name(),
+                if expected == 1 { "" } else { "s" }
+            ),
+            node.span,
+        ));
+    }
+    if let Some(argument) = arguments.first() {
+        let argument = argument.children.last().unwrap_or(argument);
+        let argument_type = infer_value_type(unit, argument, bindings)?;
+        let valid = if matches!(
+            family,
+            ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+        ) {
+            matches!(argument_type, Some(ValueType::Scalar(ty)) if ty.is_integer())
+        } else {
+            argument_type == Some(ValueType::Scalar(receiver_type))
+                || contextual_constant(&unit.source, argument, receiver_type).is_some()
+        };
+        if !valid {
+            return Err(failure(
+                &unit.source,
+                "T0028",
+                format!(
+                    "`.{}` argument is incompatible with `{receiver_type}`",
+                    family.source_name()
+                ),
+                argument.span,
+            ));
+        }
+    }
+    let fixed = receiver_type != ScalarType::Int;
+    let child_allowed = match method.child {
+        "default" => true,
+        "checked" => {
+            fixed
+                || matches!(
+                    family,
+                    ArithmeticFamily::Divide
+                        | ArithmeticFamily::Remainder
+                        | ArithmeticFamily::DivRem
+                )
+        }
+        "wrap" => fixed && !matches!(family, ArithmeticFamily::DivRem | ArithmeticFamily::Negate),
+        "saturate" | "overflowing" => {
+            fixed
+                && !matches!(
+                    family,
+                    ArithmeticFamily::DivRem
+                        | ArithmeticFamily::ShiftLeft
+                        | ArithmeticFamily::ShiftRight
+                )
+        }
+        _ => false,
+    };
+    if !child_allowed {
+        return Err(failure(
+            &unit.source,
+            "T0029",
+            format!(
+                "`.{}.{}` is not available on `{receiver_type}`",
+                family.source_name(),
+                method.child
+            ),
+            callee.span,
+        ));
+    }
+    let result = if method.child == "overflowing" {
+        ValueType::OverflowResult(receiver_type)
+    } else if family == ArithmeticFamily::DivRem {
+        if method.child == "checked" {
+            return Err(failure(
+                &unit.source,
+                "T0030",
+                "`div-rem.checked` optional result values are not yet representable",
+                callee.span,
+            ));
+        }
+        ValueType::DivRemResult(receiver_type)
+    } else if method.child == "checked" {
+        ValueType::ScalarOrNone(receiver_type)
+    } else {
+        ValueType::Scalar(receiver_type)
+    };
+    Ok(Some(result))
 }
 
 fn infer_integer_coercion_type(
@@ -3091,7 +3505,8 @@ pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<B
         "coerce" => Some((MemberFamily::Coerce, "default")),
         "parse" => Some((MemberFamily::Parse, "default")),
         "radix" => Some((MemberFamily::Radix, "default")),
-        _ => None,
+        name => ArithmeticFamily::from_source_name(name)
+            .map(|family| (MemberFamily::Arithmetic(family), "default")),
     };
     if let Some((family, child)) = direct {
         return Some(BoundMethod {
@@ -3111,6 +3526,19 @@ pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<B
         ("coerce", "wrap") => (MemberFamily::Coerce, "wrap"),
         ("coerce", "saturate") => (MemberFamily::Coerce, "saturate"),
         ("parse", "checked") => (MemberFamily::Parse, "checked"),
+        (family, child @ ("checked" | "wrap" | "saturate" | "overflowing")) => {
+            let child = match child {
+                "checked" => "checked",
+                "wrap" => "wrap",
+                "saturate" => "saturate",
+                "overflowing" => "overflowing",
+                _ => unreachable!(),
+            };
+            (
+                MemberFamily::Arithmetic(ArithmeticFamily::from_source_name(family)?),
+                child,
+            )
+        }
         _ => return None,
     };
     Some(BoundMethod {
@@ -3167,10 +3595,31 @@ fn member_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
     let [receiver, member] = node.children.as_slice() else {
         return false;
     };
+    if node_text(&unit.source, member) == "remainder"
+        && receiver.kind == SyntaxKind::Name
+        && unit.typed_bindings.iter().rev().any(|binding| {
+            binding.name == node_text(&unit.source, receiver)
+                && binding.span.start <= receiver.span.start
+                && matches!(binding.value_type, ValueType::DivRemResult(_))
+        })
+    {
+        return false;
+    }
     node.kind == SyntaxKind::MemberExpression
         && (matches!(
             node_text(&unit.source, member),
-            "coerce" | "parse" | "radix"
+            "coerce"
+                | "parse"
+                | "radix"
+                | "add"
+                | "subtract"
+                | "multiply"
+                | "divide"
+                | "remainder"
+                | "div-rem"
+                | "negate"
+                | "shift-left"
+                | "shift-right"
         ) || member_family_receiver(unit, receiver))
 }
 
@@ -3315,6 +3764,7 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
     let text = node_text(source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
+        value if value.starts_with("b'") => Some(ScalarType::Bytes),
         value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
         value if value.contains('.') => Some(ScalarType::Float64),
         _ => Some(ScalarType::Int),
@@ -4333,11 +4783,14 @@ fn validate_flow_statement(
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
                 let collection_type = infer_value_type(unit, collection, bindings)?;
-                if collection_type != Some(ValueType::Scalar(ScalarType::String)) {
+                if !matches!(
+                    collection_type,
+                    Some(ValueType::Scalar(ScalarType::String | ScalarType::Bytes))
+                ) {
                     return Err(failure(
                         &unit.source,
                         "T0016",
-                        "version-one collection iteration supports `string` only",
+                        "collection iteration requires `string` or `bytes`",
                         collection.span,
                     ));
                 }
@@ -4345,14 +4798,19 @@ fn validate_flow_statement(
                     return Err(failure(
                         &unit.source,
                         "T0016",
-                        "string iteration requires exactly one target",
+                        "string and bytes iteration require exactly one target",
                         target.span,
                     ));
                 }
+                let item_type = if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
+                    ValueType::Scalar(ScalarType::Uint8)
+                } else {
+                    ValueType::Scalar(ScalarType::String)
+                };
                 loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
-                    value_type: ValueType::Scalar(ScalarType::String),
+                    value_type: item_type,
                     destination_arms: Vec::new(),
                     storage_type: None,
                     mutable: false,
@@ -4643,7 +5101,7 @@ fn visible_from(symbol: &Symbol, namespace: &str) -> bool {
 }
 
 fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
-    const PRELUDE: [(&str, &str, &str); 7] = [
+    const PRELUDE: [(&str, &str, &str); 12] = [
         ("print", "/core/output::print", "/core/output"),
         ("int", "/core/types::int", "/core/types"),
         ("float", "/core/types::float", "/core/types"),
@@ -4651,6 +5109,11 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
         ("string", "/core/types::string", "/core/types"),
         ("bytes", "/core/types::bytes", "/core/types"),
         ("none", "/core/types::none", "/core/types"),
+        ("utf8", "/core/encodings::utf8", "/core/encodings"),
+        ("utf16-le", "/core/encodings::utf16-le", "/core/encodings"),
+        ("utf16-be", "/core/encodings::utf16-be", "/core/encodings"),
+        ("utf32-le", "/core/encodings::utf32-le", "/core/encodings"),
+        ("utf32-be", "/core/encodings::utf32-be", "/core/encodings"),
     ];
     PRELUDE
         .into_iter()
@@ -4663,9 +5126,11 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     namespace: namespace.to_owned(),
                     visibility: Visibility::Public,
                     global: false,
-                    constant: false,
+                    constant: name != "print",
                     kind: if name == "print" {
                         SymbolKind::Function
+                    } else if identity.starts_with("/core/encodings::") {
+                        SymbolKind::Binding
                     } else {
                         SymbolKind::TypeDescriptor
                     },

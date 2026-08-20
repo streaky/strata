@@ -6,9 +6,9 @@ use crate::{
     ScalarType, SourceFile, TypeCategory,
     rust_ir::{Item, Module, Program},
     semantics::{
-        CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily, SemanticPackage,
-        SemanticUnit, SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, bound_method,
-        contextual_constant, promoted_integer_type,
+        ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
+        SemanticPackage, SemanticUnit, SymbolKind, TypedBinding, ValueType,
+        binding_span_is_mutated, bound_method, contextual_constant, promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -568,7 +568,7 @@ impl Emitter<'_> {
             .value_type(value)
             .and_then(|value_type| match value_type {
                 ValueType::Scalar(scalar) => Some(scalar),
-                ValueType::ScalarOrNone(_) => None,
+                _ => None,
             });
         let constant = binding
             .destination_arms
@@ -977,6 +977,25 @@ impl Emitter<'_> {
             match binding.value_type {
                 ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
                 ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
+                ValueType::OverflowResult(scalar) => {
+                    format!("terrane_int_support::OverflowResult<{}>", rust_type(scalar))
+                }
+                ValueType::DivRemResult(scalar) => {
+                    format!("terrane_int_support::DivRemResult<{}>", rust_type(scalar))
+                }
+                ValueType::StringView(crate::semantics::TextUnit::Bytes) => "Vec<u8>".to_owned(),
+                ValueType::StringView(
+                    crate::semantics::TextUnit::Scalars | crate::semantics::TextUnit::Graphemes,
+                )
+                | ValueType::StringList => "Vec<String>".to_owned(),
+                ValueType::TextRange | ValueType::TextRangeView(_) => {
+                    "terrane_string_support::TextRange".to_owned()
+                }
+                ValueType::TextRangeOrNone => {
+                    "Option<terrane_string_support::TextRange>".to_owned()
+                }
+                ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
+                ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
             }
         });
         let initializer = binding_initializer(node, name_index);
@@ -1111,10 +1130,17 @@ impl Emitter<'_> {
                     ""
                 };
                 let name = rust_name(self.text(name));
+                let collection_type = self.value_type(collection);
                 let collection = self.expression(collection);
-                self.line(&format!(
-                    "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
-                ));
+                if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
+                    self.line(&format!(
+                        "for {mutable}{name} in ({collection}).iter().copied() {{"
+                    ));
+                } else {
+                    self.line(&format!(
+                        "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
+                    ));
+                }
                 self.indent += 1;
                 let outer_continue = self.continue_label.take();
                 let outer_loop = std::mem::replace(&mut self.in_loop, true);
@@ -1308,7 +1334,7 @@ impl Emitter<'_> {
     fn numeric_operation_type(&self, left: &SyntaxNode, right: &SyntaxNode) -> Option<ScalarType> {
         let scalar = |value_type| match value_type {
             ValueType::Scalar(scalar) => Some(scalar),
-            ValueType::ScalarOrNone(_) => None,
+            _ => None,
         };
         let left_type = self.value_type(left).and_then(scalar);
         let right_type = self.value_type(right).and_then(scalar);
@@ -1581,6 +1607,7 @@ impl Emitter<'_> {
         match node.kind {
             SyntaxKind::Literal => match self.text(node).trim() {
                 "true" | "false" => Some(ValueType::Scalar(ScalarType::Bool)),
+                text if text.starts_with("b'") => Some(ValueType::Scalar(ScalarType::Bytes)),
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
@@ -1625,7 +1652,65 @@ impl Emitter<'_> {
         let receiver_type = self.value_type(receiver);
         let receiver = self.expression(receiver);
         match self.text(member) {
-            "length" => format!("terrane_string_support::length(&{receiver}) as i128"),
+            "bytes" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("({receiver}).as_bytes().to_vec()")
+            }
+            "scalars" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("({receiver}).chars().map(|value| value.to_string()).collect::<Vec<_>>()")
+            }
+            "graphemes" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("terrane_string_support::graphemes(&({receiver})).collect::<Vec<_>>()")
+            }
+            "text" if receiver_type == Some(ValueType::TextRange) => {
+                format!("({receiver}).text().to_owned()")
+            }
+            "bytes" | "scalars" | "graphemes" if receiver_type == Some(ValueType::TextRange) => {
+                receiver
+            }
+            boundary @ ("start" | "end") => {
+                let method = match (receiver_type, boundary) {
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)),
+                        "start",
+                    ) => "byte_start",
+                    (Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)), "end") => {
+                        "byte_end"
+                    }
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Scalars)),
+                        "start",
+                    ) => "scalar_start",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Scalars)),
+                        "end",
+                    ) => "scalar_end",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Graphemes)),
+                        "start",
+                    ) => "grapheme_start",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Graphemes)),
+                        "end",
+                    ) => "grapheme_end",
+                    _ => unreachable!("semantic analysis validated text-range boundary"),
+                };
+                format!("({receiver}).{method}() as i128")
+            }
+            "length" => match receiver_type {
+                Some(
+                    ValueType::StringView(crate::semantics::TextUnit::Bytes)
+                    | ValueType::Scalar(ScalarType::Bytes),
+                ) => {
+                    format!("({receiver}).len() as i128")
+                }
+                Some(
+                    ValueType::StringView(
+                        crate::semantics::TextUnit::Scalars | crate::semantics::TextUnit::Graphemes,
+                    )
+                    | ValueType::StringList,
+                ) => format!("({receiver}).len() as i128"),
+                _ => format!("terrane_string_support::length(&{receiver}) as i128"),
+            },
             "type" => "()".to_owned(),
             mode @ ("round" | "floor" | "ceiling" | "truncate")
                 if matches!(
@@ -1661,12 +1746,24 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
+        if let Some(string_call) = self.string_call(node, callee, arguments) {
+            return string_call;
+        }
         if let Some(method) = bound_method(self.source, callee) {
             let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
                 .expect("validated bound method receiver");
             let receiver = self.expression(receiver_node);
             if method.family == MemberFamily::Coerce {
                 return self.integer_coercion(&method, receiver_node, callee, arguments);
+            }
+            if let MemberFamily::Arithmetic(family) = method.family {
+                return self.arithmetic_family(
+                    family,
+                    method.child,
+                    receiver_node,
+                    arguments,
+                    node,
+                );
             }
             let argument = arguments
                 .children
@@ -1692,7 +1789,7 @@ impl Emitter<'_> {
                 MemberFamily::Radix => {
                     format!("terrane_int_support::format_radix(&({receiver}), &({argument}))")
                 }
-                MemberFamily::Coerce => unreachable!(),
+                MemberFamily::Coerce | MemberFamily::Arithmetic(_) => unreachable!(),
             };
             return if method.family == MemberFamily::Parse && !callback_throws {
                 if method.child == "checked" {
@@ -1934,6 +2031,250 @@ impl Emitter<'_> {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn string_call(
+        &mut self,
+        node: &SyntaxNode,
+        callee: &SyntaxNode,
+        arguments: &SyntaxNode,
+    ) -> Option<String> {
+        let [receiver, member] = callee.children.as_slice() else {
+            return None;
+        };
+        if callee.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let mut subject = receiver;
+        let mut family = self.text(member).to_owned();
+        let mut child = "default".to_owned();
+        if receiver.kind == SyntaxKind::MemberExpression
+            && let [nested_subject, nested_family] = receiver.children.as_slice()
+            && matches!(
+                self.text(nested_family),
+                "trim" | "contains" | "find" | "normalise" | "upper" | "lower"
+            )
+        {
+            subject = nested_subject;
+            self.text(nested_family).clone_into(&mut family);
+            self.text(member).clone_into(&mut child);
+        }
+        if !matches!(
+            family.as_str(),
+            "trim"
+                | "contains"
+                | "find"
+                | "upper"
+                | "lower"
+                | "normalise"
+                | "case-fold"
+                | "split"
+                | "replace"
+                | "encode"
+                | "decode"
+        ) {
+            return None;
+        }
+        let receiver = self.expression(subject);
+        let values = arguments
+            .children
+            .iter()
+            .map(|argument| argument.children.last().unwrap_or(argument))
+            .map(|value| self.expression(value))
+            .collect::<Vec<_>>();
+        let result = match (family.as_str(), child.as_str()) {
+            ("trim", mode) => {
+                let helper = match mode {
+                    "default" => "trim",
+                    "start" => "trim_start",
+                    "end" => "trim_end",
+                    _ => unreachable!(),
+                };
+                let pattern = values
+                    .first()
+                    .map_or_else(|| "None".to_owned(), |value| format!("Some(&({value}))"));
+                format!("terrane_string_support::{helper}(&({receiver}), {pattern})")
+            }
+            ("contains", "default") => format!("({receiver}).contains(&({}))", values[0]),
+            ("contains", "start") => format!("({receiver}).starts_with(&({}))", values[0]),
+            ("contains", "end") => format!("({receiver}).ends_with(&({}))", values[0]),
+            ("find", "default") => {
+                format!(
+                    "terrane_string_support::find(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("find", "all") => {
+                format!(
+                    "terrane_string_support::find_all(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("find", "count") => format!(
+                "terrane_int_support::Int::from(terrane_string_support::find_all(&({receiver}), &({})).len() as i128)",
+                values[0]
+            ),
+            ("upper", mode) => {
+                let helper = match mode {
+                    "default" => "upper",
+                    "first" => "upper_first",
+                    "words" => "upper_words",
+                    _ => unreachable!(),
+                };
+                format!("terrane_string_support::{helper}(&({receiver}))")
+            }
+            ("lower", mode) => {
+                let helper = match mode {
+                    "default" => "lower",
+                    "first" => "lower_first",
+                    _ => unreachable!(),
+                };
+                format!("terrane_string_support::{helper}(&({receiver}))")
+            }
+            ("case-fold", _) => format!("terrane_string_support::case_fold(&({receiver}))"),
+            ("normalise", form) => {
+                format!("terrane_string_support::normalise(&({receiver}), {form:?})")
+            }
+            ("split", _) => {
+                format!(
+                    "terrane_string_support::split(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("replace", _) => format!(
+                "terrane_string_support::replace(&({receiver}), &({}), &({}))",
+                values[0], values[1]
+            ),
+            ("encode", _) => {
+                format!(
+                    "terrane_string_support::encode(&({receiver}), {})",
+                    values[0]
+                )
+            }
+            ("decode", _) => {
+                format!(
+                    "terrane_string_support::decode_or_fail(&({receiver}), {})",
+                    values[0]
+                )
+            }
+            _ => unreachable!("semantic analysis validated string family"),
+        };
+        let _ = node;
+        Some(result)
+    }
+    #[allow(clippy::too_many_lines)]
+    fn arithmetic_family(
+        &mut self,
+        family: ArithmeticFamily,
+        child: &str,
+        receiver_node: &SyntaxNode,
+        arguments: &SyntaxNode,
+        call: &SyntaxNode,
+    ) -> String {
+        let Some(ValueType::Scalar(receiver_type)) = self.value_type(receiver_node) else {
+            unreachable!("validated arithmetic receiver");
+        };
+        let receiver = if receiver_type == ScalarType::Int {
+            self.adaptive_expression(receiver_node)
+        } else {
+            self.expression(receiver_node)
+        };
+        let argument = arguments
+            .children
+            .first()
+            .and_then(|argument| argument.children.last())
+            .map(|argument| {
+                if receiver_type == ScalarType::Int {
+                    self.adaptive_expression(argument)
+                } else if matches!(
+                    family,
+                    ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+                ) {
+                    self.expression(argument)
+                } else {
+                    self.expression_as(argument, ValueType::Scalar(receiver_type))
+                }
+            });
+        if receiver_type == ScalarType::Int {
+            let expression = match family {
+                ArithmeticFamily::Add => format!("({receiver} + {})", argument.unwrap()),
+                ArithmeticFamily::Subtract => format!("({receiver} - {})", argument.unwrap()),
+                ArithmeticFamily::Multiply => format!("({receiver} * {})", argument.unwrap()),
+                ArithmeticFamily::Divide => {
+                    format!("({receiver}).euclidean_div(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::Remainder => {
+                    format!("({receiver}).modulo(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::DivRem => {
+                    format!("({receiver}).div_rem(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::Negate => format!("-({receiver})"),
+                ArithmeticFamily::ShiftLeft => {
+                    format!("({receiver}).shift_left(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::ShiftRight => {
+                    format!("({receiver}).shift_right(&({}))", argument.unwrap())
+                }
+            };
+            return if child == "checked" {
+                format!("({expression}).ok()")
+            } else if matches!(
+                family,
+                ArithmeticFamily::Divide
+                    | ArithmeticFamily::Remainder
+                    | ArithmeticFamily::DivRem
+                    | ArithmeticFamily::ShiftLeft
+                    | ArithmeticFamily::ShiftRight
+            ) {
+                self.fallible(expression, call)
+            } else {
+                expression
+            };
+        }
+        let operation = match family {
+            ArithmeticFamily::Add => "addition",
+            ArithmeticFamily::Subtract => "subtraction",
+            ArithmeticFamily::Multiply => "multiplication",
+            ArithmeticFamily::Divide => "division",
+            ArithmeticFamily::Remainder => "remainder",
+            ArithmeticFamily::DivRem => "div_rem",
+            ArithmeticFamily::Negate => "negation",
+            ArithmeticFamily::ShiftLeft => "shift_left",
+            ArithmeticFamily::ShiftRight => "shift_right",
+        };
+        let helper = if child == "default" {
+            format!("fixed_{operation}")
+        } else {
+            format!("fixed_{operation}_{child}")
+        };
+        let expression = if family == ArithmeticFamily::Negate {
+            format!("terrane_int_support::{helper}({receiver})")
+        } else if matches!(
+            family,
+            ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+        ) {
+            format!(
+                "terrane_int_support::{helper}({receiver}, &({}))",
+                argument.unwrap()
+            )
+        } else {
+            format!(
+                "terrane_int_support::{helper}({receiver}, {})",
+                argument.unwrap()
+            )
+        };
+        let fallible = child == "default"
+            || matches!(
+                family,
+                ArithmeticFamily::Divide | ArithmeticFamily::Remainder | ArithmeticFamily::DivRem
+            );
+        if fallible {
+            self.fallible(expression, call)
+        } else {
+            expression
+        }
+    }
+
     fn integer_coercion(
         &mut self,
         method: &crate::BoundMethod,
@@ -2009,7 +2350,7 @@ impl Emitter<'_> {
                 .value_type(receiver)
                 .and_then(|value_type| match value_type {
                     ValueType::Scalar(value_type) => Some(format!("type:{value_type}")),
-                    ValueType::ScalarOrNone(_) => None,
+                    _ => None,
                 });
         }
         crate::semantics::descriptor_expression_type(self.package, self.unit, node)
@@ -2046,6 +2387,17 @@ impl Emitter<'_> {
 
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
+        let encoding = match source_name {
+            "utf8" => Some("Utf8"),
+            "utf16-le" => Some("Utf16Le"),
+            "utf16-be" => Some("Utf16Be"),
+            "utf32-le" => Some("Utf32Le"),
+            "utf32-be" => Some("Utf32Be"),
+            _ => None,
+        };
+        if let Some(encoding) = encoding {
+            return format!("terrane_string_support::Encoding::{encoding}");
+        }
         if let Some((_, local)) = self
             .namespace_initializer
             .as_ref()
@@ -2271,6 +2623,10 @@ fn literal(text: &str) -> String {
     if trimmed == "true" || trimmed == "false" {
         return trimmed.to_owned();
     }
+    if trimmed.starts_with("b'") && trimmed.ends_with('\'') {
+        let value = unescape_bytes(&trimmed[2..trimmed.len() - 1]);
+        return format!("Vec::from({value:?})");
+    }
     let compact = trimmed.replace('_', "");
     if let Some(value) = integer_literal(&compact) {
         return value.to_string();
@@ -2392,6 +2748,38 @@ fn unescape(value: &str) -> String {
             }
         } else {
             output.push(character);
+        }
+    }
+    output
+}
+
+fn unescape_bytes(value: &str) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            let mut encoded = [0_u8; 4];
+            output.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => output.push(b'\n'),
+            Some('r') => output.push(b'\r'),
+            Some('t') => output.push(b'\t'),
+            Some('0') => output.push(0),
+            Some('\\') | None => output.push(b'\\'),
+            Some('\'') => output.push(b'\''),
+            Some('x') => {
+                let high = chars.next().and_then(|digit| digit.to_digit(16));
+                let low = chars.next().and_then(|digit| digit.to_digit(16));
+                if let (Some(high), Some(low)) = (high, low) {
+                    output.push(u8::try_from((high << 4) | low).expect("two hex digits fit u8"));
+                }
+            }
+            Some(other) => {
+                let mut encoded = [0_u8; 4];
+                output.extend_from_slice(other.encode_utf8(&mut encoded).as_bytes());
+            }
         }
     }
     output

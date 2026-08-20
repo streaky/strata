@@ -434,7 +434,7 @@ fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     )?;
     write_if_changed(
         &string.join("Cargo.toml"),
-        b"[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-segmentation = \"1\"\n",
+        b"[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-casefold = \"0.2\"\nunicode-normalization = \"0.1\"\nunicode-segmentation = \"1\"\n",
     )?;
     write_if_changed(
         &string.join("src/lib.rs"),
