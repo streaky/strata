@@ -8,8 +8,8 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
         SemanticPackage, SemanticUnit, SymbolKind, TypedBinding, ValueType,
-        binding_span_is_mutated, bound_method, contextual_constant, is_narrowed_text_range,
-        promoted_integer_type,
+        binding_span_is_mutated, bound_method, contextual_constant, narrowed_optional_type,
+        narrowed_value_type, promoted_integer_type,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -697,7 +697,11 @@ impl Emitter<'_> {
                         self.expression(right)
                     };
                     let value = Self::unwrapped_expression(value);
-                    let target = self.expression(left);
+                    let target = if left.kind == SyntaxKind::Name {
+                        rust_name(self.text(left))
+                    } else {
+                        self.expression(left)
+                    };
                     self.line(&format!("{target} = {value};"));
                 }
             }
@@ -1241,6 +1245,18 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if let ValueType::ScalarOrNone(scalar) = value_type {
+            return if self.value_type(node) == Some(value_type) {
+                self.expression(node)
+            } else if node.kind == SyntaxKind::Name && self.text(node) == "none" {
+                "None".to_owned()
+            } else {
+                format!(
+                    "Some({})",
+                    self.expression_as(node, ValueType::Scalar(scalar))
+                )
+            };
+        }
         if let ValueType::Scalar(destination) = value_type
             && (node.kind != SyntaxKind::Literal
                 || self.value_type(node) != Some(ValueType::Scalar(destination)))
@@ -2429,11 +2445,26 @@ impl Emitter<'_> {
         if source_name == "none" {
             return "None".to_owned();
         }
-        if is_narrowed_text_range(self.unit, node, &self.unit.typed_bindings) {
-            return format!(
-                "{}.as_ref().expect(\"semantic text-range narrowing\")",
+        let narrowed =
+            narrowed_value_type(self.unit, node, &self.unit.typed_bindings).or_else(|| {
+                self.parameter_types
+                    .iter()
+                    .rev()
+                    .find(|(name, _)| name == source_name)
+                    .and_then(|(_, value_type)| {
+                        narrowed_optional_type(self.unit, node, *value_type)
+                    })
+            });
+        if let Some(narrowed) = narrowed {
+            let access = format!(
+                "{}.as_ref().expect(\"semantic optional narrowing\")",
                 rust_name(source_name)
             );
+            return if matches!(narrowed, ValueType::Scalar(_)) {
+                format!("*{access}")
+            } else {
+                access
+            };
         }
         if let Some((_, local)) = self
             .namespace_initializer

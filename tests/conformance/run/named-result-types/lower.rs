@@ -115,6 +115,6 @@ fn main() {
     let text: String = String::from("banana");
     let found: Option<terrane_string_support::TextRange> = terrane_string_support::find(&(text), &(String::from("ana")));
     if found != None {
-        println!("{}", terrane_scalar_support::scalar_text(&((found.as_ref().expect("semantic text-range narrowing")).text().to_owned())));
+        println!("{}", terrane_scalar_support::scalar_text(&((found.as_ref().expect("semantic optional narrowing")).text().to_owned())));
     }
 }

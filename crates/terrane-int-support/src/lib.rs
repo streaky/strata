@@ -541,9 +541,7 @@ macro_rules! fixed_width_arithmetic {
                 let Some(quotient) = self.checked_div_euclid(rhs) else {
                     return Ok(None);
                 };
-                let remainder = self
-                    .checked_sub(quotient.checked_mul(rhs).expect("representable Euclidean product"))
-                    .expect("representable Euclidean remainder");
+                let remainder = self.wrapping_sub(quotient.wrapping_mul(rhs));
                 Ok(Some((quotient, remainder)))
             }
             fn checked_remainder(self, rhs: Self) -> Result<Option<Self>, ArithmeticError> {

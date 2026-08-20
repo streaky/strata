@@ -2623,7 +2623,15 @@ fn analyze_binding_node(
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
-        let value_type = if let (Some(inferred), Some(initializer), Ok(_)) = (
+        let aliases = visible_descriptor_aliases(
+            &unit.descriptor_aliases,
+            unit.source.id(),
+            type_node.span.start,
+        );
+        let declared_type = declared_value_type(unit, type_node, &aliases);
+        let value_type = if matches!(declared_type, Ok(ValueType::ScalarOrNone(_))) {
+            declared_type?
+        } else if let (Some(inferred), Some(initializer), Ok(_)) = (
             inferred,
             initializer,
             union_destination_candidates(unit, type_node),
@@ -2635,15 +2643,7 @@ fn analyze_binding_node(
                 inferred,
             )?)
         } else {
-            declared_value_type(
-                unit,
-                type_node,
-                &visible_descriptor_aliases(
-                    &unit.descriptor_aliases,
-                    unit.source.id(),
-                    type_node.span.start,
-                ),
-            )?
+            declared_type?
         };
         if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
             validate_value_destination(
@@ -2661,9 +2661,13 @@ fn analyze_binding_node(
     } else {
         return Ok(());
     };
-    let destination_arms = declared
-        .and_then(|type_node| union_destination_candidates(unit, type_node).ok())
-        .unwrap_or_default();
+    let destination_arms = if matches!(value_type, ValueType::ScalarOrNone(_)) {
+        Vec::new()
+    } else {
+        declared
+            .and_then(|type_node| union_destination_candidates(unit, type_node).ok())
+            .unwrap_or_default()
+    };
     let storage_type = (value_type == ValueType::Scalar(ScalarType::Int))
         .then(|| initializer.and_then(|value| small_int_storage(unit, value, inferred)))
         .flatten();
@@ -2684,6 +2688,26 @@ fn declared_value_type(
     type_node: &SyntaxNode,
     aliases: &BTreeMap<String, ScalarType>,
 ) -> Result<ValueType, SemanticFailure> {
+    if let Some(union) = type_node
+        .children
+        .first()
+        .filter(|child| child.kind == SyntaxKind::UnionType)
+    {
+        let mut non_none = union
+            .children
+            .iter()
+            .filter(|arm| node_text(&unit.source, arm).trim() != "none");
+        if union.children.len() == 2
+            && let Some(arm) = non_none.next()
+            && non_none.next().is_none()
+            && let Some(scalar) = aliases
+                .get(node_text(&unit.source, arm).trim())
+                .copied()
+                .or_else(|| ScalarType::from_source_name(node_text(&unit.source, arm).trim()))
+        {
+            return Ok(ValueType::ScalarOrNone(scalar));
+        }
+    }
     let type_name = node_text(&unit.source, type_node).trim();
     for (constructor, construct) in [
         (
@@ -2850,6 +2874,12 @@ fn validate_value_destination(
     if let ValueType::Scalar(expected) = expected {
         return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
     }
+    if let ValueType::ScalarOrNone(expected) = expected {
+        if actual == ValueType::Scalar(ScalarType::None) {
+            return Ok(());
+        }
+        return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
+    }
     if expected == actual {
         return Ok(());
     }
@@ -2880,7 +2910,103 @@ const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
 
-fn enclosed_by_guard(
+fn enclosing_function_span(root: &SyntaxNode, position: usize) -> Option<Span> {
+    root.children
+        .iter()
+        .filter(|child| child.span.start <= position && position <= child.span.end)
+        .find_map(|child| {
+            (child.kind == SyntaxKind::FunctionDeclaration)
+                .then_some(child.span)
+                .or_else(|| enclosing_function_span(child, position))
+        })
+}
+
+fn optional_inner(value_type: ValueType) -> Option<ValueType> {
+    match value_type {
+        ValueType::ScalarOrNone(scalar) => Some(ValueType::Scalar(scalar)),
+        ValueType::TextRangeOrNone => Some(ValueType::TextRange),
+        _ => None,
+    }
+}
+
+fn membership_names<'a>(
+    source: &'a SourceFile,
+    node: &'a SyntaxNode,
+) -> Option<(&'a str, &'a str)> {
+    let [left, right] = node.children.as_slice() else {
+        return None;
+    };
+    Some((node_text(source, left), node_text(source, right)))
+}
+
+fn condition_proves_present(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
+    if node.kind == SyntaxKind::GroupExpression {
+        return node
+            .children
+            .first()
+            .is_some_and(|child| condition_proves_present(source, child, name));
+    }
+    if node.kind == SyntaxKind::BinaryExpression {
+        let [left, right] = node.children.as_slice() else {
+            return false;
+        };
+        let operator = source.text()[left.span.end..right.span.start].trim();
+        let names = (node_text(source, left), node_text(source, right));
+        return operator == "!="
+            && matches!(names, (left, "none") | ("none", left) if left == name);
+    }
+    if node.kind == SyntaxKind::UnaryExpression
+        && let Some(child) = node.children.first()
+        && source.text()[node.span.start..child.span.start].trim() == "not"
+    {
+        let child = child.children.first().unwrap_or(child);
+        return child.kind == SyntaxKind::TypeMembershipExpression
+            && membership_names(source, child).is_some_and(|names| names == (name, "none"));
+    }
+    false
+}
+
+fn is_presence_test_occurrence(
+    source: &SourceFile,
+    current: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if current.kind == SyntaxKind::BinaryExpression
+        && condition_proves_present(source, current, name)
+    {
+        return true;
+    }
+    current
+        .children
+        .iter()
+        .filter(|child| child.span.start <= position && position <= child.span.end)
+        .any(|child| is_presence_test_occurrence(source, child, position, name))
+}
+
+fn assigns_name_before(
+    source: &SourceFile,
+    node: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if node.span.start >= position {
+        return false;
+    }
+    if node.kind == SyntaxKind::Assignment
+        && node
+            .children
+            .first()
+            .is_some_and(|target| node_text(source, target) == name)
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| assigns_name_before(source, child, position, name))
+}
+
+fn enclosed_by_present_guard(
     source: &SourceFile,
     current: &SyntaxNode,
     position: usize,
@@ -2894,39 +3020,46 @@ fn enclosed_by_guard(
                 && position <= child.span.end
         })
     {
-        let condition = node_text(source, condition)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if condition == format!("{name} != none")
-            || condition == format!("none != {name}")
-            || condition == format!("not ({name} is none)")
+        if condition_proves_present(source, condition, name)
+            && !assigns_name_before(source, block, position, name)
         {
             return true;
         }
-        return enclosed_by_guard(source, block, position, name);
+        return enclosed_by_present_guard(source, block, position, name);
     }
     current
         .children
         .iter()
         .filter(|child| child.span.start <= position && position <= child.span.end)
-        .any(|child| enclosed_by_guard(source, child, position, name))
+        .any(|child| enclosed_by_present_guard(source, child, position, name))
 }
-pub(crate) fn is_narrowed_text_range(
+
+pub(crate) fn narrowed_optional_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    value_type: ValueType,
+) -> Option<ValueType> {
+    let name = node_text(&unit.source, node);
+    if is_presence_test_occurrence(&unit.source, &unit.tree.root, node.span.start, name) {
+        return None;
+    }
+    let inner = optional_inner(value_type)?;
+    enclosed_by_present_guard(&unit.source, &unit.tree.root, node.span.start, name).then_some(inner)
+}
+
+pub(crate) fn narrowed_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
     bindings: &[TypedBinding],
-) -> bool {
+) -> Option<ValueType> {
     let name = node_text(&unit.source, node);
-    if !bindings.iter().rev().any(|binding| {
+    let function_span = enclosing_function_span(&unit.tree.root, node.span.start);
+    let binding = bindings.iter().rev().find(|binding| {
         binding.name == name
             && binding.span.start <= node.span.start
-            && binding.value_type == ValueType::TextRangeOrNone
-    }) {
-        return false;
-    }
-
-    enclosed_by_guard(&unit.source, &unit.tree.root, node.span.start, name)
+            && enclosing_function_span(&unit.tree.root, binding.span.start) == function_span
+    })?;
+    narrowed_optional_type(unit, node, binding.value_type)
 }
 #[expect(
     clippy::too_many_lines,
@@ -2963,13 +3096,7 @@ fn infer_value_type(
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
         {
             return Ok(Some(
-                if binding.value_type == ValueType::TextRangeOrNone
-                    && is_narrowed_text_range(unit, node, bindings)
-                {
-                    ValueType::TextRange
-                } else {
-                    binding.value_type
-                },
+                narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type),
             ));
         }
         let resolved_encoding = lexical_scope_chain(unit, node.span.start)
