@@ -757,7 +757,7 @@ Contracts:
 - Cache keys include source set, compiler version, target, dependencies, import/modifier plans, build selections, relevant options.
 - Conformance cases are implementation truth. Accepted compile cases compile generated crates; runtime changes execute; generated-Rust goldens reviewed.
 - Source warnings do not fail `check`/`rust`/`build`/`run`; generated/compiler Rust warnings remain denied. Warning conformance files match code, source-relative span, severity, message, order, and multiplicity exactly.
-- Binding usage is indexed once by resolved declaration identity. `W4001`: initialized local value is never read. `W4002`: initial/later store cannot reach a read before definite replacement; conditional stores do not kill incoming values. Lowering explicitly consumes dead stores and unused loop targets.
+- Binding usage is indexed once by resolved declaration identity. `W4001`: initialized local value is never read. `W4002`: initial/later store cannot reach a read before definite replacement; conditional stores do not kill incoming values. Parameters and loop targets are excluded from `W4001`; parameter-name linting is deferred to an explicit policy. Lowering consumes warning-only locals so generated Rust stays warning-free.
 - See `docs/compiler-plan.md` for milestone sequencing; do not infer implementation status from this design reference.
 
 ## DIAGNOSTIC HOTSPOTS

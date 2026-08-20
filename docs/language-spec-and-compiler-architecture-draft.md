@@ -4432,9 +4432,12 @@ Binding-use analysis is resolved by declaration identity and recorded once per s
 shadowing does not merge unrelated bindings and later lowering does not repeatedly scan whole
 syntax trees. `W4001` reports an initialized local binding whose value is never read. `W4002`
 reports an initial or later assignment whose stored value cannot reach a subsequent read before a
-definite replacement. Conditional stores do not by themselves kill the incoming value. Generated
-Rust explicitly consumes dead stores and unused loop targets so source-level warnings do not leak
-into opaque `rustc` warning failures.
+definite replacement. Conditional stores do not by themselves kill the incoming value. Parameters
+do not receive unused-binding warnings: an unused parameter can be required by a callable contract,
+and parameter-name linting belongs to a later explicit policy rather than these local-store
+diagnostics. Loop targets likewise remain outside `W4001`; generated Rust explicitly consumes unused
+loop targets, dead stores, and other warning-only locals so source-level warnings do not leak into
+opaque `rustc` warning failures.
 
 
 ### 29.1 Bidirectional maps

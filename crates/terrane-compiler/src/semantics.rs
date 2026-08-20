@@ -353,6 +353,7 @@ pub struct SemanticUnit {
     /// Function contracts declared by every source unit in this unit's namespace.
     pub functions: Vec<FunctionContract>,
     function_aliases: BTreeMap<String, FunctionContract>,
+    enclosing_function_spans: BTreeMap<usize, Option<Span>>,
     descriptor_aliases: BTreeMap<String, Vec<DescriptorAlias>>,
     pub unreachable_spans: Vec<Span>,
     pub evaluation_steps: Vec<EvaluationStep>,
@@ -420,6 +421,26 @@ struct Import {
     span: Span,
 }
 
+fn index_enclosing_function_spans(root: &SyntaxNode) -> BTreeMap<usize, Option<Span>> {
+    fn visit(
+        node: &SyntaxNode,
+        enclosing_function: Option<Span>,
+        spans: &mut BTreeMap<usize, Option<Span>>,
+    ) {
+        let enclosing_function = (node.kind == SyntaxKind::FunctionDeclaration)
+            .then_some(node.span)
+            .or(enclosing_function);
+        spans.insert(node.span.start, enclosing_function);
+        for child in &node.children {
+            visit(child, enclosing_function, spans);
+        }
+    }
+
+    let mut spans = BTreeMap::new();
+    visit(root, None, &mut spans);
+    spans
+}
+
 fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> {
     let mut units = Vec::with_capacity(package.units.len());
     for unit in &package.units {
@@ -469,6 +490,7 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
                 diagnostics: vec![diagnostic],
             });
         }
+        let enclosing_function_spans = index_enclosing_function_spans(&parsed.tree.root);
         units.push(SemanticUnit {
             source: source.clone(),
             tree: parsed.tree,
@@ -479,6 +501,7 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
             functions: Vec::new(),
             function_aliases: BTreeMap::new(),
             descriptor_aliases: BTreeMap::new(),
+            enclosing_function_spans,
             unreachable_spans: Vec::new(),
             evaluation_steps: Vec::new(),
         });
@@ -2988,17 +3011,6 @@ const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
 
-fn enclosing_function_span(root: &SyntaxNode, position: usize) -> Option<Span> {
-    root.children
-        .iter()
-        .filter(|child| child.span.start <= position && position <= child.span.end)
-        .find_map(|child| {
-            (child.kind == SyntaxKind::FunctionDeclaration)
-                .then_some(child.span)
-                .or_else(|| enclosing_function_span(child, position))
-        })
-}
-
 fn optional_inner(value_type: ValueType) -> Option<ValueType> {
     match value_type {
         ValueType::ScalarOrNone(scalar) => Some(ValueType::Scalar(scalar)),
@@ -3145,11 +3157,20 @@ pub(crate) fn narrowed_value_type(
     bindings: &[TypedBinding],
 ) -> Option<ValueType> {
     let name = node_text(&unit.source, node);
-    let function_span = enclosing_function_span(&unit.tree.root, node.span.start);
+    let function_span = unit
+        .enclosing_function_spans
+        .get(&node.span.start)
+        .copied()
+        .flatten();
     let binding = bindings.iter().rev().find(|binding| {
         binding.name == name
             && binding.span.start <= node.span.start
-            && enclosing_function_span(&unit.tree.root, binding.span.start) == function_span
+            && unit
+                .enclosing_function_spans
+                .get(&binding.span.start)
+                .copied()
+                .flatten()
+                == function_span
     })?;
     narrowed_optional_type(unit, node, binding.value_type)
 }
@@ -6066,16 +6087,22 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ControlRegion {
+    statement: Span,
+    arm: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 enum BindingEvent {
     Read {
         loops: Vec<Span>,
-        branches: Vec<Span>,
+        regions: Vec<ControlRegion>,
     },
     Write {
         span: Span,
         loops: Vec<Span>,
-        branches: Vec<Span>,
+        regions: Vec<ControlRegion>,
     },
 }
 
@@ -6092,18 +6119,33 @@ fn binding_event_child_repeats(node: &SyntaxNode, index: usize) -> bool {
     }
 }
 
-fn binding_event_child_enters_branch(node: &SyntaxNode, child: &SyntaxNode) -> bool {
-    child.kind == SyntaxKind::Block
-        && matches!(
-            node.kind,
-            SyntaxKind::IfStatement
-                | SyntaxKind::ElseClause
-                | SyntaxKind::WhileStatement
-                | SyntaxKind::ForStatement
-                | SyntaxKind::TryStatement
-                | SyntaxKind::CatchClause
-                | SyntaxKind::FinallyClause
-        )
+fn binding_event_child_region(
+    node: &SyntaxNode,
+    child: &SyntaxNode,
+    index: usize,
+) -> Option<ControlRegion> {
+    if node.kind == SyntaxKind::IfStatement
+        && matches!(child.kind, SyntaxKind::Block | SyntaxKind::ElseClause)
+    {
+        return Some(ControlRegion {
+            statement: node.span,
+            arm: Some(index),
+        });
+    }
+    if child.kind != SyntaxKind::Block {
+        return None;
+    }
+    let statement = match node.kind {
+        SyntaxKind::WhileStatement | SyntaxKind::ForStatement => node.span,
+        SyntaxKind::TryStatement | SyntaxKind::CatchClause | SyntaxKind::FinallyClause => {
+            child.span
+        }
+        _ => return None,
+    };
+    Some(ControlRegion {
+        statement,
+        arm: None,
+    })
 }
 
 fn collect_binding_events(
@@ -6113,7 +6155,7 @@ fn collect_binding_events(
     events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
     declaration_name: bool,
     loops: &mut Vec<Span>,
-    branches: &mut Vec<Span>,
+    regions: &mut Vec<ControlRegion>,
 ) {
     if node.kind == SyntaxKind::Name {
         if !declaration_name
@@ -6126,7 +6168,7 @@ fn collect_binding_events(
                 .or_default()
                 .push(BindingEvent::Read {
                     loops: loops.clone(),
-                    branches: branches.clone(),
+                    regions: regions.clone(),
                 });
         }
         return;
@@ -6159,24 +6201,16 @@ fn collect_binding_events(
             assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
         if !plain_assignment_target {
             let repeats = binding_event_child_repeats(node, index);
-            let enters_branch = binding_event_child_enters_branch(node, child);
+            let region = binding_event_child_region(node, child, index);
             if repeats {
                 loops.push(node.span);
             }
-            if enters_branch {
-                branches.push(child.span);
+            if let Some(region) = region {
+                regions.push(region);
             }
-            collect_binding_events(
-                package,
-                unit,
-                child,
-                events,
-                declares_child,
-                loops,
-                branches,
-            );
-            if enters_branch {
-                branches.pop();
+            collect_binding_events(package, unit, child, events, declares_child, loops, regions);
+            if region.is_some() {
+                regions.pop();
             }
             if repeats {
                 loops.pop();
@@ -6193,7 +6227,7 @@ fn collect_binding_events(
             .push(BindingEvent::Write {
                 span: node.span,
                 loops: loops.clone(),
-                branches: branches.clone(),
+                regions: regions.clone(),
             });
     } else if let Some(target) = assignment_target
         && let Some(declaration_span) = package
@@ -6206,7 +6240,7 @@ fn collect_binding_events(
             .push(BindingEvent::Write {
                 span: node.span,
                 loops: loops.clone(),
-                branches: branches.clone(),
+                regions: regions.clone(),
             });
     }
 }
@@ -6227,8 +6261,19 @@ fn record_binding_events(package: &mut SemanticPackage) {
     package.binding_events = events;
 }
 
-fn paths_are_comparable(left: &[Span], right: &[Span]) -> bool {
-    left.starts_with(right) || right.starts_with(left)
+fn regions_conflict(left: &[ControlRegion], right: &[ControlRegion]) -> bool {
+    left.iter().any(|left| {
+        right.iter().any(|right| {
+            left.statement == right.statement
+                && left.arm.is_some()
+                && right.arm.is_some()
+                && left.arm != right.arm
+        })
+    })
+}
+
+fn later_store_replaces(earlier: &[ControlRegion], later: &[ControlRegion]) -> bool {
+    later.iter().all(|region| earlier.contains(region))
 }
 
 pub(crate) fn binding_store_value_is_read(
@@ -6239,29 +6284,27 @@ pub(crate) fn binding_store_value_is_read(
     let Some(events) = package.binding_events.get(&span_key(declaration_span)) else {
         return false;
     };
-    let Some((store, store_loops, store_branches)) =
+    let Some((store, store_loops, store_regions)) =
         events.iter().enumerate().find_map(|(index, event)| {
             let BindingEvent::Write {
                 span,
                 loops,
-                branches,
+                regions,
             } = event
             else {
                 return None;
             };
-            (*span == store_span).then_some((index, loops, branches))
+            (*span == store_span).then_some((index, loops, regions))
         })
     else {
         return false;
     };
     for event in &events[store + 1..] {
         match event {
-            BindingEvent::Read { branches, .. }
-                if paths_are_comparable(store_branches, branches) =>
-            {
+            BindingEvent::Read { regions, .. } if !regions_conflict(store_regions, regions) => {
                 return true;
             }
-            BindingEvent::Write { branches, .. } if store_branches.starts_with(branches) => {
+            BindingEvent::Write { regions, .. } if later_store_replaces(store_regions, regions) => {
                 return false;
             }
             BindingEvent::Read { .. } | BindingEvent::Write { .. } => {}
