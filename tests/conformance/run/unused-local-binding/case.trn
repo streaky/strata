@@ -1,0 +1,4 @@
+namespace unused-local-binding
+function main
+  unused string = 'x'
+  print; 'built'

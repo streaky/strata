@@ -60,7 +60,16 @@ fn annotated_replacement_lowers_as_source_ordered_shadowing() {
     );
     let compilation = terrane_compiler::compile("replacement.trn", source.to_owned()).unwrap();
 
-    assert_eq!(compilation.rust.matches("let _ = &value;").count(), 2);
+    let replacement_consumptions = compilation
+        .rust
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|lines| {
+            lines[0].trim() == "let _ = &value;" && lines[1].trim_start().starts_with("let value:")
+        })
+        .count();
+    assert_eq!(replacement_consumptions, 2);
 }
 
 #[test]

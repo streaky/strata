@@ -6063,6 +6063,37 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
     }
 }
 
+pub(crate) fn binding_span_is_read(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    declaration_span: Span,
+) -> bool {
+    fn reads(
+        package: &SemanticPackage,
+        unit: &SemanticUnit,
+        declaration_span: Span,
+        node: &SyntaxNode,
+        write_target: bool,
+    ) -> bool {
+        if node.kind == SyntaxKind::Name
+            && !write_target
+            && package
+                .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
+                .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
+        {
+            return true;
+        }
+        node.children.iter().enumerate().any(|(index, child)| {
+            let declaration_name = node.span == declaration_span && child.kind == SyntaxKind::Name;
+            let assignment_target =
+                node.kind == SyntaxKind::Assignment && node.span != declaration_span && index == 0;
+            !declaration_name && reads(package, unit, declaration_span, child, assignment_target)
+        })
+    }
+
+    reads(package, unit, declaration_span, &unit.tree.root, false)
+}
+
 pub(crate) fn binding_span_is_mutated(
     package: &SemanticPackage,
     unit: &SemanticUnit,

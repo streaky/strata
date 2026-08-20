@@ -8,8 +8,8 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
         SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
-        binding_span_is_mutated, bound_method, contextual_constant, narrowed_optional_type,
-        narrowed_value_type, promoted_integer_type, string_call_selection,
+        binding_span_is_mutated, binding_span_is_read, bound_method, contextual_constant,
+        narrowed_optional_type, narrowed_value_type, promoted_integer_type, string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -1060,6 +1060,10 @@ impl Emitter<'_> {
             write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
+        if initializer.is_some() && !binding_span_is_read(self.package, self.unit, node.span) {
+            let borrow = if mutable { "&mut " } else { "&" };
+            self.line(&format!("let _ = {borrow}{name};"));
+        }
     }
 
     fn postfix(&mut self, node: &SyntaxNode) {
