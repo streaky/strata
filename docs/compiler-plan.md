@@ -984,18 +984,32 @@ Deliver:
 - shift-count policy per receiver class, and postfix `++`/`--` restricted to the default child.
 
 Exit criterion: every family and child has accepted, rejected, and runtime cases; `div-rem` divides once in reviewed generated Rust; and absent children fail at the source span rather than at runtime.
+Implemented evidence: all nine integer member families lower through one semantic and
+backend route. Fixed-width policy children produce typed optional or overflow-result
+objects; adaptive unavailable children fail during semantic analysis. Runtime conformance
+covers default, checked, wrap, saturate, overflowing, shift, `div-rem`, and postfix update
+paths, and the reviewed `div-rem` golden contains one combined support operation.
+
 
 ### Milestone 11 — Bytes, string views, and encoding objects
 
 Deliver:
 
-- `bytes` as a real sequence value with literals, byte length, indexing, slicing, and iteration, and with no text-display protocol;
+- `bytes` as a real sequence value with literals, byte length, built-in iteration, and no text-display protocol; indexing and slicing move with the range/index contract because the version-one specification currently defines no byte bounds or slice result contract;
 - explicit `bytes`, `scalars`, and `graphemes` string views without changing the default grapheme length;
 - the pinned Unicode version contract, sourced from the toolchain profile rather than the package lock;
 - canonical `utf8`, `utf16-le`, `utf16-be`, `utf32-le`, and `utf32-be` encoding objects, with encoding total and decoding raising a typed `decode-error` carrying encoding and byte offset;
 - prevention of arbitrary bytes reaching `print` through a blanket display implementation.
 
 Exit criterion: a round-trip encode/decode case runs, an invalid byte sequence produces the typed decode error at its offset, and view lengths differ correctly for a multi-scalar grapheme.
+Implemented evidence: bytes literals preserve arbitrary byte values, expose byte length,
+iterate as `uint8`, and deliberately lack scalar display. Explicit UTF-8 byte, scalar, and
+grapheme views produce distinct counts for one multi-scalar grapheme. Compiler-owned
+encoding objects round-trip through the generated crate, while invalid UTF-8 exits through
+the typed decode-error value with the observed byte offset. The support profile pins Unicode
+16.0.0. Byte indexing and slicing remain sequenced with the range/index contract rather
+than acquiring an implementation-defined bounds policy here.
+
 
 ### Milestone 12 — String transformation and search families
 
@@ -1008,6 +1022,13 @@ Deliver:
 - `text-range` with checked byte, scalar, and grapheme views over an immutable input.
 
 Exit criterion: the specified empty-pattern, position-child, and Unicode-property behaviors each have cases, including a right-to-left sample proving the position children act on logical order.
+Implemented evidence: trim and position children, non-overlapping find/count and replace,
+empty-pattern boundary behavior, normalization, full Unicode case folding, explicit
+case operations, and split lower through compiler-owned typed calls into the pinned text
+runtime. Runtime conformance covers a decomposed normalization sample, empty-pattern
+counting, and a right-to-left start/end sample. Text ranges retain immutable source text
+and expose byte, scalar, and grapheme boundary views.
+
 
 ### Milestone 13 — Iterator protocol
 

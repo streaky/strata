@@ -44,7 +44,7 @@ Terrane package
 │   │   │   │   └── float64                   canonical descriptor
 │   │   │   ├── string                         type descriptor
 │   │   │   ├── none                           type descriptor
-│   │   │   └── bytes                          descriptor name only
+│   │   │   └── bytes                          implemented type descriptor
 │   │   └── /core/errors
 │   │       ├── error                          catch-all structural interface
 │   │       ├── arithmetic-overflow            catchable error object
@@ -137,6 +137,13 @@ int value
 ```
 
 For an `int` source, the destination may be `int` or any fixed-width integer descriptor. `.coerce.wrap` and `.coerce.saturate` require a fixed-width source and therefore are not available from `int`.
+`int` also exposes the compiler-owned `add`, `subtract`, `multiply`, `divide`,
+`remainder`, `div-rem`, `negate`, `shift-left`, and `shift-right` families. Their default
+children retain exact adaptive arithmetic; fixed-width-only `wrap`, `saturate`, and
+`overflowing` children are absent, while `checked` exists only for genuinely fallible
+operations. `div-rem` returns one compiler-owned result containing `.quotient` and
+`.remainder`.
+
 
 ### Fixed-width integers
 
@@ -183,6 +190,12 @@ fixed-width integer value T
 ```
 
 All integer descriptors, including `int`, are valid destinations except that `.coerce.wrap` and `.coerce.saturate` do not accept `int`. The family is compile-time only: a selection must be invoked in the same expression, so `family = value.coerce` is rejected, and the destination must resolve statically to a canonical descriptor. The flat `.checked-coerce`, `.wrapping-coerce`, and `.saturating-coerce` spellings are rejected with a migration diagnostic and no aliases remain. Default fixed-width arithmetic is checked; overflow is a runtime failure. `.coerce.checked` returns `T or none`; `.coerce.wrap` and `.coerce.saturate` return `T`.
+The same nine named arithmetic families are implemented on fixed-width integers. Their
+`checked`, `wrap`, `saturate`, and `overflowing` children select explicit policies instead
+of inheriting Rust build-mode behavior. `overflowing` returns `.value` and `.overflowed`;
+`div-rem` computes and returns both results through one backend operation. Postfix `++`
+and `--` remain statement-only spellings of the default add/subtract policy.
+
 
 Declared numeric binding, assignment, parameter-default, argument, and return destinations admit numeric values exactly or fail with `integer-conversion-overflow`. Range-contained fixed-width widening emits only a representation change; other typed numeric pairs retain a runtime representability check. Integer values of different concrete types promote to the smallest implemented integer type containing both source ranges, or to `int`. Local adaptive-`int` bindings proven to remain in `int64` range lower directly to `i64`; conversion to the erased adaptive ABI occurs only where an operation or call requires it.
 
@@ -231,6 +244,22 @@ string value
 ├── properties
 │   ├── .length -> int        Unicode extended grapheme-cluster count
 │   └── .type -> string
+├── views
+│   ├── .bytes -> byte sequence
+│   ├── .scalars -> list of scalar strings
+│   └── .graphemes -> list of grapheme strings
+├── transformation and search families
+│   ├── .trim[.start|.end]; pattern? -> string
+│   ├── .contains[.start|.end]; pattern -> bool
+│   ├── .find; pattern -> text-range or none
+│   ├── .find.all; pattern -> list of text-range
+│   ├── .find.count; pattern -> int
+│   ├── .upper; / .lower; / .case-fold; -> string
+│   ├── .normalise.nfc|nfd|nfkc|nfkd; -> string
+│   ├── .split; pattern -> list of string
+│   └── .replace; pattern, replacement -> string
+├── encoding
+│   └── .encode; encoding -> bytes
 ├── methods
 │   ├── .concat; values... -> string
 │   └── .join; values... -> string
@@ -247,7 +276,7 @@ string value
     └── value is a string -> bool
 ```
 
-`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
+`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. String transformation, search, normalization, and case folding lower through the pinned support runtime; empty-pattern search uses logical grapheme boundaries. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
 
 ### `none`
 
@@ -263,7 +292,13 @@ none value
 
 ### `bytes`
 
-`bytes` is present in `/core/types` and the default prelude, but bytes literals, values, properties, methods, and operators are not implemented. It is therefore currently a reserved descriptor name rather than a usable implemented value type.
+`bytes` is an implemented sequence value with `b'...'` literals and `.length`. It has no
+blanket scalar-display implementation, so raw bytes cannot reach `print`. `.decode;
+encoding` validates input and reports `.decode-error` with its canonical encoding and byte
+offset. The canonical `utf8`, `utf16-le`, `utf16-be`, `utf32-le`, and `utf32-be` encoding
+objects are compiler-owned values; string `.encode` is total for each one. Built-in `for`
+iteration yields `uint8` values. General bytes indexing and slicing remain deferred until
+the range/index contract is implemented.
 
 ## Type descriptor objects
 
@@ -384,6 +419,12 @@ A top-level plain assignment creates a namespace variable. Functions cannot read
 | `string` | `.parse.checked; callback` | family child | callback's declared return or `none` |
 | `string` | `.radix; base` | method | adaptive `int` interpretation |
 | any integer | `.radix; base` | method | lowercase base-N `string` |
+| any integer | named arithmetic families | family | explicit default/checked/wrap/saturate/overflowing policy |
+| `string` | `.bytes`, `.scalars`, `.graphemes` | properties | explicit text views |
+| `string` | `.trim`, `.contains`, `.find`, case/normalization, `.split`, `.replace` | families | Unicode text operations |
+| `string` | `.encode; encoding` | method | encoded `bytes` |
+| `bytes` | `.length` | property | byte count |
+| `bytes` | `.decode; encoding` | method | validated `string` or deterministic decode error |
 
 The compiler represents callable families as bound methods with a distinguished default,
 typed children, signatures, and availability constraints. Semantic analysis resolves the
@@ -395,7 +436,6 @@ Family selections must be invoked in the same expression.
 The remaining names in this section exist only so resolution has stable identities:
 
 ```text
-/core/types::bytes
 /core/collections
 ```
 
@@ -418,7 +458,7 @@ protocols and interfaces
 classes, structs, enums, traits, and constructors
 reflection beyond canonical scalar `.type`
 user-defined error objects, source-visible error fields, and error hierarchies
-bytes values and operations
+bytes indexing, slicing, and general sequence iteration
 collection properties and methods
 general iteration protocols
 user-declared type parameters and generic application
