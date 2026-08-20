@@ -6066,114 +6066,146 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum BindingEvent {
-    Read,
-    Write { span: Span, definite: bool },
+    Read {
+        loops: Vec<Span>,
+    },
+    Write {
+        span: Span,
+        definite: bool,
+        loops: Vec<Span>,
+    },
 }
 
 fn span_key(span: Span) -> (u32, usize, usize) {
     (span.file, span.start, span.end)
 }
 
-fn record_binding_events(package: &mut SemanticPackage) {
-    fn collect(
-        package: &SemanticPackage,
-        unit: &SemanticUnit,
-        node: &SyntaxNode,
-        events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
-        declaration_name: bool,
-        conditional: bool,
-    ) {
-        if node.kind == SyntaxKind::Name {
-            if !declaration_name
-                && let Some(declaration_span) = package
-                    .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
-                    .and_then(|symbol| symbol.declaration_span)
-            {
-                events
-                    .entry(span_key(declaration_span))
-                    .or_default()
-                    .push(BindingEvent::Read);
-            }
-            return;
-        }
-
-        let declared_binding = unit
-            .typed_bindings
-            .iter()
-            .find(|binding| binding.span == node.span);
-        let assignment_target = if matches!(
-            node.kind,
-            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-        ) && declared_binding.is_none()
-        {
-            node.children
-                .first()
-                .filter(|target| target.kind == SyntaxKind::Name)
-        } else {
-            None
-        };
-
-        for (index, child) in node.children.iter().enumerate() {
-            let declares_child = (declared_binding.is_some()
-                || matches!(node.kind, SyntaxKind::Parameter | SyntaxKind::ForTarget))
-                && child.kind == SyntaxKind::Name
-                && !node.children[..index]
-                    .iter()
-                    .any(|prior| prior.kind == SyntaxKind::Name);
-            let plain_assignment_target =
-                assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
-            if !plain_assignment_target {
-                let child_conditional = conditional
-                    || matches!(
-                        node.kind,
-                        SyntaxKind::IfStatement
-                            | SyntaxKind::ElseClause
-                            | SyntaxKind::WhileStatement
-                            | SyntaxKind::ForStatement
-                            | SyntaxKind::TryStatement
-                            | SyntaxKind::CatchClause
-                    );
-                collect(
-                    package,
-                    unit,
-                    child,
-                    events,
-                    declares_child,
-                    child_conditional,
-                );
-            }
-        }
-
-        if let Some(binding) = declared_binding
-            && unit.source.text()[node.span.start..node.span.end].contains('=')
-        {
-            events
-                .entry(span_key(binding.span))
-                .or_default()
-                .push(BindingEvent::Write {
-                    span: node.span,
-                    definite: true,
-                });
-        } else if let Some(target) = assignment_target
+fn collect_binding_events(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
+    declaration_name: bool,
+    conditional: bool,
+    loops: &mut Vec<Span>,
+) {
+    if node.kind == SyntaxKind::Name {
+        if !declaration_name
             && let Some(declaration_span) = package
-                .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
+                .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
                 .and_then(|symbol| symbol.declaration_span)
         {
             events
                 .entry(span_key(declaration_span))
                 .or_default()
-                .push(BindingEvent::Write {
-                    span: node.span,
-                    definite: !conditional,
+                .push(BindingEvent::Read {
+                    loops: loops.clone(),
                 });
+        }
+        return;
+    }
+
+    let declared_binding = unit
+        .typed_bindings
+        .iter()
+        .find(|binding| binding.span == node.span);
+    let assignment_target = if matches!(
+        node.kind,
+        SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+    ) && declared_binding.is_none()
+    {
+        node.children
+            .first()
+            .filter(|target| target.kind == SyntaxKind::Name)
+    } else {
+        None
+    };
+
+    for (index, child) in node.children.iter().enumerate() {
+        let declares_child = (declared_binding.is_some()
+            || matches!(node.kind, SyntaxKind::Parameter | SyntaxKind::ForTarget))
+            && child.kind == SyntaxKind::Name
+            && !node.children[..index]
+                .iter()
+                .any(|prior| prior.kind == SyntaxKind::Name);
+        let plain_assignment_target =
+            assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
+        if !plain_assignment_target {
+            let child_conditional = conditional
+                || matches!(
+                    node.kind,
+                    SyntaxKind::IfStatement
+                        | SyntaxKind::ElseClause
+                        | SyntaxKind::WhileStatement
+                        | SyntaxKind::ForStatement
+                        | SyntaxKind::TryStatement
+                        | SyntaxKind::CatchClause
+                );
+            let repeats = match node.kind {
+                SyntaxKind::WhileStatement => true,
+                SyntaxKind::ForStatement if node.children.len() == 3 => index == 2,
+                SyntaxKind::ForStatement if node.children.len() == 4 => index != 0,
+                _ => false,
+            };
+            if repeats {
+                loops.push(node.span);
+            }
+            collect_binding_events(
+                package,
+                unit,
+                child,
+                events,
+                declares_child,
+                child_conditional,
+                loops,
+            );
+            if repeats {
+                loops.pop();
+            }
         }
     }
 
+    if let Some(binding) = declared_binding
+        && unit.source.text()[node.span.start..node.span.end].contains('=')
+    {
+        events
+            .entry(span_key(binding.span))
+            .or_default()
+            .push(BindingEvent::Write {
+                span: node.span,
+                definite: true,
+                loops: loops.clone(),
+            });
+    } else if let Some(target) = assignment_target
+        && let Some(declaration_span) = package
+            .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
+            .and_then(|symbol| symbol.declaration_span)
+    {
+        events
+            .entry(span_key(declaration_span))
+            .or_default()
+            .push(BindingEvent::Write {
+                span: node.span,
+                definite: !conditional,
+                loops: loops.clone(),
+            });
+    }
+}
+
+fn record_binding_events(package: &mut SemanticPackage) {
     let mut events = BTreeMap::new();
     for unit in &package.units {
-        collect(package, unit, &unit.tree.root, &mut events, false, false);
+        collect_binding_events(
+            package,
+            unit,
+            &unit.tree.root,
+            &mut events,
+            false,
+            false,
+            &mut Vec::new(),
+        );
     }
     package.binding_events = events;
 }
@@ -6186,22 +6218,32 @@ pub(crate) fn binding_store_value_is_read(
     let Some(events) = package.binding_events.get(&span_key(declaration_span)) else {
         return false;
     };
-    let Some(store) = events
-        .iter()
-        .position(|event| matches!(event, BindingEvent::Write { span, .. } if *span == store_span))
-    else {
+    let Some((store, store_loops)) = events.iter().enumerate().find_map(|(index, event)| {
+        let BindingEvent::Write { span, loops, .. } = event else {
+            return None;
+        };
+        (*span == store_span).then_some((index, loops))
+    }) else {
         return false;
     };
     for event in &events[store + 1..] {
         match event {
-            BindingEvent::Read => return true,
+            BindingEvent::Read { .. } => return true,
             BindingEvent::Write { definite: true, .. } => return false,
             BindingEvent::Write {
                 definite: false, ..
             } => {}
         }
     }
-    false
+    !store_loops.is_empty()
+        && events.iter().any(|event| {
+            let BindingEvent::Read { loops: read_loops } = event else {
+                return false;
+            };
+            store_loops
+                .iter()
+                .any(|store_loop| read_loops.contains(store_loop))
+        })
 }
 
 pub(crate) fn binding_span_is_read(package: &SemanticPackage, declaration_span: Span) -> bool {
@@ -6211,7 +6253,7 @@ pub(crate) fn binding_span_is_read(package: &SemanticPackage, declaration_span: 
         .is_some_and(|events| {
             events
                 .iter()
-                .any(|event| matches!(event, BindingEvent::Read))
+                .any(|event| matches!(event, BindingEvent::Read { .. }))
         })
 }
 

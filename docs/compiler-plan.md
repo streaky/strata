@@ -416,6 +416,16 @@ S2013 unresolved source name                 S2026 namespace-variable confinemen
 
 Retired codes remain unavailable so a stable code never acquires a second meaning.
 
+Terrane source warnings own the stable `W4xxx` range:
+
+```text
+W4001 initialized local binding is never read
+W4002 initial or later store cannot reach a read before definite replacement
+```
+
+Warnings are non-blocking diagnostics. Their codes have the same stability rule as error
+codes: retired warning codes remain unavailable and are never reassigned.
+
 ### Milestone 4 — Types, calls, and control-flow semantics
 
 Deliver:

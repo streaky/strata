@@ -1,0 +1,13 @@
+namespace loop-carried-store-reads
+from /core/types import int8
+function main
+  while-value int8 = 0
+  limit int8 = 0
+  while limit < 2
+    print; while-value
+    while-value = 5
+    limit = limit + 1
+  for-value int8 = 0
+  for character in 'ab'
+    print; for-value
+    for-value = 7
