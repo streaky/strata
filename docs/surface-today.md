@@ -254,7 +254,7 @@ string value
 │   ├── .find; pattern -> text-range or none
 │   ├── .find.all; pattern -> list of text-range
 │   ├── .find.count; pattern -> int
-│   ├── .upper; / .lower; / .case-fold; -> string
+│   ├── .upper[.first|.words]; / .lower[.first]; / .case-fold; -> string
 │   ├── .normalise.nfc|nfd|nfkc|nfkd; -> string
 │   ├── .split; pattern -> list of string
 │   └── .replace; pattern, replacement -> string
@@ -276,7 +276,7 @@ string value
     └── value is a string -> bool
 ```
 
-`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. String transformation, search, normalization, and case folding lower through the pinned support runtime; empty-pattern search uses logical grapheme boundaries. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
+`.concat` accepts zero or more values, converts each through Terrane's canonical scalar display, and appends them without a separator. `.join` accepts the same values but interleaves the receiver as the separator; an empty call yields the empty string and a singleton call adds no separator. String transformation, search, normalization, and case folding lower through the pinned support runtime. Empty-pattern search, split, and replacement use logical extended-grapheme boundaries: `find.all` includes both ends, `split` returns the graphemes without synthetic empty strings, and `replace` inserts at every boundary. The current `for` lowering is specifically string-grapheme iteration; there is no general iterable protocol yet.
 
 ### `none`
 

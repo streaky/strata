@@ -583,10 +583,18 @@ position_children: start means logical index 0 and end the logical last scalar, 
 position_reason: writing direction is a display property; a string stores none, so left/right belong to a directional text type
 contains: 'text.contains;' anywhere (default) | contains.start | contains.end; all boolean
 contains_v1: exactly start and end; any/all await variadics or collections; 'at' awaits an index-unit decision
-find: separate family returning text-range|none, with find.all and find.count
+find: separate family; default -> text-range|none, find.all -> list of text-range, find.count -> int
+empty_search: contains empty -> true; find empty -> first zero-width grapheme boundary; find.all empty -> every grapheme boundary including both ends; count = graphemes + 1
+trim_modes: default Unicode whitespace; literal argument removes exactly one matching selected prefix/suffix
+case_mapping: upper/lower default, .first, and upper.words are locale-independent Unicode operations; case-fold is explicit and locale-independent
+normalise: explicit nfc/nfd/nfkc/nfkd children
+split_replace: literal, left-to-right, non-overlapping; empty split -> grapheme list without synthetic empties; empty replace -> insert at every grapheme boundary including ends
 family_rule: a family is modes of ONE operation, not a bucket of related operations; group by subject uses a namespace instead
 case_search: no case-insensitive child; apply explicit case-fold to both operands
 regex: never a child of contains; regex stays match/matches; no member dispatches on whether its argument is a pattern object
+string_views: length defaults to graphemes; bytes/scalars/graphemes explicit; text-range retains immutable source with checked byte/scalar/grapheme views
+bytes: immutable octets, distinct from string; b'...' literals; only \\, \', \n, \r, \t, \0, \xHH escapes; iteration -> uint8
+encoding: explicit utf8/utf16-le/utf16-be/utf32-le/utf32-be; encode total; decode validates all input and throws decode-error, never replacement text
 ```
 
 ## OBJECT_MODEL

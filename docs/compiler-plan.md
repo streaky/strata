@@ -1005,8 +1005,9 @@ Exit criterion: a round-trip encode/decode case runs, an invalid byte sequence p
 Implemented evidence: bytes literals preserve arbitrary byte values, expose byte length,
 iterate as `uint8`, and deliberately lack scalar display. Explicit UTF-8 byte, scalar, and
 grapheme views produce distinct counts for one multi-scalar grapheme. Compiler-owned
-encoding objects round-trip through the generated crate, while invalid UTF-8 exits through
-the typed decode-error value with the observed byte offset. The support profile pins Unicode
+UTF-8, UTF-16 little-/big-endian, and UTF-32 little-/big-endian encoding objects all
+round-trip through generated crates, while invalid input exits through the typed
+`decode-error` value with its observed byte offset. The support profile pins Unicode
 16.0.0. Byte indexing and slicing remain sequenced with the range/index contract rather
 than acquiring an implementation-defined bounds policy here.
 
@@ -1022,12 +1023,13 @@ Deliver:
 - `text-range` with checked byte, scalar, and grapheme views over an immutable input.
 
 Exit criterion: the specified empty-pattern, position-child, and Unicode-property behaviors each have cases, including a right-to-left sample proving the position children act on logical order.
-Implemented evidence: trim and position children, non-overlapping find/count and replace,
-empty-pattern boundary behavior, normalization, full Unicode case folding, explicit
-case operations, and split lower through compiler-owned typed calls into the pinned text
-runtime. Runtime conformance covers a decomposed normalization sample, empty-pattern
-counting, and a right-to-left start/end sample. Text ranges retain immutable source text
-and expose byte, scalar, and grapheme boundary views.
+Implemented evidence: trim and logical position children, non-overlapping find/count and
+replace, normalization, full Unicode case folding, explicit case operations, and split
+lower through compiler-owned typed calls into the pinned text runtime. Runtime conformance
+covers a decomposed normalization sample, right-to-left start/end behavior, and every
+empty-pattern grapheme-boundary rule: `find.all` includes both ends, `split` emits the
+graphemes without synthetic empties, and `replace` inserts at each boundary. Text ranges
+retain immutable source text and expose byte, scalar, and grapheme boundary views.
 
 
 ### Milestone 13 — Iterator protocol
