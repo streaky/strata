@@ -310,8 +310,8 @@ fn lex_line(
                     index += 1;
                 }
                 if terminated {
-                    if let Some((escape_start, escape_end)) =
-                        invalid_bytes_escape(&line[start + 2..index - 1])
+                    if let Err((escape_start, escape_end)) =
+                        unescape_bytes(&line[start + 2..index - 1])
                     {
                         diagnostics.push(Diagnostic::error(
                             "L0012",
@@ -665,30 +665,44 @@ fn lex_line(
     }
 }
 
-fn invalid_bytes_escape(value: &str) -> Option<(usize, usize)> {
+pub(crate) fn unescape_bytes(value: &str) -> Result<Vec<u8>, (usize, usize)> {
     let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] != b'\\' {
+            output.push(bytes[index]);
             index += 1;
             continue;
         }
         let start = index;
         index += 1;
         match bytes.get(index).copied() {
-            Some(b'\\' | b'\'' | b'n' | b'r' | b't') => index += 1,
+            Some(b'\\') => output.push(b'\\'),
+            Some(b'\'') => output.push(b'\''),
+            Some(b'n') => output.push(b'\n'),
+            Some(b'r') => output.push(b'\r'),
+            Some(b't') => output.push(b'\t'),
             Some(b'x')
                 if bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit)
                     && bytes.get(index + 2).is_some_and(u8::is_ascii_hexdigit) =>
             {
-                index += 3;
+                let high = char::from(bytes[index + 1])
+                    .to_digit(16)
+                    .expect("validated hex digit");
+                let low = char::from(bytes[index + 2])
+                    .to_digit(16)
+                    .expect("validated hex digit");
+                output.push(u8::try_from((high << 4) | low).expect("two hex digits fit u8"));
+                index += 2;
             }
-            Some(b'x') => return Some((start, (index + 3).min(bytes.len()))),
-            Some(_) => return Some((start, index + 1)),
-            None => return Some((start, index)),
+            Some(b'x') => return Err((start, (index + 3).min(bytes.len()))),
+            Some(_) => return Err((start, index + 1)),
+            None => return Err((start, index)),
         }
+        index += 1;
     }
-    None
+    Ok(output)
 }
 
 fn check_indent(

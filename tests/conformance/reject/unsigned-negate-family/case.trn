@@ -1,0 +1,5 @@
+namespace unsigned-negate-family
+from /core/types import uint8
+function main
+  value uint8 = 1
+  print; (value.negate;)

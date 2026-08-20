@@ -1,0 +1,4 @@
+namespace string-family-receiver
+function main
+  value int = 1
+  print; (value.find; 'x')

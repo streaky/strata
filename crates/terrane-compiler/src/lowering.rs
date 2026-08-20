@@ -7,9 +7,9 @@ use crate::{
     rust_ir::{Item, Module, Program},
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
-        SemanticPackage, SemanticUnit, SymbolKind, TypedBinding, ValueType,
+        SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
         binding_span_is_mutated, bound_method, contextual_constant, narrowed_optional_type,
-        narrowed_value_type, promoted_integer_type,
+        narrowed_value_type, promoted_integer_type, string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -104,19 +104,16 @@ struct Emitter<'a> {
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
-    fn contains(source: &SourceFile, node: &SyntaxNode) -> bool {
+    fn contains(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
         matches!(
             node.kind,
             SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
-        ) || (node.kind == SyntaxKind::MemberExpression
-            && node.children.get(1).is_some_and(|member| {
-                &source.text()[member.span.start..member.span.end] == "decode"
-            }))
-            || node.children.iter().any(|child| contains(source, child))
+        ) || string_call_selection(&unit.source, node)
+            .is_some_and(|selection| selection.family == StringFamily::Decode)
+            || node.children.iter().any(|child| contains(unit, child))
     }
     package.units.iter().any(|unit| {
-        unit.functions.iter().any(|contract| contract.throws)
-            || contains(&unit.source, &unit.tree.root)
+        unit.functions.iter().any(|contract| contract.throws) || contains(unit, &unit.tree.root)
     })
 }
 
@@ -529,11 +526,26 @@ impl Emitter<'_> {
                 .collect(),
         );
         self.indent += 1;
-        if let Some(block) = node
+        let block = node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::Block)
-        {
+            .find(|child| child.kind == SyntaxKind::Block);
+        let unused_parameters = contract
+            .parameters
+            .iter()
+            .filter(|parameter| {
+                block.is_none_or(|block| {
+                    !node_contains_name(&self.unit.source, block, &parameter.name)
+                })
+            })
+            .map(|parameter| format!("&{}", rust_name(&parameter.name)))
+            .collect::<Vec<_>>();
+        match unused_parameters.as_slice() {
+            [] => {}
+            [parameter] => self.line(&format!("let _ = {parameter};")),
+            parameters => self.line(&format!("let _ = ({});", parameters.join(", "))),
+        }
+        if let Some(block) = block {
             self.block(block);
         }
         if function_errors
@@ -997,29 +1009,7 @@ impl Emitter<'_> {
             if let Some(storage_type) = storage_type {
                 return rust_type(storage_type).to_owned();
             }
-            match binding.value_type {
-                ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
-                ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
-                ValueType::OverflowResult(scalar) => {
-                    format!("terrane_int_support::OverflowResult<{}>", rust_type(scalar))
-                }
-                ValueType::DivRemResult(scalar) => {
-                    format!("terrane_int_support::DivRemResult<{}>", rust_type(scalar))
-                }
-                ValueType::StringView(crate::semantics::TextUnit::Bytes) => "Vec<u8>".to_owned(),
-                ValueType::StringView(
-                    crate::semantics::TextUnit::Scalars | crate::semantics::TextUnit::Graphemes,
-                )
-                | ValueType::StringList => "Vec<String>".to_owned(),
-                ValueType::TextRange | ValueType::TextRangeView(_) => {
-                    "terrane_string_support::TextRange".to_owned()
-                }
-                ValueType::TextRangeOrNone => {
-                    "Option<terrane_string_support::TextRange>".to_owned()
-                }
-                ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
-                ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
-            }
+            rust_value_type(binding.value_type)
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -1693,11 +1683,40 @@ impl Emitter<'_> {
         }
     }
 
+    fn direct_string_view_length(
+        &mut self,
+        receiver: &SyntaxNode,
+        receiver_type: Option<ValueType>,
+        member: &SyntaxNode,
+    ) -> Option<String> {
+        if self.text(member) != "length" {
+            return None;
+        }
+        let Some(ValueType::StringView(unit)) = receiver_type else {
+            return None;
+        };
+        receiver.children.first().map(|source| {
+            let source = self.expression(source);
+            match unit {
+                crate::semantics::TextUnit::Bytes => format!("({source}).len() as i128"),
+                crate::semantics::TextUnit::Scalars => {
+                    format!("({source}).chars().count() as i128")
+                }
+                crate::semantics::TextUnit::Graphemes => {
+                    format!("terrane_string_support::length(&({source})) as i128")
+                }
+            }
+        })
+    }
+
     fn member(&mut self, node: &SyntaxNode) -> String {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
         };
         let receiver_type = self.value_type(receiver);
+        if let Some(length) = self.direct_string_view_length(receiver, receiver_type, member) {
+            return length;
+        }
         let receiver = self.expression(receiver);
         match self.text(member) {
             "bytes" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
@@ -1755,7 +1774,8 @@ impl Emitter<'_> {
                     ValueType::StringView(
                         crate::semantics::TextUnit::Scalars | crate::semantics::TextUnit::Graphemes,
                     )
-                    | ValueType::StringList,
+                    | ValueType::StringList
+                    | ValueType::TextRangeList,
                 ) => format!("({receiver}).len() as i128"),
                 _ => format!("terrane_string_support::length(&{receiver}) as i128"),
             },
@@ -1794,7 +1814,7 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
-        if let Some(string_call) = self.string_call(node, callee, arguments) {
+        if let Some(string_call) = self.string_call(node, arguments) {
             return string_call;
         }
         if let Some(method) = bound_method(self.source, callee) {
@@ -2080,48 +2100,12 @@ impl Emitter<'_> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn string_call(
-        &mut self,
-        node: &SyntaxNode,
-        callee: &SyntaxNode,
-        arguments: &SyntaxNode,
-    ) -> Option<String> {
-        let [receiver, member] = callee.children.as_slice() else {
-            return None;
-        };
-        if callee.kind != SyntaxKind::MemberExpression {
-            return None;
-        }
-        let mut subject = receiver;
-        let mut family = self.text(member).to_owned();
-        let mut child = "default".to_owned();
-        if receiver.kind == SyntaxKind::MemberExpression
-            && let [nested_subject, nested_family] = receiver.children.as_slice()
-            && matches!(
-                self.text(nested_family),
-                "trim" | "contains" | "find" | "normalise" | "upper" | "lower"
-            )
-        {
-            subject = nested_subject;
-            self.text(nested_family).clone_into(&mut family);
-            self.text(member).clone_into(&mut child);
-        }
-        if !matches!(
-            family.as_str(),
-            "trim"
-                | "contains"
-                | "find"
-                | "upper"
-                | "lower"
-                | "normalise"
-                | "case-fold"
-                | "split"
-                | "replace"
-                | "encode"
-                | "decode"
-        ) {
-            return None;
-        }
+    fn string_call(&mut self, node: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
+        let selection = string_call_selection(self.source, node)?;
+        let subject = find_node_by_span(&self.unit.tree.root, selection.receiver)
+            .expect("selected string receiver belongs to this syntax tree");
+        let family = selection.family.source_name();
+        let child = selection.child.as_str();
         let receiver = self.expression(subject);
         let values = arguments
             .children
@@ -2129,7 +2113,7 @@ impl Emitter<'_> {
             .map(|argument| argument.children.last().unwrap_or(argument))
             .map(|value| self.expression(value))
             .collect::<Vec<_>>();
-        let result = match (family.as_str(), child.as_str()) {
+        let result = match (family, child) {
             ("trim", "default") => {
                 format!("terrane_string_support::trim(&({receiver}))")
             }
@@ -2209,7 +2193,6 @@ impl Emitter<'_> {
             ),
             _ => unreachable!("semantic analysis validated string family"),
         };
-        let _ = node;
         Some(result)
     }
     #[allow(clippy::too_many_lines)]
@@ -2711,7 +2694,8 @@ fn literal(text: &str) -> String {
         return trimmed.to_owned();
     }
     if trimmed.starts_with("b'") && trimmed.ends_with('\'') {
-        let value = unescape_bytes(&trimmed[2..trimmed.len() - 1]);
+        let value = crate::lexer::unescape_bytes(&trimmed[2..trimmed.len() - 1])
+            .expect("lexer rejects malformed byte escapes before lowering");
         return format!("Vec::from({value:?})");
     }
     let compact = trimmed.replace('_', "");
@@ -2840,38 +2824,6 @@ fn unescape(value: &str) -> String {
     output
 }
 
-fn unescape_bytes(value: &str) -> Vec<u8> {
-    let mut output = Vec::new();
-    let mut chars = value.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            let mut encoded = [0_u8; 4];
-            output.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
-            continue;
-        }
-        match chars.next() {
-            Some('n') => output.push(b'\n'),
-            Some('r') => output.push(b'\r'),
-            Some('t') => output.push(b'\t'),
-            Some('0') => output.push(0),
-            Some('\\') | None => output.push(b'\\'),
-            Some('\'') => output.push(b'\''),
-            Some('x') => {
-                let high = chars.next().and_then(|digit| digit.to_digit(16));
-                let low = chars.next().and_then(|digit| digit.to_digit(16));
-                if let (Some(high), Some(low)) = (high, low) {
-                    output.push(u8::try_from((high << 4) | low).expect("two hex digits fit u8"));
-                }
-            }
-            Some(other) => {
-                let mut encoded = [0_u8; 4];
-                output.extend_from_slice(other.encode_utf8(&mut encoded).as_bytes());
-            }
-        }
-    }
-    output
-}
-
 fn union_type_name(binding: &TypedBinding) -> String {
     format!("TerraneUnionF{}S{}", binding.span.file, binding.span.start)
 }
@@ -2967,6 +2919,20 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
         ScalarType::Uint128 => Some((false, 128)),
         _ => None,
     }
+}
+
+fn node_contains_name(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
+    if node.kind == SyntaxKind::Name && &source.text()[node.span.start..node.span.end] == name {
+        return true;
+    }
+    let children = match node.kind {
+        SyntaxKind::Binding => node.children.get(1..).unwrap_or_default(),
+        SyntaxKind::MemberExpression => node.children.get(..1).unwrap_or_default(),
+        _ => &node.children,
+    };
+    children
+        .iter()
+        .any(|child| node_contains_name(source, child, name))
 }
 
 fn block_may_fall_through(block: &SyntaxNode) -> bool {

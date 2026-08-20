@@ -14,4 +14,8 @@ fn main() {
     println!("{}{}", terrane_scalar_support::scalar_text(&(terrane_int_support::Int::from(terrane_string_support::find_all(&(String::from("banana")), &(String::from("ana"))).len() as i128))), terrane_scalar_support::scalar_text(&(terrane_int_support::Int::from(terrane_string_support::find_all(&(String::from("banana")), &(String::from(""))).len() as i128))));
     let rtl: String = String::from("שלום");
     println!("{}{}", terrane_scalar_support::scalar_text(&((rtl).starts_with(&(String::from("ש"))))), terrane_scalar_support::scalar_text(&((rtl).ends_with(&(String::from("ם"))))));
+    println!("{}", terrane_scalar_support::scalar_text(&((terrane_string_support::find_all(&(decomposed), &(String::from("")))).len() as i128)));
+    println!("{}", terrane_scalar_support::scalar_text(&((terrane_string_support::split(&(decomposed), &(String::from("")))).len() as i128)));
+    println!("{}", terrane_scalar_support::scalar_text(&(terrane_string_support::replace(&(decomposed), &(String::from("")), &(String::from("X"))))));
+    println!("{}{}{}", terrane_scalar_support::scalar_text(&((decomposed).len() as i128)), terrane_scalar_support::scalar_text(&((decomposed).chars().count() as i128)), terrane_scalar_support::scalar_text(&(terrane_string_support::length(&(decomposed)) as i128)));
 }

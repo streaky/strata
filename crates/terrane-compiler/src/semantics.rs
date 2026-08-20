@@ -97,6 +97,69 @@ pub enum TextUnit {
     Scalars,
     Graphemes,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StringFamily {
+    Trim,
+    Contains,
+    Find,
+    Upper,
+    Lower,
+    Normalise,
+    CaseFold,
+    Split,
+    Replace,
+    Encode,
+    Decode,
+}
+
+impl StringFamily {
+    pub(crate) const fn source_name(self) -> &'static str {
+        match self {
+            Self::Trim => "trim",
+            Self::Contains => "contains",
+            Self::Find => "find",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+            Self::Normalise => "normalise",
+            Self::CaseFold => "case-fold",
+            Self::Split => "split",
+            Self::Replace => "replace",
+            Self::Encode => "encode",
+            Self::Decode => "decode",
+        }
+    }
+
+    const fn has_children(self) -> bool {
+        matches!(
+            self,
+            Self::Trim | Self::Contains | Self::Find | Self::Normalise | Self::Upper | Self::Lower
+        )
+    }
+
+    fn from_source_name(name: &str) -> Option<Self> {
+        match name {
+            "trim" => Some(Self::Trim),
+            "contains" => Some(Self::Contains),
+            "find" => Some(Self::Find),
+            "upper" => Some(Self::Upper),
+            "lower" => Some(Self::Lower),
+            "normalise" => Some(Self::Normalise),
+            "case-fold" => Some(Self::CaseFold),
+            "split" => Some(Self::Split),
+            "replace" => Some(Self::Replace),
+            "encode" => Some(Self::Encode),
+            "decode" => Some(Self::Decode),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StringCallSelection {
+    pub receiver: Span,
+    pub family: StringFamily,
+    pub child: String,
+}
 
 impl std::fmt::Display for ValueType {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -3190,6 +3253,16 @@ fn infer_value_type(
     Ok(None)
 }
 
+fn text_range_member_type(member_name: &str) -> Option<ValueType> {
+    match member_name {
+        "text" => Some(ValueType::Scalar(ScalarType::String)),
+        "bytes" => Some(ValueType::TextRangeView(TextUnit::Bytes)),
+        "scalars" => Some(ValueType::TextRangeView(TextUnit::Scalars)),
+        "graphemes" => Some(ValueType::TextRangeView(TextUnit::Graphemes)),
+        _ => None,
+    }
+}
+
 fn infer_member_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -3220,13 +3293,7 @@ fn infer_member_value_type(
         }
     }
     if receiver_type == Some(ValueType::TextRange) {
-        return Ok(match member_name {
-            "text" => Some(ValueType::Scalar(ScalarType::String)),
-            "bytes" => Some(ValueType::TextRangeView(TextUnit::Bytes)),
-            "scalars" => Some(ValueType::TextRangeView(TextUnit::Scalars)),
-            "graphemes" => Some(ValueType::TextRangeView(TextUnit::Graphemes)),
-            _ => None,
-        });
+        return Ok(text_range_member_type(member_name));
     }
     if matches!(receiver_type, Some(ValueType::TextRangeView(_)))
         && matches!(member_name, "start" | "end")
@@ -3236,7 +3303,10 @@ fn infer_member_value_type(
     if matches!(
         receiver_type,
         Some(
-            ValueType::StringView(_) | ValueType::StringList | ValueType::Scalar(ScalarType::Bytes)
+            ValueType::StringView(_)
+                | ValueType::StringList
+                | ValueType::TextRangeList
+                | ValueType::Scalar(ScalarType::Bytes)
         )
     ) && member_name == "length"
     {
@@ -3296,53 +3366,54 @@ fn infer_member_value_type(
     ))
 }
 
+pub(crate) fn string_call_selection(
+    source: &SourceFile,
+    node: &SyntaxNode,
+) -> Option<StringCallSelection> {
+    let callee = node.children.first()?;
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
+    if callee.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
+    let (receiver_span, family, child) = if receiver.kind == SyntaxKind::MemberExpression
+        && let [nested_receiver, nested_family] = receiver.children.as_slice()
+        && let Some(candidate) = StringFamily::from_source_name(node_text(source, nested_family))
+        && candidate.has_children()
+    {
+        (
+            nested_receiver.span,
+            candidate,
+            node_text(source, member).to_owned(),
+        )
+    } else {
+        (
+            receiver.span,
+            StringFamily::from_source_name(node_text(source, member))?,
+            "default".to_owned(),
+        )
+    };
+    Some(StringCallSelection {
+        receiver: receiver_span,
+        family,
+        child,
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 fn infer_string_call_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
     bindings: &[TypedBinding],
 ) -> Result<Option<ValueType>, SemanticFailure> {
-    let Some(callee) = node.children.first() else {
+    let Some(selection) = string_call_selection(&unit.source, node) else {
         return Ok(None);
     };
-    let [receiver, member] = callee.children.as_slice() else {
-        return Ok(None);
-    };
-    if callee.kind != SyntaxKind::MemberExpression {
-        return Ok(None);
-    }
-    let mut subject = receiver;
-    let mut family = node_text(&unit.source, member);
-    let mut child = "default";
-    if receiver.kind == SyntaxKind::MemberExpression
-        && let [nested_subject, nested_family] = receiver.children.as_slice()
-    {
-        let candidate = node_text(&unit.source, nested_family);
-        if matches!(
-            candidate,
-            "trim" | "contains" | "find" | "normalise" | "upper" | "lower"
-        ) {
-            subject = nested_subject;
-            family = candidate;
-            child = node_text(&unit.source, member);
-        }
-    }
-    if !matches!(
-        family,
-        "trim"
-            | "contains"
-            | "find"
-            | "upper"
-            | "lower"
-            | "normalise"
-            | "case-fold"
-            | "split"
-            | "replace"
-            | "encode"
-            | "decode"
-    ) {
-        return Ok(None);
-    }
+    let subject = find_node_by_span(&unit.tree.root, selection.receiver)
+        .expect("selected string receiver belongs to this syntax tree");
+    let family = selection.family.source_name();
+    let child = selection.child.as_str();
     let subject_type = infer_value_type(unit, subject, bindings)?;
     let receiver_valid = match family {
         "decode" => subject_type == Some(ValueType::Scalar(ScalarType::Bytes)),
@@ -3407,7 +3478,7 @@ fn infer_string_call_type(
                 &unit.source,
                 "T0034",
                 format!("`.{family}.{child}` is not available"),
-                callee.span,
+                node.span,
             ));
         }
     };
@@ -3590,7 +3661,7 @@ fn infer_arithmetic_family_type(
     let Some(ValueType::Scalar(receiver_type)) = infer_value_type(unit, receiver, bindings)? else {
         return Err(failure(
             &unit.source,
-            "T0027",
+            "T0036",
             format!("`.{}` requires an integer receiver", family.source_name()),
             receiver.span,
         ));
@@ -3598,7 +3669,7 @@ fn infer_arithmetic_family_type(
     if !receiver_type.is_integer() {
         return Err(failure(
             &unit.source,
-            "T0027",
+            "T0036",
             format!("`.{}` requires an integer receiver", family.source_name()),
             receiver.span,
         ));
@@ -3616,7 +3687,7 @@ fn infer_arithmetic_family_type(
     {
         return Err(failure(
             &unit.source,
-            "T0027",
+            "T0037",
             "`.negate` is not available on unsigned integers",
             receiver.span,
         ));
@@ -4002,6 +4073,17 @@ fn infer_binary_type(
     let left = infer_value_type(unit, left_node, bindings)?;
     let right = infer_value_type(unit, right_node, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
+    if operator == "is"
+        && (node_text(&unit.source, left_node).trim() == "none"
+            || node_text(&unit.source, right_node).trim() == "none")
+    {
+        return Err(failure(
+            &unit.source,
+            "T0038",
+            "`is none` is invalid; type membership is written `is a none`",
+            node.span,
+        ));
+    }
     if operator == "is" {
         return Ok(ValueType::Scalar(ScalarType::Bool));
     }

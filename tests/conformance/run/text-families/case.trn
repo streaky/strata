@@ -12,3 +12,7 @@ function main
   print; ('banana'.find.count; 'ana'), ('banana'.find.count; '')
   rtl string = 'שלום'
   print; (rtl.contains.start; 'ש'), (rtl.contains.end; 'ם')
+  print; (decomposed.find.all; '').length
+  print; (decomposed.split; '').length
+  print; (decomposed.replace; '', 'X')
+  print; decomposed.bytes.length, decomposed.scalars.length, decomposed.graphemes.length

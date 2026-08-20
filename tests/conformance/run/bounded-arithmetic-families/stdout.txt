@@ -7,3 +7,15 @@
 -120false
 -16
 1
+true127
+-116127
+-116truetrue
+-16true
+-16true
+-128127
+-128truetrue
+00
+0truetrue
+-32
+-21
+32

@@ -26,7 +26,6 @@ pub fn scalar_length(value: &str) -> usize {
 pub const fn byte_length(value: &str) -> usize {
     value.len()
 }
-pub const UNICODE_VERSION: &str = "16.0.0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Encoding {
@@ -205,13 +204,6 @@ pub fn decode(value: &[u8], encoding: Encoding) -> Result<String, DecodeError> {
         }
     }
 }
-#[must_use]
-pub fn decode_or_fail(value: &[u8], encoding: Encoding) -> String {
-    decode(value, encoding).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(1);
-    })
-}
 
 #[must_use]
 pub fn trim(value: &str) -> String {
@@ -247,6 +239,18 @@ pub fn find(value: &str, pattern: &str) -> Option<TextRange> {
 #[must_use]
 pub fn find_all(value: &str, pattern: &str) -> Vec<TextRange> {
     let source = Arc::<str>::from(value);
+    if pattern.is_empty() {
+        return source
+            .grapheme_indices(true)
+            .map(|(start, _)| start)
+            .chain(std::iter::once(source.len()))
+            .map(|start| TextRange {
+                source: Arc::clone(&source),
+                start,
+                end: start,
+            })
+            .collect();
+    }
     source
         .match_indices(pattern)
         .map(|(start, matched)| TextRange {
@@ -316,10 +320,24 @@ pub fn normalise(value: &str, form: &str) -> String {
 
 #[must_use]
 pub fn split(value: &str, pattern: &str) -> Vec<String> {
+    if pattern.is_empty() {
+        return value.graphemes(true).map(str::to_owned).collect();
+    }
     value.split(pattern).map(str::to_owned).collect()
 }
 
 #[must_use]
 pub fn replace(value: &str, pattern: &str, replacement: &str) -> String {
+    if pattern.is_empty() {
+        let mut result = String::with_capacity(
+            value.len() + replacement.len() * (value.graphemes(true).count() + 1),
+        );
+        result.push_str(replacement);
+        for grapheme in value.graphemes(true) {
+            result.push_str(grapheme);
+            result.push_str(replacement);
+        }
+        return result;
+    }
     value.replace(pattern, replacement)
 }

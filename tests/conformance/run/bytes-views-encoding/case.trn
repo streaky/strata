@@ -9,3 +9,11 @@ function main
   for byte in raw
     print; byte
   print; raw.length, (raw.decode; utf8)
+  utf16le-text string = (text.encode; utf16-le).decode; utf16-le
+  utf16be-text string = (text.encode; utf16-be).decode; utf16-be
+  utf32le-text string = (text.encode; utf32-le).decode; utf32-le
+  utf32be-text string = (text.encode; utf32-be).decode; utf32-be
+  print; utf16le-text
+  print; utf16be-text
+  print; utf32le-text
+  print; utf32be-text
