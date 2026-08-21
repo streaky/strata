@@ -107,11 +107,21 @@ fn main() {
         println!("{}", terrane_scalar_support::scalar_text(&(across_if)));
     }
     let mut across_loop: i8 = 0;
-    for first in terrane_string_support::graphemes(&String::from("ab")) {
+    let mut __terrane_iterator_0 = terrane_collection_support::string_iterator(&(String::from("ab")));
+    loop {
+        let first = match __terrane_iterator_0.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         let _ = &first;
         across_loop = 1;
     }
-    for second in terrane_string_support::graphemes(&String::from("cd")) {
+    let mut __terrane_iterator_1 = terrane_collection_support::string_iterator(&(String::from("cd")));
+    loop {
+        let second = match __terrane_iterator_1.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         let _ = &second;
         println!("{}", terrane_scalar_support::scalar_text(&(across_loop)));
     }

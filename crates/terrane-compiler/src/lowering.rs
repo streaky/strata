@@ -6,8 +6,9 @@ use crate::{
     ScalarType, SourceFile, TypeCategory,
     rust_ir::{Item, Module, Program},
     semantics::{
-        ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
-        SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
+        ArithmeticFamily, CoercionPolicy, ContextualConstant, ElementType, FunctionContract,
+        MemberFamily, SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding,
+        ValueType,
         binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read, bound_method,
         contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
         string_call_selection,
@@ -1187,16 +1188,28 @@ impl Emitter<'_> {
                 let name = rust_name(self.text(name));
                 let collection_type = self.value_type(collection);
                 let collection = self.expression(collection);
-                if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
-                    self.line(&format!(
-                        "for {mutable}{name} in ({collection}).iter().copied() {{"
-                    ));
-                } else {
-                    self.line(&format!(
-                        "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
-                    ));
-                }
+                let iterator = format!("__terrane_iterator_{}", self.loop_counter);
+                self.loop_counter += 1;
+                let constructor = match collection_type {
+                    Some(ValueType::Scalar(ScalarType::Bytes)) => {
+                        format!("terrane_collection_support::bytes_iterator(&({collection}))")
+                    }
+                    Some(ValueType::Iterator(_)) => collection,
+                    _ => format!(
+                        "terrane_collection_support::string_iterator(&({collection}))"
+                    ),
+                };
+                self.line(&format!("let mut {iterator} = {constructor};"));
+                self.line("loop {");
                 self.indent += 1;
+                self.line(&format!(
+                    "let {mutable}{name} = match {iterator}.next() {{"
+                ));
+                self.indent += 1;
+                self.line("terrane_collection_support::IterationStep::Item(item) => item,");
+                self.line("terrane_collection_support::IterationStep::End => break,");
+                self.indent -= 1;
+                self.line("};");
                 if !binding_span_is_read(self.package, name_span) {
                     self.line(&format!("let _ = &{name};"));
                 }
@@ -1952,6 +1965,26 @@ impl Emitter<'_> {
             } else {
                 self.fallible(call, node)
             };
+        }
+        if self.is_builtin(callee, "/core/collections::iterator") {
+            let item_type = self
+                .value_type(node)
+                .and_then(|ty| match ty {
+                    ValueType::Iterator(item) => Some(item),
+                    _ => None,
+                })
+                .expect("validated iterator constructor has an item type");
+            let values = arguments
+                .children
+                .iter()
+                .map(|argument| argument.children.last().unwrap_or(argument))
+                .map(|value| self.expression_as(value, item_type.value_type()))
+                .collect::<Vec<_>>();
+            return format!(
+                "terrane_collection_support::Iterator::<{}>::new(vec![{}])",
+                rust_element_type(item_type),
+                values.join(", ")
+            );
         }
         let mut values = arguments
             .children
@@ -2922,6 +2955,13 @@ fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNo
 fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
+fn rust_element_type(ty: ElementType) -> String {
+    match ty {
+        ElementType::Scalar(scalar) => rust_type(scalar).to_owned(),
+        ElementType::TextRange => "terrane_string_support::TextRange".to_owned(),
+    }
+}
+
 
 fn rust_value_type(ty: ValueType) -> String {
     match ty {
@@ -2939,6 +2979,18 @@ fn rust_value_type(ty: ValueType) -> String {
         ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
         ValueType::TextRange => "terrane_string_support::TextRange".to_owned(),
         ValueType::TextRangeOrNone => "Option<terrane_string_support::TextRange>".to_owned(),
+        ValueType::Iterator(item) => {
+            format!(
+                "terrane_collection_support::Iterator<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::IterationStep(item) => {
+            format!(
+                "terrane_collection_support::IterationStep<{}>",
+                rust_element_type(item)
+            )
+        }
         ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
     }
 }

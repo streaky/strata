@@ -78,6 +78,21 @@ pub struct SemanticPackage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementType {
+    Scalar(ScalarType),
+    TextRange,
+}
+
+impl ElementType {
+    pub(crate) fn value_type(self) -> ValueType {
+        match self {
+            Self::Scalar(ty) => ValueType::Scalar(ty),
+            Self::TextRange => ValueType::TextRange,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValueType {
     Scalar(ScalarType),
     ScalarOrNone(ScalarType),
@@ -89,6 +104,8 @@ pub enum ValueType {
     TextRangeView(TextUnit),
     TextRangeOrNone,
     TextRangeList,
+    Iterator(ElementType),
+    IterationStep(ElementType),
     Encoding,
 }
 
@@ -179,6 +196,10 @@ impl std::fmt::Display for ValueType {
             Self::TextRangeView(TextUnit::Graphemes) => formatter.write_str("text-range.graphemes"),
             Self::TextRangeOrNone => formatter.write_str("text-range|none"),
             Self::TextRangeList => formatter.write_str("list of text-range"),
+            Self::Iterator(item) => write!(formatter, "iterator of {}", item.value_type()),
+            Self::IterationStep(item) => {
+                write!(formatter, "iteration-step of {}", item.value_type())
+            }
             Self::Encoding => formatter.write_str("encoding"),
         }
     }
@@ -1823,11 +1844,16 @@ fn validate_call_nodes<'a>(
             active_function,
             scoped_bindings,
         )?;
+        let item_type = match infer_value_type(unit, collection, scoped_bindings)? {
+            Some(ValueType::Scalar(ScalarType::Bytes)) => ValueType::Scalar(ScalarType::Uint8),
+            Some(ValueType::Iterator(item)) => item.value_type(),
+            _ => ValueType::Scalar(ScalarType::String),
+        };
         let mut loop_bindings = scoped_bindings.to_vec();
         loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
-            value_type: ValueType::Scalar(ScalarType::String),
+            value_type: item_type,
             destination_arms: Vec::new(),
             storage_type: None,
             mutable: false,
@@ -2365,12 +2391,13 @@ fn collect_typed_bindings(
         && let Some(name) = target.children.first()
     {
         collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
-        let item_type = if infer_value_type(unit, collection, visible_bindings)?
-            == Some(ValueType::Scalar(ScalarType::Bytes))
-        {
-            ValueType::Scalar(ScalarType::Uint8)
-        } else {
-            ValueType::Scalar(ScalarType::String)
+        let collection_type = infer_value_type(unit, collection, visible_bindings)?;
+        let item_type = match collection_type {
+            Some(ValueType::Scalar(ScalarType::Bytes)) => {
+                ValueType::Scalar(ScalarType::Uint8)
+            }
+            Some(ValueType::Iterator(item)) => item.value_type(),
+            _ => ValueType::Scalar(ScalarType::String),
         };
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
@@ -3254,6 +3281,9 @@ fn infer_value_type(
         return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
+        if let Some(value_type) = infer_iterator_call_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
         if let Some(value_type) = infer_string_call_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
@@ -3311,6 +3341,80 @@ fn infer_value_type(
         return Ok(None);
     }
     Ok(None)
+}
+
+fn resolved_compiler_object_identity<'a>(
+    unit: &'a SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<&'a str> {
+    let name = (node.kind == SyntaxKind::Name).then(|| node_text(&unit.source, node))?;
+    lexical_scope_chain(unit, node.span.start).find_map(|scope| {
+        scope.symbols.get(name)?.iter().rev().find_map(|symbol| {
+            symbol
+                .declaration_span
+                .is_none_or(|span| span.end <= node.span.start)
+                .then_some(symbol.identity.as_str())
+        })
+    })
+}
+
+fn infer_iterator_call_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let [callee, arguments] = node.children.as_slice() else {
+        return Ok(None);
+    };
+    let shadowed = bindings.iter().rev().any(|binding| {
+        binding.name == node_text(&unit.source, callee) && binding.span.start <= callee.span.start
+    });
+    if resolved_compiler_object_identity(unit, callee) != Some("/core/collections::iterator")
+        && (node_text(&unit.source, callee) != "iterator" || shadowed)
+    {
+        return Ok(None);
+    }
+    let mut item_type = None;
+    for argument in &arguments.children {
+        let value = argument.children.last().unwrap_or(argument);
+        let inferred = infer_value_type(unit, value, bindings)?.ok_or_else(|| {
+            failure(
+                &unit.source,
+                "T0041",
+                "iterator items require a statically known value type",
+                value.span,
+            )
+        })?;
+        let element = match inferred {
+            ValueType::Scalar(ty) => ElementType::Scalar(ty),
+            ValueType::TextRange => ElementType::TextRange,
+            other => {
+                return Err(failure(
+                    &unit.source,
+                    "T0041",
+                    format!("`iterator` cannot contain `{other}` values"),
+                    value.span,
+                ));
+            }
+        };
+        if item_type.is_some_and(|existing| existing != element) {
+            return Err(failure(
+                &unit.source,
+                "T0041",
+                "iterator items must have one statically known type",
+                value.span,
+            ));
+        }
+        item_type = Some(element);
+    }
+    item_type.map(ValueType::Iterator).map(Some).ok_or_else(|| {
+        failure(
+            &unit.source,
+            "T0041",
+            "an empty iterator requires an explicit item type",
+            node.span,
+        )
+    })
 }
 
 fn text_range_member_type(member_name: &str) -> Option<ValueType> {
@@ -5284,30 +5388,31 @@ fn validate_flow_statement(
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
                 let collection_type = infer_value_type(unit, collection, bindings)?;
-                if !matches!(
-                    collection_type,
-                    Some(ValueType::Scalar(ScalarType::String | ScalarType::Bytes))
-                ) {
-                    return Err(failure(
-                        &unit.source,
-                        "T0016",
-                        "collection iteration requires `string` or `bytes`",
-                        collection.span,
-                    ));
-                }
+                let item_type = match collection_type {
+                    Some(ValueType::Scalar(ScalarType::String)) => {
+                        ValueType::Scalar(ScalarType::String)
+                    }
+                    Some(ValueType::Scalar(ScalarType::Bytes)) => {
+                        ValueType::Scalar(ScalarType::Uint8)
+                    }
+                    Some(ValueType::Iterator(item)) => item.value_type(),
+                    _ => {
+                        return Err(failure(
+                            &unit.source,
+                            "T0016",
+                            "collection iteration requires an iterable value",
+                            collection.span,
+                        ));
+                    }
+                };
                 if target.children.len() != 1 {
                     return Err(failure(
                         &unit.source,
                         "T0016",
-                        "string and bytes iteration require exactly one target",
+                        "iteration requires exactly one target",
                         target.span,
                     ));
                 }
-                let item_type = if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
-                    ValueType::Scalar(ScalarType::Uint8)
-                } else {
-                    ValueType::Scalar(ScalarType::String)
-                };
                 loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
@@ -5717,7 +5822,14 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         compiler_owned_object("/core/errors", "error", SymbolKind::Interface),
     );
     namespaces.insert("/core/errors".to_owned(), errors);
-    namespaces.insert("/core/collections".to_owned(), Namespace::default());
+    namespaces.insert(
+        "/core/collections".to_owned(),
+        namespace_with_objects(
+            "/core/collections",
+            ["iterator"],
+            SymbolKind::TypeDescriptor,
+        ),
+    );
     namespaces
 }
 

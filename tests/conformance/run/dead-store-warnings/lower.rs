@@ -10,7 +10,12 @@ fn main() {
     let _ = &mut stale;
     stale = 4;
     let _ = &mut stale;
-    for ignored in terrane_string_support::graphemes(&String::from("ab")) {
+    let mut __terrane_iterator_0 = terrane_collection_support::string_iterator(&(String::from("ab")));
+    loop {
+        let ignored = match __terrane_iterator_0.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         let _ = &ignored;
         println!("{}", terrane_scalar_support::scalar_text(&(String::from("tick"))));
     }

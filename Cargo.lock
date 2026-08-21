@@ -486,6 +486,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "terrane-collection-support"
+version = "0.1.0"
+dependencies = [
+ "terrane-int-support",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "terrane-compiler"
 version = "0.1.0"
 dependencies = [

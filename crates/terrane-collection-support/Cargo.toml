@@ -1,0 +1,13 @@
+[package]
+name = "terrane-collection-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+terrane-int-support = { path = "../terrane-int-support" }
+unicode-segmentation = "1"
+
+[lints]
+workspace = true
