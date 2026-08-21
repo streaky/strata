@@ -1199,6 +1199,9 @@ Deliver:
 - YAML restricted to a safe core schema with no executable tags and enforced depth, size, and alias-expansion limits;
 - descriptor-driven `serializable` and `deserializable` mapping with field names, optional and default fields, unknown-field policy, and full data-path diagnostics;
 - parsed `url` values following the pinned WHATWG standard with UTS #46 processing, ordered query entries, and credentials never displayed by default.
+- adversarial-key handling for document maps: the core collection contract uses a deterministic
+  fixed-seed hash, which is reproducible but not collision-resistant, so parsers must not expose
+  untrusted chosen keys to an algorithmically unbounded hash-table path.
 
 Exit criterion: a decode failure reports its document path and expected descriptor; canonical output is byte-identical across runs; a YAML alias bomb is refused by limit.
 

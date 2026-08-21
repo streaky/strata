@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 
@@ -12,68 +11,96 @@ pub enum IterationStep<T> {
     End,
 }
 
+#[derive(Clone, Debug)]
 pub struct Iterator<T> {
-    next_item: Box<dyn FnMut() -> Option<T>>,
+    items: Arc<Vec<T>>,
+    index: usize,
     ended: bool,
 }
 
-impl<T> fmt::Debug for Iterator<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Iterator")
-            .field("ended", &self.ended)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T: 'static> Iterator<T> {
+impl<T> Iterator<T> {
     #[must_use]
     pub fn new(items: Vec<T>) -> Self {
-        let mut items = items.into_iter();
-        Self::from_fn(move || items.next())
-    }
-
-    fn from_arc<S, F>(source: Arc<S>, mut item_at: F) -> Self
-    where
-        S: 'static,
-        F: FnMut(&S, usize) -> Option<T> + 'static,
-    {
-        let mut index = 0;
-        Self::from_fn(move || {
-            let item = item_at(&source, index);
-            index += usize::from(item.is_some());
-            item
-        })
-    }
-
-    fn from_fn(next_item: impl FnMut() -> Option<T> + 'static) -> Self {
         Self {
-            next_item: Box::new(next_item),
+            items: Arc::new(items),
+            index: 0,
             ended: false,
         }
     }
+}
 
+impl<T: Clone> Iterator<T> {
     #[must_use]
     #[expect(
         clippy::should_implement_trait,
         reason = "Terrane iteration returns an explicit typed step rather than Rust Option"
     )]
     pub fn next(&mut self) -> IterationStep<T> {
-        if self.ended {
-            return IterationStep::End;
+        next_indexed(&self.items, &mut self.index, &mut self.ended)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CollectionIterator<C> {
+    collection: C,
+    index: usize,
+    ended: bool,
+}
+
+impl<C> CollectionIterator<C> {
+    fn new(collection: C) -> Self {
+        Self {
+            collection,
+            index: 0,
+            ended: false,
         }
-        if let Some(item) = (self.next_item)() {
-            IterationStep::Item(item)
-        } else {
-            self.ended = true;
-            IterationStep::End
-        }
+    }
+}
+
+impl<C: IndexedIteration> CollectionIterator<C> {
+    #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "Terrane iteration returns an explicit typed step rather than Rust Option"
+    )]
+    pub fn next(&mut self) -> IterationStep<C::Item> {
+        next_indexed(&self.collection, &mut self.index, &mut self.ended)
+    }
+}
+
+fn next_indexed<S, T>(source: &S, index: &mut usize, ended: &mut bool) -> IterationStep<T>
+where
+    S: IndexedIteration<Item = T>,
+{
+    if *ended {
+        return IterationStep::End;
+    }
+    if let Some(item) = source.item_at(*index) {
+        *index += 1;
+        IterationStep::Item(item)
+    } else {
+        *ended = true;
+        IterationStep::End
+    }
+}
+
+#[doc(hidden)]
+pub trait IndexedIteration {
+    type Item;
+    fn item_at(&self, index: usize) -> Option<Self::Item>;
+}
+
+impl<T: Clone> IndexedIteration for Arc<Vec<T>> {
+    type Item = T;
+    fn item_at(&self, index: usize) -> Option<T> {
+        self.get(index).cloned()
     }
 }
 
 pub trait Iterable {
     type Item: Clone + 'static;
-    fn terrane_iterator(&self) -> Iterator<Self::Item>;
+    type Iter;
+    fn terrane_iterator(&self) -> Self::Iter;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,12 +149,18 @@ impl<T: Clone> List<T> {
     }
 }
 
+impl<T: Clone + 'static> IndexedIteration for List<T> {
+    type Item = T;
+    fn item_at(&self, index: usize) -> Option<T> {
+        self.0.get(index).cloned()
+    }
+}
+
 impl<T: Clone + 'static> Iterable for List<T> {
     type Item = T;
-    fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::from_arc(Arc::clone(&self.0), |items, index| {
-            items.get(index).cloned()
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -157,12 +190,17 @@ impl<T> Tuple<T> {
         self.0.get(index).cloned().ok_or(IndexError { index })
     }
 }
+impl<T: Clone + 'static> IndexedIteration for Tuple<T> {
+    type Item = T;
+    fn item_at(&self, index: usize) -> Option<T> {
+        self.0.get(index).cloned()
+    }
+}
 impl<T: Clone + 'static> Iterable for Tuple<T> {
     type Item = T;
-    fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::from_arc(Arc::clone(&self.0), |items, index| {
-            items.get(index).cloned()
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -249,13 +287,19 @@ impl<K: Eq + Hash + Clone, V: Clone> Map<K, V> {
         )
     }
 }
+impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> IndexedIteration for Map<K, V> {
+    type Item = Entry<K, V>;
+    fn item_at(&self, index: usize) -> Option<Self::Item> {
+        self.0
+            .get_index(index)
+            .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+    }
+}
 impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> Iterable for Map<K, V> {
     type Item = Entry<K, V>;
-    fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        Iterator::from_arc(Arc::clone(&self.0), |map, index| {
-            map.get_index(index)
-                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -283,12 +327,17 @@ impl<T: Eq + Hash + Clone> Set<T> {
         Arc::make_mut(&mut self.0).shift_remove(item)
     }
 }
+impl<T: Eq + Hash + Clone + 'static> IndexedIteration for Set<T> {
+    type Item = T;
+    fn item_at(&self, index: usize) -> Option<T> {
+        self.0.get_index(index).cloned()
+    }
+}
 impl<T: Eq + Hash + Clone + 'static> Iterable for Set<T> {
     type Item = T;
-    fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::from_arc(Arc::clone(&self.0), |set, index| {
-            set.get_index(index).cloned()
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -379,19 +428,19 @@ impl<K: Eq + Hash + Clone, V: Clone> UnorderedMap<K, V> {
     }
 }
 
+impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> IndexedIteration for UnorderedMap<K, V> {
+    type Item = Entry<K, V>;
+    fn item_at(&self, index: usize) -> Option<Self::Item> {
+        let key = self.0.iteration_keys.get(index)?;
+        Some(Entry::new(key.clone(), self.0.indexed_value(key).clone()))
+    }
+}
+
 impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> Iterable for UnorderedMap<K, V> {
     type Item = Entry<K, V>;
-    fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        Iterator::from_arc(Arc::clone(&self.0), |data, index| {
-            let key = data.iteration_keys.get(index)?;
-            Some(Entry::new(
-                key.clone(),
-                data.values
-                    .get(key)
-                    .expect("indexed key must exist")
-                    .clone(),
-            ))
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -445,12 +494,18 @@ impl<T: Eq + Hash + Clone> UnorderedSet<T> {
     }
 }
 
+impl<T: Eq + Hash + Clone + 'static> IndexedIteration for UnorderedSet<T> {
+    type Item = T;
+    fn item_at(&self, index: usize) -> Option<T> {
+        self.0.iteration_items.get(index).cloned()
+    }
+}
+
 impl<T: Eq + Hash + Clone + 'static> Iterable for UnorderedSet<T> {
     type Item = T;
-    fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::from_arc(Arc::clone(&self.0), |data, index| {
-            data.iteration_items.get(index).cloned()
-        })
+    type Iter = CollectionIterator<Self>;
+    fn terrane_iterator(&self) -> Self::Iter {
+        CollectionIterator::new(self.clone())
     }
 }
 
@@ -488,27 +543,53 @@ impl Range {
         })
     }
 }
+#[derive(Clone, Debug)]
+pub struct RangeIterator {
+    current: Int,
+    end: Int,
+    step: Int,
+    inclusive: bool,
+    ascending: bool,
+    ended: bool,
+}
+
+impl RangeIterator {
+    #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "Terrane iteration returns an explicit typed step rather than Rust Option"
+    )]
+    pub fn next(&mut self) -> IterationStep<Int> {
+        if self.ended {
+            return IterationStep::End;
+        }
+        let in_bounds = if self.ascending {
+            self.current < self.end || (self.inclusive && self.current == self.end)
+        } else {
+            self.current > self.end || (self.inclusive && self.current == self.end)
+        };
+        if !in_bounds {
+            self.ended = true;
+            return IterationStep::End;
+        }
+        let item = self.current.clone();
+        self.current = self.current.clone() + self.step.clone();
+        IterationStep::Item(item)
+    }
+}
+
 impl Iterable for Range {
     type Item = Int;
-    fn terrane_iterator(&self) -> Iterator<Int> {
-        let end = self.end.clone();
-        let step = self.step.clone();
-        let inclusive = self.inclusive;
-        let mut current = self.start.clone();
-        let ascending = step > Int::from(0_i64);
-        Iterator::from_fn(move || {
-            let in_bounds = if ascending {
-                current < end || (inclusive && current == end)
-            } else {
-                current > end || (inclusive && current == end)
-            };
-            if !in_bounds {
-                return None;
-            }
-            let item = current.clone();
-            current = current.clone() + step.clone();
-            Some(item)
-        })
+    type Iter = RangeIterator;
+    fn terrane_iterator(&self) -> Self::Iter {
+        RangeIterator {
+            current: self.start.clone(),
+            end: self.end.clone(),
+            step: self.step.clone(),
+            inclusive: self.inclusive,
+            ascending: self.step > Int::from(0_i64),
+            ended: false,
+        }
     }
 }
 
