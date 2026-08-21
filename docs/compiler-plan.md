@@ -1055,7 +1055,12 @@ Deliver:
 
 Exit criterion: a user-defined iterator drives `for` through the same path as the built-in string iteration, and an iterator yielding `none` as a legitimate item is distinguished from exhaustion.
 
-### Milestone 14 — Collections
+### Milestone 14 — Collections and value semantics
+
+Collections are the first non-scalar mutable value type, so the value-semantics half of ownership
+lands here rather than being retrofitted after the types that need it. References, provenance, and
+borrow analysis remain milestone 17; linear resources arrive with the first real resources in
+milestone 20.
 
 Deliver:
 
@@ -1063,9 +1068,12 @@ Deliver:
 - lookup and indexing whose default child throws `missing-key` or `index-error` and whose `checked` child returns absence, with no operation returning absence by default;
 - insertion-ordered map and set as the observable contract, plus a separate unordered type that is deterministic under a fixed hash seed rather than merely unordered;
 - half-open ranges with an explicit inclusive constructor, non-zero step, and empty-range rules;
-- copy-on-write separation at the first mutation visible through a non-unique handle, with mutable and identity-bearing values rejected as hash keys.
+- semantic value assignment for ordinary values, so a value handed to another binding is independent of its source without requiring a physical copy the compiler can prove is unnecessary;
+- copy-on-write separation at the first mutation visible through a non-unique handle, with mutable and identity-bearing values rejected as hash keys;
+- the deterministic drop pipeline, since a collection is the first value whose release point is observable;
+- identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
 
-Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants.
+Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants; and value assignment, separation, and drop order are each observable through a collection rather than asserted in the abstract.
 
 ### Milestone 15 — Function values and closures
 
@@ -1089,20 +1097,21 @@ Deliver:
 
 Exit criterion: each of construction, inheritance, interface conformance, and trait reuse has an executable slice; dynamic-object state is preserved end to end.
 
-### Milestone 17 — Ownership, references, and resources
+### Milestone 17 — References and provenance
+
+Value semantics, separation, and drop land with collections in milestone 14; this milestone adds the
+explicit-reference half over them.
 
 Deliver:
 
-- semantic value assignment for ordinary values, linear resources, and explicit references;
+- explicit references as a declared form of semantic value assignment, distinguished from the independent-value assignment milestone 14 delivers;
 - `ref`, `move`, and weak references with lifetime and provenance analysis reported in source terms;
 - the diagnostic that milestone 4.8 defers to this one: a type-changing replacement of a binding is
   rejected while an outstanding reference observes it, since retyping a value another scope holds
   must not happen without something explicit appearing there. Same-type replacement stays legal and
-  the reference observes the new value;
-- the deterministic drop pipeline;
-- identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
+  the reference observes the new value.
 
-Exit criterion: ownership analysis accompanies the first non-scalar mutable value type rather than being retrofitted, and borrow escape is diagnosed at the originating binding.
+Exit criterion: borrow escape is diagnosed at the originating binding, and a reference observing a binding is proven against the value semantics already exercised by collections.
 
 ### Milestone 18 — Capabilities, effects, and reflection
 
@@ -1142,9 +1151,10 @@ Deliver:
 - text reader and writer adapters carrying explicit encodings and performing no implicit newline translation;
 - typed stdin, stdout, and stderr over the same protocols;
 - explicit idempotent close with observable close and flush failures, and `flush` distinguished from `sync-data` and `sync-all`;
+- linear resource semantics, deferred here from milestone 17 because a stream handle is the first value that is genuinely linear: a resource is consumed rather than copied, its release is the drop pipeline milestone 14 delivers, and double release is a compile-time failure rather than a runtime one;
 - async variants sharing the same contracts with cancellation.
 
-Exit criterion: partial reads and writes, EOF, and use-after-close each have cases; a cancelled stream operation reports what it completed.
+Exit criterion: partial reads and writes, EOF, and use-after-close each have cases; a cancelled stream operation reports what it completed; and a released resource cannot be used again.
 
 ### Milestone 21 — Paths, filesystem, and process facilities
 
