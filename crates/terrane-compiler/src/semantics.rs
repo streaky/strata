@@ -123,6 +123,7 @@ pub enum ValueType {
     TextRangeList,
     Iterator(ElementType),
     IterationStep(ElementType),
+    ElementOrNone(ElementType),
     List(ElementType),
     Map(ScalarType, ScalarType),
     Set(ScalarType),
@@ -225,6 +226,7 @@ impl std::fmt::Display for ValueType {
             Self::IterationStep(item) => {
                 write!(formatter, "iteration-step of {}", item.value_type())
             }
+            Self::ElementOrNone(item) => write!(formatter, "{}|none", item.value_type()),
             Self::List(item) => write!(formatter, "list of {}", item.value_type()),
             Self::Map(key, value) => write!(formatter, "map of {key}, {value}"),
             Self::Set(item) => write!(formatter, "set of {item}"),
@@ -2727,6 +2729,32 @@ fn analyze_binding_node(
     node: &SyntaxNode,
     bindings: &mut Vec<TypedBinding>,
 ) -> Result<(), SemanticFailure> {
+    if node.kind == SyntaxKind::Assignment
+        && let [target, value] = node.children.as_slice()
+        && target.kind == SyntaxKind::IndexExpression
+        && let [receiver, _] = target.children.as_slice()
+        && let Some(receiver_type) = infer_value_type(unit, receiver, bindings)?
+    {
+        let expected = match receiver_type {
+            ValueType::List(item) => Some(item.value_type()),
+            ValueType::Map(_, value) | ValueType::UnorderedMap(_, value) => {
+                Some(ValueType::Scalar(value))
+            }
+            _ => None,
+        };
+        let actual = infer_value_type(unit, value, bindings)?;
+        if let (Some(expected), Some(actual)) = (expected, actual)
+            && expected != actual
+        {
+            return Err(failure(
+                &unit.source,
+                "T0042",
+                format!("indexed assignment requires `{expected}`, found `{actual}`"),
+                value.span,
+            ));
+        }
+        return Ok(());
+    }
     let Some(name_node) = node
         .children
         .iter()
@@ -3072,6 +3100,7 @@ fn optional_inner(value_type: ValueType) -> Option<ValueType> {
     match value_type {
         ValueType::ScalarOrNone(scalar) => Some(ValueType::Scalar(scalar)),
         ValueType::TextRangeOrNone => Some(ValueType::TextRange),
+        ValueType::ElementOrNone(item) => Some(item.value_type()),
         _ => None,
     }
 }
@@ -3439,6 +3468,10 @@ fn homogeneous_element_type(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "collection construction inference centralizes one compiler-owned object family"
+)]
 fn infer_collection_call_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -3447,6 +3480,24 @@ fn infer_collection_call_type(
     let [callee, arguments] = node.children.as_slice() else {
         return Ok(None);
     };
+    if callee.kind == SyntaxKind::MemberExpression
+        && let [family, child] = callee.children.as_slice()
+        && node_text(&unit.source, child) == "checked"
+        && family.kind == SyntaxKind::MemberExpression
+        && let [receiver, member] = family.children.as_slice()
+        && node_text(&unit.source, member) == "get"
+        && let Some(receiver_type) = infer_value_type(unit, receiver, bindings)?
+    {
+        return Ok(match receiver_type {
+            ValueType::List(item) | ValueType::Tuple(item, _) => {
+                Some(ValueType::ElementOrNone(item))
+            }
+            ValueType::Map(_, value) | ValueType::UnorderedMap(_, value) => {
+                Some(ValueType::ScalarOrNone(value))
+            }
+            _ => None,
+        });
+    }
     if callee.kind == SyntaxKind::MemberExpression
         && let [receiver, member] = callee.children.as_slice()
         && node_text(&unit.source, member) == "through"
@@ -3470,13 +3521,21 @@ fn infer_collection_call_type(
         return Ok(match (receiver_type, member) {
             (ValueType::List(item), "append" | "set") => Some(ValueType::List(item)),
             (ValueType::Map(key, value), "set") => Some(ValueType::Map(key, value)),
+            (ValueType::UnorderedMap(key, value), "set") => {
+                Some(ValueType::UnorderedMap(key, value))
+            }
             (ValueType::Set(item), "add") => Some(ValueType::Set(item)),
-            (ValueType::Set(_), "contains" | "remove") => Some(ValueType::Scalar(ScalarType::Bool)),
-            (ValueType::Map(key, _), "keys") => Some(ValueType::List(ElementType::Scalar(key))),
-            (ValueType::Map(_, value), "values") => {
+            (ValueType::UnorderedSet(item), "add") => Some(ValueType::UnorderedSet(item)),
+            (ValueType::Set(_) | ValueType::UnorderedSet(_), "contains" | "remove") => {
+                Some(ValueType::Scalar(ScalarType::Bool))
+            }
+            (ValueType::Map(key, _) | ValueType::UnorderedMap(key, _), "keys") => {
+                Some(ValueType::List(ElementType::Scalar(key)))
+            }
+            (ValueType::Map(_, value) | ValueType::UnorderedMap(_, value), "values") => {
                 Some(ValueType::List(ElementType::Scalar(value)))
             }
-            (ValueType::Map(key, value), "entries") => {
+            (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "entries") => {
                 Some(ValueType::List(ElementType::Entry(key, value)))
             }
             _ => None,
@@ -3683,6 +3742,10 @@ fn text_range_member_type(member_name: &str) -> Option<ValueType> {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "member inference keeps receiver precedence and diagnostics in one ordered dispatch"
+)]
 fn infer_member_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -4531,11 +4594,19 @@ fn infer_binary_type(
     if matches!(operator, "==" | "!=")
         && ((matches!(
             left,
-            Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+            Some(
+                ValueType::ScalarOrNone(_)
+                    | ValueType::TextRangeOrNone
+                    | ValueType::ElementOrNone(_)
+            )
         ) && node_text(&unit.source, right_node).trim() == "none")
             || (matches!(
                 right,
-                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+                Some(
+                    ValueType::ScalarOrNone(_)
+                        | ValueType::TextRangeOrNone
+                        | ValueType::ElementOrNone(_)
+                )
             ) && node_text(&unit.source, left_node).trim() == "none"))
     {
         return Ok(ValueType::Scalar(ScalarType::Bool));
@@ -6082,6 +6153,8 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             "negative-shift-count",
             "coercion-error",
             "decode-error",
+            "index-error",
+            "missing-key",
         ],
         SymbolKind::ErrorObject,
     );
@@ -6809,7 +6882,11 @@ pub(crate) fn binding_span_is_mutated(
             node.kind,
             SyntaxKind::Assignment | SyntaxKind::PostfixExpression
         ) && node.span != declaration_span
-            && node.children.first().is_some_and(resolves_to_binding);
+            && node.children.first().is_some_and(|target| {
+                resolves_to_binding(target)
+                    || (target.kind == SyntaxKind::IndexExpression
+                        && target.children.first().is_some_and(resolves_to_binding))
+            });
         let mutator_call = node.kind == SyntaxKind::CallExpression
             && node.children.first().is_some_and(|callee| {
                 let [receiver, member] = callee.children.as_slice() else {

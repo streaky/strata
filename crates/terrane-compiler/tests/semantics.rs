@@ -244,7 +244,9 @@ fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
             "decode-error",
             "division-by-zero",
             "error",
+            "index-error",
             "integer-conversion-overflow",
+            "missing-key",
             "negative-shift-count",
         ]
     );

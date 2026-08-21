@@ -26,19 +26,21 @@ impl<T: Clone> Iterator<T> {
         }
     }
 
+    #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "Terrane iteration returns an explicit typed step rather than Rust Option"
+    )]
     pub fn next(&mut self) -> IterationStep<T> {
         if self.ended {
             return IterationStep::End;
         }
-        match self.items.get(self.index).cloned() {
-            Some(item) => {
-                self.index += 1;
-                IterationStep::Item(item)
-            }
-            None => {
-                self.ended = true;
-                IterationStep::End
-            }
+        if let Some(item) = self.items.get(self.index).cloned() {
+            self.index += 1;
+            IterationStep::Item(item)
+        } else {
+            self.ended = true;
+            IterationStep::End
         }
     }
 }
@@ -64,9 +66,23 @@ impl<T> List<T> {
     pub fn get(&self, index: usize) -> Option<&T> {
         self.0.get(index)
     }
+    /// Returns the indexed item or an error when the index is outside the list.
+    ///
+    /// # Errors
+    /// Returns [`IndexError`] when `index` is out of range.
+    pub fn get_or_error(&self, index: usize) -> Result<T, IndexError>
+    where
+        T: Clone,
+    {
+        self.0.get(index).cloned().ok_or(IndexError { index })
+    }
 }
 
 impl<T: Clone> List<T> {
+    /// Replaces an indexed item.
+    ///
+    /// # Errors
+    /// Returns [`IndexError`] when `index` is out of range.
     pub fn set(&mut self, index: usize, value: T) -> Result<Self, IndexError> {
         let Some(slot) = Arc::make_mut(&mut self.0).get_mut(index) else {
             return Err(IndexError { index });
@@ -74,6 +90,10 @@ impl<T: Clone> List<T> {
         *slot = value;
         Ok(self.clone())
     }
+    #[expect(
+        clippy::return_self_not_must_use,
+        reason = "Terrane collection mutator results may be intentionally discarded"
+    )]
     pub fn append(&mut self, value: T) -> Self {
         Arc::make_mut(&mut self.0).push(value);
         self.clone()
@@ -101,6 +121,16 @@ impl<T> Tuple<T> {
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&T> {
         self.0.get(index)
+    }
+    /// Returns the indexed item or an error when the index is outside the tuple.
+    ///
+    /// # Errors
+    /// Returns [`IndexError`] when `index` is out of range.
+    pub fn get_or_error(&self, index: usize) -> Result<T, IndexError>
+    where
+        T: Clone,
+    {
+        self.0.get(index).cloned().ok_or(IndexError { index })
     }
 }
 impl<T: Clone> Iterable for Tuple<T> {
@@ -140,6 +170,17 @@ impl<K: Eq + Clone, V: Clone> Map<K, V> {
             .find(|entry| &entry.key == key)
             .map(|entry| &entry.value)
     }
+    /// Returns the mapped value or an error when the key is absent.
+    ///
+    /// # Errors
+    /// Returns [`MissingKey`] when `key` is absent.
+    pub fn get_or_error(&self, key: &K) -> Result<V, MissingKey> {
+        self.get(key).cloned().ok_or(MissingKey)
+    }
+    #[expect(
+        clippy::return_self_not_must_use,
+        reason = "Terrane collection mutator results may be intentionally discarded"
+    )]
     pub fn set(&mut self, key: K, value: V) -> Self {
         let entries = Arc::make_mut(&mut self.0);
         if let Some(entry) = entries.iter_mut().find(|entry| entry.key == key) {
@@ -190,6 +231,10 @@ impl<T: Eq + Clone> Set<T> {
     pub fn contains(&self, item: &T) -> bool {
         self.0.contains(item)
     }
+    #[expect(
+        clippy::return_self_not_must_use,
+        reason = "Terrane collection mutator results may be intentionally discarded"
+    )]
     pub fn add(&mut self, item: T) -> Self {
         if !self.0.contains(&item) {
             Arc::make_mut(&mut self.0).push(item);
@@ -219,6 +264,41 @@ impl<K: Eq + Clone, V: Clone> UnorderedMap<K, V> {
     pub fn new(entries: Vec<Entry<K, V>>) -> Self {
         Self(Map::new(entries))
     }
+    #[must_use]
+    pub fn length(&self) -> i128 {
+        self.0.length()
+    }
+    #[must_use]
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.0.get(key)
+    }
+    /// Returns the mapped value or an error when the key is absent.
+    ///
+    /// # Errors
+    /// Returns [`MissingKey`] when `key` is absent.
+    pub fn get_or_error(&self, key: &K) -> Result<V, MissingKey> {
+        self.0.get_or_error(key)
+    }
+    #[expect(
+        clippy::return_self_not_must_use,
+        reason = "Terrane collection mutator results may be intentionally discarded"
+    )]
+    pub fn set(&mut self, key: K, value: V) -> Self {
+        let _ = self.0.set(key, value);
+        self.clone()
+    }
+    #[must_use]
+    pub fn keys(&self) -> List<K> {
+        self.0.keys()
+    }
+    #[must_use]
+    pub fn values(&self) -> List<V> {
+        self.0.values()
+    }
+    #[must_use]
+    pub fn entries(&self) -> List<Entry<K, V>> {
+        self.0.entries()
+    }
 }
 impl<K: Eq + Clone, V: Clone> Iterable for UnorderedMap<K, V> {
     type Item = Entry<K, V>;
@@ -233,6 +313,25 @@ impl<T: Eq + Clone> UnorderedSet<T> {
     #[must_use]
     pub fn new(items: Vec<T>) -> Self {
         Self(Set::new(items))
+    }
+    #[must_use]
+    pub fn length(&self) -> i128 {
+        self.0.length()
+    }
+    #[must_use]
+    pub fn contains(&self, item: &T) -> bool {
+        self.0.contains(item)
+    }
+    #[expect(
+        clippy::return_self_not_must_use,
+        reason = "Terrane collection mutator results may be intentionally discarded"
+    )]
+    pub fn add(&mut self, item: T) -> Self {
+        let _ = self.0.add(item);
+        self.clone()
+    }
+    pub fn remove(&mut self, item: &T) -> bool {
+        self.0.remove(item)
     }
 }
 impl<T: Eq + Clone> Iterable for UnorderedSet<T> {
@@ -250,6 +349,10 @@ pub struct Range {
     inclusive: bool,
 }
 impl Range {
+    /// Constructs a half-open range.
+    ///
+    /// # Errors
+    /// Returns [`RangeStepError`] when `step` is zero.
     pub fn new(start: Int, end: Int, step: Int) -> Result<Self, RangeStepError> {
         if step == Int::from(0_i64) {
             return Err(RangeStepError);
@@ -261,6 +364,10 @@ impl Range {
             inclusive: false,
         })
     }
+    /// Constructs an inclusive range.
+    ///
+    /// # Errors
+    /// Returns [`RangeStepError`] when `step` is zero.
     pub fn through(start: Int, end: Int, step: Int) -> Result<Self, RangeStepError> {
         Self::new(start, end, step).map(|range| Self {
             inclusive: true,
@@ -298,6 +405,35 @@ pub struct IndexError {
 pub struct MissingKey;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RangeStepError;
+impl std::fmt::Display for IndexError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "index {} is out of range", self.index)
+    }
+}
+
+impl std::error::Error for IndexError {}
+
+impl std::fmt::Display for MissingKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("key is absent")
+    }
+}
+
+impl std::error::Error for MissingKey {}
+impl std::fmt::Display for RangeStepError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("range step is zero")
+    }
+}
+
+impl std::error::Error for RangeStepError {}
+/// Converts an adaptive integer to a collection index.
+///
+/// # Errors
+/// Returns [`IndexError`] when `index` is negative or does not fit in `usize`.
+pub fn index_from_int(index: &Int) -> Result<usize, IndexError> {
+    index.as_usize().ok_or(IndexError { index: usize::MAX })
+}
 
 #[must_use]
 pub fn string_iterator(value: &str) -> Iterator<String> {
@@ -324,7 +460,7 @@ mod tests {
     fn list_assignment_separates_on_first_mutation() {
         let original = List::new(vec![1]);
         let mut copy = original.clone();
-        copy.append(2);
+        let _ = copy.append(2);
         assert_eq!(original.length(), 1);
         assert_eq!(copy.length(), 2);
     }

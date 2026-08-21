@@ -252,10 +252,18 @@ fn lowers_collection_and_three_clause_for_loops_without_losing_continue_updates(
             .to_owned(),
     )
     .unwrap();
+    assert!(collection.rust.contains(
+        "let mut __terrane_iterator_0 = terrane_collection_support::string_iterator(&(text));"
+    ));
     assert!(
         collection
             .rust
-            .contains("for character in terrane_string_support::graphemes(&text) {")
+            .contains("terrane_collection_support::IterationStep::Item(item) => item,")
+    );
+    assert!(
+        collection
+            .rust
+            .contains("terrane_collection_support::IterationStep::End => break,")
     );
 
     let clauses = terrane_compiler::compile(

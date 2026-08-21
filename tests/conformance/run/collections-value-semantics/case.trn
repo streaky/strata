@@ -1,12 +1,15 @@
 namespace collections-value-semantics
 from /core/collections import list, map, set, tuple, range, entry, unordered-map, unordered-set
+from /core/errors import error
 function main
   original = list; 1, 2
   independent = original
   independent.append; 3
-  print; original.length, independent.length, independent[2]
+  independent[1] = 4
+  print; original.length, independent.length, independent[2], independent[1]
   ordered = map; first=1, second=2
   ordered.set; 'third', 3
+  ordered['second'] = 4
   for pair in ordered
     print; pair.key, pair.value
   print; ordered['second']
@@ -24,9 +27,24 @@ function main
   inclusive = range.through; 2, 0, -1
   for number in inclusive
     print; number
+  empty-count = 0
+  empty = range; 0, 3, -1
+  for ignored in empty
+    empty-count++
+  print; empty-count
+  try
+    range; 0, 3, 0
+  catch error
+    print; 'zero'
   deterministic-map = unordered-map; first=1, second=2
+  deterministic-map['second'] = 3
+  print; deterministic-map.length, deterministic-map['second']
   for pair in deterministic-map
     print; pair.key
   deterministic-set = unordered-set; 'x', 'y'
+  deterministic-set.add; 'z'
+  deterministic-set.remove; 'x'
+  print; (deterministic-set.contains; 'y')
+  print; deterministic-set.length
   for value in deterministic-set
     print; value

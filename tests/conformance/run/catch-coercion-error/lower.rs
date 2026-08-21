@@ -7,6 +7,8 @@ IntegerConversionOverflow,
 NegativeShiftCount,
 CoercionError,
 DecodeError,
+IndexError,
+MissingKey,
 ResourceError,
 SourceError,
 }
@@ -19,6 +21,8 @@ match name {
 ".negative-shift-count" => Self::NegativeShiftCount,
 ".coercion-error" => Self::CoercionError,
 ".decode-error" => Self::DecodeError,
+".index-error" => Self::IndexError,
+".missing-key" => Self::MissingKey,
 ".resource-error" => Self::ResourceError,
 _ => Self::SourceError,
 }
@@ -31,6 +35,8 @@ Self::IntegerConversionOverflow => ".integer-conversion-overflow",
 Self::NegativeShiftCount => ".negative-shift-count",
 Self::CoercionError => ".coercion-error",
 Self::DecodeError => ".decode-error",
+Self::IndexError => ".index-error",
+Self::MissingKey => ".missing-key",
 Self::ResourceError => ".resource-error",
 Self::SourceError => ".error",
 }
@@ -78,6 +84,21 @@ Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_stri
 impl From<terrane_string_support::DecodeError> for TerraneError {
 fn from(error: terrane_string_support::DecodeError) -> Self {
 Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(".decode-error: "))
+}
+}
+impl From<terrane_collection_support::IndexError> for TerraneError {
+fn from(error: terrane_collection_support::IndexError) -> Self {
+Self::new(TerraneErrorKind::IndexError, error.to_string())
+}
+}
+impl From<terrane_collection_support::MissingKey> for TerraneError {
+fn from(error: terrane_collection_support::MissingKey) -> Self {
+Self::new(TerraneErrorKind::MissingKey, error.to_string())
+}
+}
+impl From<terrane_collection_support::RangeStepError> for TerraneError {
+fn from(error: terrane_collection_support::RangeStepError) -> Self {
+Self::new(TerraneErrorKind::SourceError, error.to_string())
 }
 }
 fn __terrane_uncaught(error: TerraneError) -> ! {

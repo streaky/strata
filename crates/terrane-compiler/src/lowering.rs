@@ -105,16 +105,44 @@ struct Emitter<'a> {
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
-    fn contains(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+    fn contains(package: &SemanticPackage, unit: &SemanticUnit, node: &SyntaxNode) -> bool {
         matches!(
             node.kind,
-            SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
+            SyntaxKind::ThrowStatement | SyntaxKind::TryStatement | SyntaxKind::IndexExpression
         ) || string_call_selection(&unit.source, node)
             .is_some_and(|selection| selection.family == StringFamily::Decode)
-            || node.children.iter().any(|child| contains(unit, child))
+            || node
+                .children
+                .iter()
+                .any(|child| contains(package, unit, child))
+            || (node.kind == SyntaxKind::CallExpression
+                && node.children.first().is_some_and(|callee| {
+                    let range = if callee.kind == SyntaxKind::MemberExpression {
+                        callee.children.first()
+                    } else {
+                        Some(callee)
+                    };
+                    range.is_some_and(|range| {
+                        package
+                            .resolve_name_at(
+                                unit,
+                                range.span.start,
+                                &unit.source.text()[range.span.start..range.span.end],
+                            )
+                            .is_some_and(|symbol| symbol.identity == "/core/collections::range")
+                    })
+                }))
+            || (node.kind == SyntaxKind::CallExpression
+                && node.children.first().is_some_and(|callee| {
+                    callee.kind == SyntaxKind::MemberExpression
+                        && callee.children.get(1).is_some_and(|member| {
+                            &unit.source.text()[member.span.start..member.span.end] == "set"
+                        })
+                }))
     }
     package.units.iter().any(|unit| {
-        unit.functions.iter().any(|contract| contract.throws) || contains(unit, &unit.tree.root)
+        unit.functions.iter().any(|contract| contract.throws)
+            || contains(package, unit, &unit.tree.root)
     })
 }
 
@@ -123,7 +151,7 @@ fn emit_error_support(output: &mut String) {
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
          enum TerraneErrorKind {\n\
          ArithmeticOverflow,\nDivisionByZero,\nIntegerConversionOverflow,\nNegativeShiftCount,\n\
-         CoercionError,\nDecodeError,\nResourceError,\nSourceError,\n}\n\
+         CoercionError,\nDecodeError,\nIndexError,\nMissingKey,\nResourceError,\nSourceError,\n}\n\
          impl TerraneErrorKind {\n\
          fn from_source_name(name: &str) -> Self {\nmatch name {\n\
          \".arithmetic-overflow\" => Self::ArithmeticOverflow,\n\
@@ -132,6 +160,8 @@ fn emit_error_support(output: &mut String) {
          \".negative-shift-count\" => Self::NegativeShiftCount,\n\
          \".coercion-error\" => Self::CoercionError,\n\
          \".decode-error\" => Self::DecodeError,\n\
+         \".index-error\" => Self::IndexError,\n\
+         \".missing-key\" => Self::MissingKey,\n\
          \".resource-error\" => Self::ResourceError,\n\
          _ => Self::SourceError,\n}\n}\n\
          fn source_name(self) -> &'static str {\nmatch self {\n\
@@ -141,6 +171,8 @@ fn emit_error_support(output: &mut String) {
          Self::NegativeShiftCount => \".negative-shift-count\",\n\
          Self::CoercionError => \".coercion-error\",\n\
          Self::DecodeError => \".decode-error\",\n\
+         Self::IndexError => \".index-error\",\n\
+         Self::MissingKey => \".missing-key\",\n\
          Self::ResourceError => \".resource-error\",\n\
          Self::SourceError => \".error\",\n}\n}\n}\n\
          #[derive(Clone, Debug)]\nstruct TerraneError {\n\
@@ -170,6 +202,15 @@ fn emit_error_support(output: &mut String) {
          impl From<terrane_string_support::DecodeError> for TerraneError {\n\
          fn from(error: terrane_string_support::DecodeError) -> Self {\n\
          Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(\".decode-error: \"))\n}\n}\n\
+         impl From<terrane_collection_support::IndexError> for TerraneError {\n\
+         fn from(error: terrane_collection_support::IndexError) -> Self {\n\
+         Self::new(TerraneErrorKind::IndexError, error.to_string())\n}\n}\n\
+         impl From<terrane_collection_support::MissingKey> for TerraneError {\n\
+         fn from(error: terrane_collection_support::MissingKey) -> Self {\n\
+         Self::new(TerraneErrorKind::MissingKey, error.to_string())\n}\n}\n\
+         impl From<terrane_collection_support::RangeStepError> for TerraneError {\n\
+         fn from(error: terrane_collection_support::RangeStepError) -> Self {\n\
+         Self::new(TerraneErrorKind::SourceError, error.to_string())\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
          eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
          fn __terrane_generated_defect(message: &str) -> ! {\n\
@@ -738,6 +779,33 @@ impl Emitter<'_> {
 
     fn assignment(&mut self, node: &SyntaxNode) {
         if self.global_assignment(node) {
+            return;
+        }
+        if let [target, value] = node.children.as_slice()
+            && target.kind == SyntaxKind::IndexExpression
+            && let [receiver, index] = target.children.as_slice()
+            && let Some(receiver_type) = self.value_type(receiver)
+        {
+            let receiver_value = self.expression(receiver);
+            match receiver_type {
+                ValueType::List(item) => {
+                    let index = self.expression_as(index, ValueType::Scalar(ScalarType::Int));
+                    let index = self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index}))"),
+                        node,
+                    );
+                    let value = self.expression_as(value, item.value_type());
+                    let mutation =
+                        self.fallible(format!("({receiver_value}).set({index}, {value})"), node);
+                    self.line(&format!("let _ = {mutation};"));
+                }
+                ValueType::Map(key, value_type) | ValueType::UnorderedMap(key, value_type) => {
+                    let key = self.expression_as(index, ValueType::Scalar(key));
+                    let value = self.expression_as(value, ValueType::Scalar(value_type));
+                    self.line(&format!("let _ = ({receiver_value}).set({key}, {value});"));
+                }
+                _ => {}
+            }
             return;
         }
         if self
@@ -1483,7 +1551,11 @@ impl Emitter<'_> {
         let is_optional = |value_type| {
             matches!(
                 value_type,
-                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+                Some(
+                    ValueType::ScalarOrNone(_)
+                        | ValueType::TextRangeOrNone
+                        | ValueType::ElementOrNone(_)
+                )
             )
         };
         let left_is_none = self.text(left).trim() == "none"
@@ -1818,26 +1890,27 @@ impl Emitter<'_> {
             Some(ValueType::List(_) | ValueType::Tuple(_, _)) => {
                 let index = if self.value_type(index) == Some(ValueType::Scalar(ScalarType::Int)) {
                     let index_value = self.expression_as(index, ValueType::Scalar(ScalarType::Int));
-                    format!(
-                        "({index_value}).as_usize().expect(\"index-error: index is outside usize\")"
+                    self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index_value}))"),
+                        node,
                     )
                 } else {
                     format!("({}) as usize", self.expression(index))
                 };
-                format!(
-                    "({receiver}).get({index}).cloned().expect(\"index-error: index is out of range\")"
-                )
+                self.fallible(format!("({receiver}).get_or_error({index})"), node)
             }
             Some(ValueType::Map(key, _) | ValueType::UnorderedMap(key, _)) => {
                 let index_value = self.expression_as(index, ValueType::Scalar(key));
-                format!(
-                    "({receiver}).get(&({index_value})).cloned().expect(\"missing-key: key is absent\")"
-                )
+                self.fallible(format!("({receiver}).get_or_error(&({index_value}))"), node)
             }
             _ => String::new(),
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "member lowering keeps one ordered dispatch across scalar and collection surfaces"
+    )]
     fn member(&mut self, node: &SyntaxNode) -> String {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
@@ -1910,7 +1983,9 @@ impl Emitter<'_> {
                     ValueType::List(_)
                     | ValueType::Map(_, _)
                     | ValueType::Set(_)
-                    | ValueType::Tuple(_, _),
+                    | ValueType::Tuple(_, _)
+                    | ValueType::UnorderedMap(_, _)
+                    | ValueType::UnorderedSet(_),
                 ) => format!("terrane_int_support::Int::from(({receiver}).length())"),
                 _ => format!("terrane_string_support::length(&{receiver}) as i128"),
             },
@@ -1955,6 +2030,31 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
+        if callee.kind == SyntaxKind::MemberExpression
+            && let [family, child] = callee.children.as_slice()
+            && self.text(child) == "checked"
+            && family.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = family.children.as_slice()
+            && self.text(member) == "get"
+            && let Some(receiver_type) = self.value_type(receiver)
+            && let Some(argument) = arguments.children.first()
+        {
+            let argument = argument.children.last().unwrap_or(argument);
+            let receiver_value = self.expression(receiver);
+            return match receiver_type {
+                ValueType::List(_) | ValueType::Tuple(_, _) => {
+                    let index = self.expression_as(argument, ValueType::Scalar(ScalarType::Int));
+                    format!(
+                        "terrane_collection_support::index_from_int(&({index})).ok().and_then(|index| ({receiver_value}).get(index).cloned())"
+                    )
+                }
+                ValueType::Map(key, _) | ValueType::UnorderedMap(key, _) => {
+                    let key = self.expression_as(argument, ValueType::Scalar(key));
+                    format!("({receiver_value}).get(&({key})).cloned()")
+                }
+                _ => String::new(),
+            };
+        }
         if let Some(string_call) = self.string_call(node, arguments) {
             return string_call;
         }
@@ -1974,31 +2074,40 @@ impl Emitter<'_> {
                     "({receiver_value}).append({})",
                     self.expression_as(values[0], item.value_type())
                 )),
-                (ValueType::List(item), "set") => Some(format!(
-                    "({receiver_value}).set(({}).as_usize().expect(\"index-error\"), {}).expect(\"index-error\")",
-                    self.expression_as(values[0], ValueType::Scalar(ScalarType::Int)),
-                    self.expression_as(values[1], item.value_type())
-                )),
-                (ValueType::Map(key, value), "set") => Some(format!(
-                    "({receiver_value}).set({}, {})",
-                    self.expression_as(values[0], ValueType::Scalar(key)),
-                    self.expression_as(values[1], ValueType::Scalar(value))
-                )),
-                (ValueType::Set(item), "contains") => Some(format!(
-                    "({receiver_value}).contains(&({}))",
-                    self.expression_as(values[0], ValueType::Scalar(item))
-                )),
-                (ValueType::Set(item), "add") => Some(format!(
+                (ValueType::List(item), "set") => {
+                    let index = self.expression_as(values[0], ValueType::Scalar(ScalarType::Int));
+                    let index = self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index}))"),
+                        node,
+                    );
+                    let value = self.expression_as(values[1], item.value_type());
+                    Some(self.fallible(format!("({receiver_value}).set({index}, {value})"), node))
+                }
+                (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "set") => {
+                    Some(format!(
+                        "({receiver_value}).set({}, {})",
+                        self.expression_as(values[0], ValueType::Scalar(key)),
+                        self.expression_as(values[1], ValueType::Scalar(value))
+                    ))
+                }
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "contains") => {
+                    Some(format!(
+                        "({receiver_value}).contains(&({}))",
+                        self.expression_as(values[0], ValueType::Scalar(item))
+                    ))
+                }
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "add") => Some(format!(
                     "({receiver_value}).add({})",
                     self.expression_as(values[0], ValueType::Scalar(item))
                 )),
-                (ValueType::Set(item), "remove") => Some(format!(
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "remove") => Some(format!(
                     "({receiver_value}).remove(&({}))",
                     self.expression_as(values[0], ValueType::Scalar(item))
                 )),
-                (ValueType::Map(_, _), "keys" | "values" | "entries") => {
-                    Some(format!("({receiver_value}).{member_name}()"))
-                }
+                (
+                    ValueType::Map(_, _) | ValueType::UnorderedMap(_, _),
+                    "keys" | "values" | "entries",
+                ) => Some(format!("({receiver_value}).{member_name}()")),
                 _ => None,
             };
             if let Some(call) = call {
@@ -2213,9 +2322,12 @@ impl Emitter<'_> {
                         values.push("terrane_int_support::Int::from(1_i64)".to_owned());
                     }
                     let method = if through { "through" } else { "new" };
-                    return format!(
-                        "terrane_collection_support::Range::{method}({}, {}, {}).expect(\"range step must be non-zero\")",
-                        values[0], values[1], values[2]
+                    return self.fallible(
+                        format!(
+                            "terrane_collection_support::Range::{method}({}, {}, {})",
+                            values[0], values[1], values[2]
+                        ),
+                        node,
                     );
                 }
             }
@@ -3229,6 +3341,9 @@ fn rust_value_type(ty: ValueType) -> String {
                 rust_element_type(item)
             )
         }
+        ValueType::ElementOrNone(item) => {
+            format!("Option<{}>", rust_element_type(item))
+        }
         ValueType::List(item) => {
             format!(
                 "terrane_collection_support::List<{}>",
@@ -3397,6 +3512,8 @@ fn rust_error_kind(kind: &str) -> &'static str {
         "negative-shift-count" => "NegativeShiftCount",
         "coercion-error" => "CoercionError",
         "decode-error" => "DecodeError",
+        "index-error" => "IndexError",
+        "missing-key" => "MissingKey",
         "resource-error" => "ResourceError",
         _ => "SourceError",
     }
@@ -3410,6 +3527,8 @@ fn error_message(kind: &str) -> &'static str {
         "negative-shift-count" => "negative integer shift count",
         "coercion-error" => "coercion has no compatible result",
         "decode-error" => "invalid byte sequence for selected encoding",
+        "index-error" => "collection index is out of range",
+        "missing-key" => "collection key is absent",
         "resource-error" => "integer shift count cannot be represented on this target",
         _ => "source error",
     }

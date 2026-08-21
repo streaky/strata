@@ -1055,6 +1055,12 @@ Deliver:
 
 Exit criterion: a user-defined iterator drives `for` through the same path as the built-in string iteration, and an iterator yielding `none` as a legitimate item is distinguished from exhaustion.
 
+Implemented evidence: `iteration-step` is a compiler-owned typed result with distinct `item` and
+sticky `end` alternatives. Source-authored `iterator` values, strings, bytes, ranges, and every
+collection enter `for` through the same `Iterable::terrane_iterator` / `Iterator::next` support
+protocol; the conformance case distinguishes a yielded `none` from exhaustion and exercises a
+second `next` after exhaustion.
+
 ### Milestone 14 — Collections and value semantics
 
 Collections are the first non-scalar mutable value type, so the value-semantics half of ownership
@@ -1074,6 +1080,14 @@ Deliver:
 - identity metadata on type contracts, with source `is` never derived from Rust pointer identity.
 
 Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants; and value assignment, separation, and drop order are each observable through a collection rather than asserted in the abstract.
+
+Implemented evidence: the compiler-owned collection descriptors construct statically typed
+copy-on-write lists, insertion-ordered maps and sets, fixed tuples, ranges, entries, and separately
+named deterministic unordered maps and sets. Conformance covers member and indexed mutation,
+checked and throwing lookup with typed `index-error` / `missing-key`, ordered and unordered
+iteration, range direction and inclusivity, homogeneous-item rejection, and assignment separation.
+Generated Rust retains lexical ownership and deterministic container release order while source
+`is` continues to use compiler-owned descriptor identity rather than backing `Arc` identity.
 
 ### Milestone 15 — Function values and closures
 
