@@ -352,6 +352,7 @@ impl CoercionPolicy {
 pub struct TypedBinding {
     pub name: String,
     pub span: Span,
+    pub visible_from: usize,
     pub value_type: ValueType,
     pub destination_arms: Vec<ScalarType>,
     pub storage_type: Option<ScalarType>,
@@ -1899,8 +1900,8 @@ fn validate_call_nodes<'a>(
             .ok_or_else(|| {
                 failure(
                     &unit.source,
-                    "T0047",
-                    "`for` requires a collection with a statically known item type",
+                    "T0016",
+                    "collection iteration requires an iterable value",
                     collection.span,
                 )
             })?;
@@ -1908,6 +1909,7 @@ fn validate_call_nodes<'a>(
         loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
+            visible_from: collection.span.end,
             value_type: item_type.clone(),
             destination_arms: Vec::new(),
             storage_type: None,
@@ -2013,7 +2015,7 @@ fn validate_resolved_assignment(
         .typed_bindings
         .iter()
         .rev()
-        .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+        .find(|binding| binding.name == name && binding.visible_from <= node.span.start)
         .map(|binding| binding.value_type.clone())
     else {
         return Ok(());
@@ -2163,6 +2165,7 @@ fn call_site_bindings(
             parameter.value_type.clone().map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
+                visible_from: parameter.span.start,
                 value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
@@ -2430,6 +2433,7 @@ fn collect_typed_bindings(
             parameter.value_type.clone().map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
+                visible_from: parameter.span.start,
                 value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
@@ -2452,14 +2456,15 @@ fn collect_typed_bindings(
             .ok_or_else(|| {
                 failure(
                     &unit.source,
-                    "T0047",
-                    "`for` requires a collection with a statically known item type",
+                    "T0016",
+                    "collection iteration requires an iterable value",
                     collection.span,
                 )
             })?;
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
+            visible_from: collection.span.end,
             value_type: item_type,
             destination_arms: Vec::new(),
             storage_type: None,
@@ -2864,22 +2869,25 @@ fn analyze_binding_node(
         && initializer.kind == SyntaxKind::Name
     {
         let initializer_name = node_text(&unit.source, initializer);
-        let resolved_function = lexical_scope_chain(unit, initializer.span.start).any(|scope| {
-            scope.symbols.get(initializer_name).is_some_and(|symbols| {
-                symbols.iter().rev().any(|symbol| {
-                    symbol.kind == SymbolKind::Function
-                        && symbol
-                            .declaration_span
-                            .is_none_or(|span| span.end <= initializer.span.start)
-                })
-            })
+        let shadowed_by_binding = bindings.iter().rev().any(|binding| {
+            binding.name == initializer_name && binding.visible_from <= initializer.span.start
         });
-        if unit
-            .functions
-            .iter()
-            .any(|contract| contract.name == initializer_name)
-            || resolved_function
-        {
+        let resolved_function = !shadowed_by_binding
+            && (unit
+                .functions
+                .iter()
+                .any(|contract| contract.name == initializer_name)
+                || lexical_scope_chain(unit, initializer.span.start).any(|scope| {
+                    scope.symbols.get(initializer_name).is_some_and(|symbols| {
+                        symbols.iter().rev().any(|symbol| {
+                            symbol.kind == SymbolKind::Function
+                                && symbol
+                                    .declaration_span
+                                    .is_none_or(|span| span.end <= initializer.span.start)
+                        })
+                    })
+                }));
+        if resolved_function {
             return Err(failure(
                 &unit.source,
                 "T0049",
@@ -2948,6 +2956,7 @@ fn analyze_binding_node(
     bindings.push(TypedBinding {
         name,
         span: node.span,
+        visible_from: node.span.end,
         value_type,
         destination_arms,
         storage_type,
@@ -3495,7 +3504,7 @@ pub(crate) fn narrowed_value_type(
         .flatten();
     let binding = bindings.iter().rev().find(|binding| {
         binding.name == name
-            && binding.span.start <= node.span.start
+            && binding.visible_from <= node.span.start
             && unit
                 .enclosing_function_spans
                 .get(&binding.span.start)
@@ -3540,7 +3549,7 @@ fn infer_value_type(
         if let Some(binding) = bindings
             .iter()
             .rev()
-            .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+            .find(|binding| binding.name == name && binding.visible_from <= node.span.start)
         {
             return Ok(Some(
                 narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type.clone()),
@@ -3590,6 +3599,12 @@ fn infer_value_type(
             Some(ValueType::Map(_, value) | ValueType::UnorderedMap(_, value)) => {
                 Ok(Some(value.value_type()))
             }
+            Some(ValueType::Scalar(ScalarType::String)) => Err(failure(
+                &unit.source,
+                "T0050",
+                "string indexing is not implemented yet",
+                receiver.span,
+            )),
             Some(other) => Err(failure(
                 &unit.source,
                 "T0050",
@@ -3657,7 +3672,7 @@ fn infer_value_type(
             if bindings
                 .iter()
                 .rev()
-                .any(|binding| binding.name == name && binding.span.start <= callee.span.start)
+                .any(|binding| binding.name == name && binding.visible_from <= callee.span.start)
             {
                 return Err(failure(
                     &unit.source,
@@ -3767,7 +3782,7 @@ fn empty_collection_identity<'a>(
         (!bindings
             .iter()
             .rev()
-            .any(|binding| binding.name == name && binding.span.start <= callee.span.start))
+            .any(|binding| binding.name == name && binding.visible_from <= callee.span.start))
         .then_some(name)
     })?;
     matches!(
@@ -3817,7 +3832,7 @@ fn infer_collection_call_type(
         && (resolved_compiler_object_identity(unit, receiver) == Some("/core/collections::range")
             || (node_text(&unit.source, receiver) == "range"
                 && !bindings.iter().rev().any(|binding| {
-                    binding.name == "range" && binding.span.start <= receiver.span.start
+                    binding.name == "range" && binding.visible_from <= receiver.span.start
                 })))
     {
         return Ok(Some(ValueType::Range));
@@ -3870,7 +3885,7 @@ fn infer_collection_call_type(
     let shadowed = bindings
         .iter()
         .rev()
-        .any(|binding| binding.name == source_name && binding.span.start <= callee.span.start);
+        .any(|binding| binding.name == source_name && binding.visible_from <= callee.span.start);
     if shadowed {
         return Ok(None);
     }
@@ -4018,7 +4033,7 @@ fn infer_iterator_call_type(
         return Ok(None);
     };
     let shadowed = bindings.iter().rev().any(|binding| {
-        binding.name == node_text(&unit.source, callee) && binding.span.start <= callee.span.start
+        binding.name == node_text(&unit.source, callee) && binding.visible_from <= callee.span.start
     });
     if resolved_compiler_object_identity(unit, callee) != Some("/core/collections::iterator")
         && (node_text(&unit.source, callee) != "iterator" || shadowed)
@@ -6096,6 +6111,7 @@ fn validate_flow_statement(
                 loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
+                    visible_from: collection.span.end,
                     value_type: item_type.clone(),
                     destination_arms: Vec::new(),
                     storage_type: None,
@@ -6962,11 +6978,27 @@ fn collect_binding_events(
     regions: &mut Vec<ControlRegion>,
 ) {
     if node.kind == SyntaxKind::Name {
-        if !declaration_name
-            && let Some(declaration_span) = package
+        let function_span = unit
+            .enclosing_function_spans
+            .get(&node.span.start)
+            .copied()
+            .flatten();
+        let typed_declaration = unit.typed_bindings.iter().rev().find(|binding| {
+            binding.name == node_text(&unit.source, node)
+                && binding.visible_from <= node.span.start
+                && unit
+                    .enclosing_function_spans
+                    .get(&binding.span.start)
+                    .copied()
+                    .flatten()
+                    == function_span
+        });
+        let declaration_span = typed_declaration.map(|binding| binding.span).or_else(|| {
+            package
                 .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
                 .and_then(|symbol| symbol.declaration_span)
-        {
+        });
+        if !declaration_name && let Some(declaration_span) = declaration_span {
             events
                 .entry(span_key(declaration_span))
                 .or_default()

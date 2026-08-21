@@ -1,0 +1,21 @@
+namespace loop-shadowing-scope
+from /core/collections import list, map
+from /core/output import print
+
+function value int
+  return 1
+
+function main
+  items list of string = list; 'ab', 'c'
+  for items in items
+    print; items
+
+  groups map of string, list of int = map; first=(list; 1, 2)
+  for entry in groups
+    for entry in entry.value
+      print; entry
+
+  print; (value;)
+  value int = 5
+  copy int = value
+  print; copy

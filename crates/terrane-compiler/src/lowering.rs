@@ -2033,6 +2033,17 @@ impl Emitter<'_> {
         }
     }
 
+    fn borrowed_expression(&mut self, node: &SyntaxNode) -> String {
+        if node.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = node.children.as_slice()
+            && matches!(self.value_type(receiver), Some(ValueType::Entry(_, _)))
+            && matches!(self.text(member), "key" | "value")
+        {
+            return format!("({}).{}", self.expression(receiver), self.text(member));
+        }
+        self.expression(node)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "member lowering keeps one ordered dispatch across scalar and collection surfaces"
@@ -2469,23 +2480,27 @@ impl Emitter<'_> {
                 }
             }
         }
-        let mut values = arguments
+        let argument_values = arguments
             .children
             .iter()
             .map(|argument| argument.children.last().unwrap_or(argument))
-            .map(|value| self.expression(value))
             .collect::<Vec<_>>();
         if self.is_builtin(callee, "/core/output::print") {
-            if values.is_empty() {
+            if argument_values.is_empty() {
                 return "println!()".to_owned();
             }
-            let values = values
-                .into_iter()
+            let values = argument_values
+                .iter()
+                .map(|value| self.borrowed_expression(value))
                 .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
                 .collect::<Vec<_>>();
             let format = "{}".repeat(values.len());
             return format!("println!(\"{format}\", {})", values.join(", "));
         }
+        let mut values = argument_values
+            .into_iter()
+            .map(|value| self.expression(value))
+            .collect::<Vec<_>>();
         if callee.kind == SyntaxKind::MemberExpression
             && callee
                 .children

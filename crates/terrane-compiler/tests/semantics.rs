@@ -1378,7 +1378,7 @@ fn string_length_has_integer_type_and_rejects_other_receivers() {
     assert_eq!(failure.diagnostics[0].code, "T0013");
     assert_eq!(
         failure.diagnostics[0].message,
-        "`.length` requires `string` or `bytes`, found `int`"
+        "`.length` requires `string`, `bytes`, or a collection, found `int`"
     );
 }
 
