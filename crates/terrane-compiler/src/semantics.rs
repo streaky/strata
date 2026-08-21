@@ -6299,15 +6299,24 @@ pub(crate) fn binding_store_value_is_read(
     else {
         return false;
     };
+    let mut intervening_stores: Vec<&[ControlRegion]> = Vec::new();
     for event in &events[store + 1..] {
         match event {
-            BindingEvent::Read { regions, .. } if !regions_conflict(store_regions, regions) => {
+            BindingEvent::Read { regions, .. }
+                if !regions_conflict(store_regions, regions)
+                    && !intervening_stores
+                        .iter()
+                        .any(|intervening| later_store_replaces(regions, intervening)) =>
+            {
                 return true;
             }
-            BindingEvent::Write { regions, .. } if later_store_replaces(store_regions, regions) => {
-                return false;
+            BindingEvent::Write { regions, .. } => {
+                if later_store_replaces(store_regions, regions) {
+                    return false;
+                }
+                intervening_stores.push(regions.as_slice());
             }
-            BindingEvent::Read { .. } | BindingEvent::Write { .. } => {}
+            BindingEvent::Read { .. } => {}
         }
     }
     !store_loops.is_empty()
