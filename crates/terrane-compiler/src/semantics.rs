@@ -2017,7 +2017,13 @@ fn validate_resolved_assignment(
     }) else {
         return Ok(());
     };
-    let Some(actual) = resolved_call_type(package, unit, initializer, contracts) else {
+    let actual = if let Some(actual) = resolved_call_type(package, unit, initializer, contracts) {
+        actual
+    } else if let Some(actual) =
+        infer_collection_call_type(unit, initializer, &unit.typed_bindings)?
+    {
+        actual
+    } else {
         return Ok(());
     };
     let name = node_text(&unit.source, name_node);

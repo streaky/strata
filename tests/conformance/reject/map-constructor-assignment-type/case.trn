@@ -1,0 +1,5 @@
+namespace map-constructor-assignment-type
+from /core/collections import map
+function main
+  values map of string, int = map; first=1
+  values = map; first='one'
