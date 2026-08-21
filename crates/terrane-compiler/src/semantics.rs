@@ -353,10 +353,19 @@ pub struct TypedBinding {
     pub name: String,
     pub span: Span,
     pub visible_from: usize,
+    pub scope: Option<Span>,
     pub value_type: ValueType,
     pub destination_arms: Vec<ScalarType>,
     pub storage_type: Option<ScalarType>,
     pub mutable: bool,
+}
+
+impl TypedBinding {
+    pub(crate) fn is_visible_at(&self, file: u32, position: usize) -> bool {
+        self.span.file == file
+            && self.visible_from <= position
+            && self.scope.is_none_or(|scope| position <= scope.end)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1910,6 +1919,7 @@ fn validate_call_nodes<'a>(
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
             visible_from: collection.span.end,
+            scope: Some(block.span),
             value_type: item_type.clone(),
             destination_arms: Vec::new(),
             storage_type: None,
@@ -2011,16 +2021,18 @@ fn validate_resolved_assignment(
         return Ok(());
     };
     let name = node_text(&unit.source, name_node);
-    let Some(ValueType::Scalar(expected)) = unit
+    let Some(expected) = unit
         .typed_bindings
         .iter()
         .rev()
-        .find(|binding| binding.name == name && binding.visible_from <= node.span.start)
+        .find(|binding| {
+            binding.name == name && binding.is_visible_at(unit.source.id(), node.span.start)
+        })
         .map(|binding| binding.value_type.clone())
     else {
         return Ok(());
     };
-    validate_numeric_destination(&unit.source, name, expected, actual, initializer, "T0002")
+    validate_value_destination(&unit.source, name, expected, actual, initializer, "T0002")
 }
 
 fn resolved_call_type(
@@ -2166,6 +2178,7 @@ fn call_site_bindings(
                 name: parameter.name.clone(),
                 span: parameter.span,
                 visible_from: parameter.span.start,
+                scope: Some(function.span),
                 value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
@@ -2231,7 +2244,13 @@ fn analyze_types(package: &mut SemanticPackage) -> Result<(), SemanticFailure> {
         let unit = &package.units[index];
         let mut visible_bindings = Vec::new();
         let mut bindings = Vec::new();
-        collect_typed_bindings(unit, &unit.tree.root, &mut visible_bindings, &mut bindings)?;
+        collect_typed_bindings(
+            unit,
+            &unit.tree.root,
+            &mut visible_bindings,
+            &mut bindings,
+            None,
+        )?;
         package.units[index].typed_bindings = bindings;
     }
     Ok(())
@@ -2421,6 +2440,7 @@ fn collect_typed_bindings(
     node: &SyntaxNode,
     visible_bindings: &mut Vec<TypedBinding>,
     bindings: &mut Vec<TypedBinding>,
+    scope: Option<Span>,
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::FunctionDeclaration {
         let contract = unit
@@ -2434,6 +2454,7 @@ fn collect_typed_bindings(
                 name: parameter.name.clone(),
                 span: parameter.span,
                 visible_from: parameter.span.start,
+                scope: Some(node.span),
                 value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
@@ -2441,7 +2462,13 @@ fn collect_typed_bindings(
             })
         }));
         for child in &node.children {
-            collect_typed_bindings(unit, child, &mut function_bindings, bindings)?;
+            collect_typed_bindings(
+                unit,
+                child,
+                &mut function_bindings,
+                bindings,
+                Some(node.span),
+            )?;
         }
         return Ok(());
     }
@@ -2450,7 +2477,7 @@ fn collect_typed_bindings(
         && target.kind == SyntaxKind::ForTarget
         && let Some(name) = target.children.first()
     {
-        collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
+        collect_typed_bindings(unit, collection, visible_bindings, bindings, scope)?;
         let item_type = infer_value_type(unit, collection, visible_bindings)?
             .and_then(iterable_item_type)
             .ok_or_else(|| {
@@ -2465,6 +2492,7 @@ fn collect_typed_bindings(
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
             visible_from: collection.span.end,
+            scope: Some(block.span),
             value_type: item_type,
             destination_arms: Vec::new(),
             storage_type: None,
@@ -2473,16 +2501,19 @@ fn collect_typed_bindings(
         bindings.push(loop_binding.clone());
         let mut loop_bindings = visible_bindings.clone();
         loop_bindings.push(loop_binding);
-        collect_typed_bindings(unit, block, &mut loop_bindings, bindings)?;
+        collect_typed_bindings(unit, block, &mut loop_bindings, bindings, Some(block.span))?;
         return Ok(());
     }
     if matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
         let prior_len = visible_bindings.len();
-        analyze_binding_node(unit, node, visible_bindings)?;
+        analyze_binding_node(unit, node, visible_bindings, scope)?;
         bindings.extend_from_slice(&visible_bindings[prior_len..]);
     }
     for child in &node.children {
-        collect_typed_bindings(unit, child, visible_bindings, bindings)?;
+        let child_scope = (child.kind == SyntaxKind::Block)
+            .then_some(child.span)
+            .or(scope);
+        collect_typed_bindings(unit, child, visible_bindings, bindings, child_scope)?;
     }
     Ok(())
 }
@@ -2744,6 +2775,7 @@ fn analyze_binding_node(
     unit: &SemanticUnit,
     node: &SyntaxNode,
     bindings: &mut Vec<TypedBinding>,
+    scope: Option<Span>,
 ) -> Result<(), SemanticFailure> {
     if node.kind == SyntaxKind::Assignment
         && let [target, value] = node.children.as_slice()
@@ -2870,7 +2902,8 @@ fn analyze_binding_node(
     {
         let initializer_name = node_text(&unit.source, initializer);
         let shadowed_by_binding = bindings.iter().rev().any(|binding| {
-            binding.name == initializer_name && binding.visible_from <= initializer.span.start
+            binding.name == initializer_name
+                && binding.is_visible_at(unit.source.id(), initializer.span.start)
         });
         let resolved_function = !shadowed_by_binding
             && (unit
@@ -2957,6 +2990,7 @@ fn analyze_binding_node(
         name,
         span: node.span,
         visible_from: node.span.end,
+        scope,
         value_type,
         destination_arms,
         storage_type,
@@ -3241,7 +3275,9 @@ fn validate_value_destination(
         return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
     }
     if let ValueType::ScalarOrNone(expected) = expected {
-        if actual == ValueType::Scalar(ScalarType::None) {
+        if actual == ValueType::Scalar(ScalarType::None)
+            || actual == ValueType::ScalarOrNone(expected)
+        {
             return Ok(());
         }
         return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
@@ -3504,7 +3540,7 @@ pub(crate) fn narrowed_value_type(
         .flatten();
     let binding = bindings.iter().rev().find(|binding| {
         binding.name == name
-            && binding.visible_from <= node.span.start
+            && binding.is_visible_at(unit.source.id(), node.span.start)
             && unit
                 .enclosing_function_spans
                 .get(&binding.span.start)
@@ -3546,11 +3582,9 @@ fn infer_value_type(
         if name == "none" {
             return Ok(Some(ValueType::Scalar(ScalarType::None)));
         }
-        if let Some(binding) = bindings
-            .iter()
-            .rev()
-            .find(|binding| binding.name == name && binding.visible_from <= node.span.start)
-        {
+        if let Some(binding) = bindings.iter().rev().find(|binding| {
+            binding.name == name && binding.is_visible_at(unit.source.id(), node.span.start)
+        }) {
             return Ok(Some(
                 narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type.clone()),
             ));
@@ -3669,11 +3703,9 @@ fn infer_value_type(
             if let Some(contract) = unit.functions.iter().find(|contract| contract.name == name) {
                 return Ok(contract.return_type.clone());
             }
-            if bindings
-                .iter()
-                .rev()
-                .any(|binding| binding.name == name && binding.visible_from <= callee.span.start)
-            {
+            if bindings.iter().rev().any(|binding| {
+                binding.name == name && binding.is_visible_at(unit.source.id(), callee.span.start)
+            }) {
                 return Err(failure(
                     &unit.source,
                     "T0039",
@@ -3779,10 +3811,9 @@ fn empty_collection_identity<'a>(
     };
     let identity = resolved_compiler_object_identity(unit, callee).or_else(|| {
         let name = node_text(&unit.source, callee);
-        (!bindings
-            .iter()
-            .rev()
-            .any(|binding| binding.name == name && binding.visible_from <= callee.span.start))
+        (!bindings.iter().rev().any(|binding| {
+            binding.name == name && binding.is_visible_at(unit.source.id(), callee.span.start)
+        }))
         .then_some(name)
     })?;
     matches!(
@@ -3832,7 +3863,8 @@ fn infer_collection_call_type(
         && (resolved_compiler_object_identity(unit, receiver) == Some("/core/collections::range")
             || (node_text(&unit.source, receiver) == "range"
                 && !bindings.iter().rev().any(|binding| {
-                    binding.name == "range" && binding.visible_from <= receiver.span.start
+                    binding.name == "range"
+                        && binding.is_visible_at(unit.source.id(), receiver.span.start)
                 })))
     {
         return Ok(Some(ValueType::Range));
@@ -3882,10 +3914,9 @@ fn infer_collection_call_type(
     let name = identity
         .and_then(|identity| identity.strip_prefix("/core/collections::"))
         .unwrap_or(source_name);
-    let shadowed = bindings
-        .iter()
-        .rev()
-        .any(|binding| binding.name == source_name && binding.visible_from <= callee.span.start);
+    let shadowed = bindings.iter().rev().any(|binding| {
+        binding.name == source_name && binding.is_visible_at(unit.source.id(), callee.span.start)
+    });
     if shadowed {
         return Ok(None);
     }
@@ -4033,7 +4064,8 @@ fn infer_iterator_call_type(
         return Ok(None);
     };
     let shadowed = bindings.iter().rev().any(|binding| {
-        binding.name == node_text(&unit.source, callee) && binding.visible_from <= callee.span.start
+        binding.name == node_text(&unit.source, callee)
+            && binding.is_visible_at(unit.source.id(), callee.span.start)
     });
     if resolved_compiler_object_identity(unit, callee) != Some("/core/collections::iterator")
         && (node_text(&unit.source, callee) != "iterator" || shadowed)
@@ -6090,7 +6122,7 @@ fn validate_flow_statement(
             let mut loop_bindings = bindings.to_vec();
             if statement.children.len() == 4 {
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
-            } else if let [target, collection, _block] = statement.children.as_slice() {
+            } else if let [target, collection, block] = statement.children.as_slice() {
                 let collection_type = infer_value_type(unit, collection, bindings)?;
                 let Some(item_type) = collection_type.and_then(iterable_item_type) else {
                     return Err(failure(
@@ -6112,6 +6144,7 @@ fn validate_flow_statement(
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
                     visible_from: collection.span.end,
+                    scope: Some(block.span),
                     value_type: item_type.clone(),
                     destination_arms: Vec::new(),
                     storage_type: None,
@@ -6985,7 +7018,7 @@ fn collect_binding_events(
             .flatten();
         let typed_declaration = unit.typed_bindings.iter().rev().find(|binding| {
             binding.name == node_text(&unit.source, node)
-                && binding.visible_from <= node.span.start
+                && binding.is_visible_at(unit.source.id(), node.span.start)
                 && unit
                     .enclosing_function_spans
                     .get(&binding.span.start)

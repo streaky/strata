@@ -631,7 +631,7 @@ impl Emitter<'_> {
                     .rev()
                     .find(|binding| {
                         binding.name == self.text(node)
-                            && binding.span.start <= node.span.start
+                            && binding.is_visible_at(self.source.id(), node.span.start)
                             && !binding.destination_arms.is_empty()
                     })
                     .cloned()
@@ -1957,7 +1957,10 @@ impl Emitter<'_> {
                     .typed_bindings
                     .iter()
                     .rev()
-                    .find(|binding| binding.name == name && binding.span.start <= node.span.start)
+                    .find(|binding| {
+                        binding.name == name
+                            && binding.is_visible_at(self.source.id(), node.span.start)
+                    })
                     .map(|binding| binding.value_type.clone())
                     .or_else(|| {
                         self.parameter_types
@@ -3128,7 +3131,8 @@ impl Emitter<'_> {
                     .rev()
                     .find(|binding| {
                         binding.name == self.text(node)
-                            && binding.span.start <= node.span.start
+                            && binding.is_visible_at(self.source.id(), node.span.start)
+                            && !self.is_namespace_binding_span(binding.span)
                             && !binding_span_is_mutated(self.package, self.unit, binding.span, true)
                     })
                     .and_then(|binding| binding.storage_type)
