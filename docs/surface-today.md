@@ -334,6 +334,7 @@ parameters, and function returns:
 list of Item
 map of Key, Value
 set of Item
+tuple of Item
 unordered-map of Key, Value
 unordered-set of Item
 entry of Key, Value
@@ -342,8 +343,9 @@ entry of Key, Value
 Collection type application is recursive, so an item or value may itself be an applied collection
 type. Map and set keys must be immutable scalar values. A bare constructor name such as `list` is a
 value constructor, not a type: every collection type carries its `of` argument or arguments.
-Tuples are currently construction-only: heterogeneous positional tuple type syntax is not yet
-implemented, so tuple values cannot cross a declared binding, parameter, or return boundary.
+Tuples are homogeneous and fixed-length after construction. Their runtime length is not part of
+`tuple of Item`, so differently sized tuples with the same item type share binding and function
+boundaries.
 
 ## Type descriptor objects
 

@@ -1484,6 +1484,15 @@ impl Emitter<'_> {
                     rust_element_type(item)
                 )
             }
+            ValueType::Tuple(item, _)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::tuple") =>
+            {
+                format!(
+                    "terrane_collection_support::Tuple::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
             ValueType::Set(item)
                 if node.kind == SyntaxKind::Name
                     && self.is_builtin(node, "/core/collections::set") =>

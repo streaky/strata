@@ -1083,11 +1083,13 @@ Deliver:
 Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants; and value assignment, separation, and drop order are each observable through a collection rather than asserted in the abstract.
 
 Implemented evidence (partial; the exit criterion remains open): the compiler-owned collection
-descriptors construct statically typed copy-on-write lists, insertion-ordered maps and sets, fixed
-tuples, ranges, entries, and separately named unordered maps and sets using a deterministic
-fixed-seed hash implementation. Conformance covers member and indexed mutation, checked and
-throwing lookup with typed `index-error` / `missing-key`, ordered and unordered iteration, range
-direction and inclusivity, homogeneous-item rejection, and assignment separation. Collection
+descriptors construct statically typed copy-on-write lists, insertion-ordered maps and sets,
+homogeneous fixed-length tuples, ranges, entries, and separately named unordered maps and sets
+using a deterministic fixed-seed hash implementation. Applied `tuple of Item` types cross binding,
+parameter, and return boundaries; tuple runtime length is not part of the type. Conformance covers
+member and indexed mutation, checked and throwing lookup with typed `index-error` / `missing-key`,
+ordered and unordered iteration, range direction and inclusivity, homogeneous-item rejection, and
+assignment separation. Collection
 drop order is not yet source-observable, and collection identity metadata plus source `is`
 behavior are not implemented; those parts of the exit criterion remain outstanding.
 

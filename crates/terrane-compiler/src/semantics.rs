@@ -137,7 +137,7 @@ pub enum ValueType {
     List(ElementType),
     Map(ElementType, ElementType),
     Set(ElementType),
-    Tuple(ElementType, usize),
+    Tuple(ElementType, Option<usize>),
     Range,
     Entry(ElementType, ElementType),
     UnorderedMap(ElementType, ElementType),
@@ -240,9 +240,10 @@ impl std::fmt::Display for ValueType {
             Self::List(item) => write!(formatter, "list of {}", item.value_type()),
             Self::Map(key, value) => write!(formatter, "map of {key}, {value}"),
             Self::Set(item) => write!(formatter, "set of {item}"),
-            Self::Tuple(item, length) => {
+            Self::Tuple(item, Some(length)) => {
                 write!(formatter, "tuple of {} ({length} items)", item.value_type())
             }
+            Self::Tuple(item, None) => write!(formatter, "tuple of {}", item.value_type()),
             Self::Range => formatter.write_str("range"),
             Self::Entry(key, value) => write!(formatter, "entry of {key}, {value}"),
             Self::UnorderedMap(key, value) => {
@@ -2966,6 +2967,10 @@ fn parse_declared_value_type(
     }
     for (constructor, construct) in [
         ("list of ", ValueType::List as fn(ElementType) -> ValueType),
+        (
+            "tuple of ",
+            (|item| ValueType::Tuple(item, None)) as fn(ElementType) -> ValueType,
+        ),
         ("set of ", ValueType::Set as fn(ElementType) -> ValueType),
         (
             "unordered-set of ",
@@ -3174,7 +3179,7 @@ fn validate_value_destination(
         }
         return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
     }
-    if expected == actual {
+    if value_types_compatible(&expected, &actual) {
         return Ok(());
     }
     Err(failure(
@@ -3183,6 +3188,76 @@ fn validate_value_destination(
         format!("`{name}` requires `{expected}`, found `{actual}`"),
         value.span,
     ))
+}
+
+fn value_types_compatible(expected: &ValueType, actual: &ValueType) -> bool {
+    match (expected, actual) {
+        (ValueType::Tuple(expected_item, None), ValueType::Tuple(actual_item, _)) => {
+            value_types_compatible(&expected_item.value_type(), &actual_item.value_type())
+        }
+        (
+            ValueType::Tuple(expected_item, Some(expected_length)),
+            ValueType::Tuple(actual_item, Some(actual_length)),
+        ) => {
+            expected_length == actual_length
+                && value_types_compatible(&expected_item.value_type(), &actual_item.value_type())
+        }
+        (ValueType::List(expected), ValueType::List(actual))
+        | (ValueType::Set(expected), ValueType::Set(actual))
+        | (ValueType::UnorderedSet(expected), ValueType::UnorderedSet(actual))
+        | (ValueType::Iterator(expected), ValueType::Iterator(actual))
+        | (ValueType::IterationStep(expected), ValueType::IterationStep(actual))
+        | (ValueType::ElementOrNone(expected), ValueType::ElementOrNone(actual)) => {
+            value_types_compatible(&expected.value_type(), &actual.value_type())
+        }
+        (
+            ValueType::Map(expected_key, expected_value),
+            ValueType::Map(actual_key, actual_value),
+        )
+        | (
+            ValueType::UnorderedMap(expected_key, expected_value),
+            ValueType::UnorderedMap(actual_key, actual_value),
+        )
+        | (
+            ValueType::Entry(expected_key, expected_value),
+            ValueType::Entry(actual_key, actual_value),
+        ) => {
+            value_types_compatible(&expected_key.value_type(), &actual_key.value_type())
+                && value_types_compatible(&expected_value.value_type(), &actual_value.value_type())
+        }
+        _ => expected == actual,
+    }
+}
+
+fn erase_tuple_lengths(value_type: ValueType) -> ValueType {
+    match value_type {
+        ValueType::Tuple(item, _) => ValueType::Tuple(
+            ElementType::new(erase_tuple_lengths(item.value_type())),
+            None,
+        ),
+        ValueType::List(item) => {
+            ValueType::List(ElementType::new(erase_tuple_lengths(item.value_type())))
+        }
+        ValueType::Set(item) => {
+            ValueType::Set(ElementType::new(erase_tuple_lengths(item.value_type())))
+        }
+        ValueType::UnorderedSet(item) => {
+            ValueType::UnorderedSet(ElementType::new(erase_tuple_lengths(item.value_type())))
+        }
+        ValueType::Map(key, value) => ValueType::Map(
+            ElementType::new(erase_tuple_lengths(key.value_type())),
+            ElementType::new(erase_tuple_lengths(value.value_type())),
+        ),
+        ValueType::UnorderedMap(key, value) => ValueType::UnorderedMap(
+            ElementType::new(erase_tuple_lengths(key.value_type())),
+            ElementType::new(erase_tuple_lengths(value.value_type())),
+        ),
+        ValueType::Entry(key, value) => ValueType::Entry(
+            ElementType::new(erase_tuple_lengths(key.value_type())),
+            ElementType::new(erase_tuple_lengths(value.value_type())),
+        ),
+        other => other,
+    }
 }
 
 #[expect(
@@ -3555,7 +3630,9 @@ fn homogeneous_element_type(
     let mut item_type = None;
     for argument in &arguments.children {
         let value = argument.children.last().unwrap_or(argument);
-        let inferred = element_type(unit, value, bindings)?;
+        let inferred = ElementType::new(erase_tuple_lengths(
+            element_type(unit, value, bindings)?.value_type(),
+        ));
         if item_type.is_some_and(|existing| existing != inferred) {
             return Err(failure(
                 &unit.source,
@@ -3594,6 +3671,7 @@ fn empty_collection_constructor_matches(
                 ValueType::UnorderedMap(_, _)
             )
             | ("/core/collections::set", ValueType::Set(_))
+            | ("/core/collections::tuple", ValueType::Tuple(_, _))
             | (
                 "/core/collections::unordered-set",
                 ValueType::UnorderedSet(_)
@@ -3735,7 +3813,7 @@ fn infer_collection_call_type(
         "list" => ValueType::List(homogeneous_element_type(unit, arguments, bindings, name)?),
         "tuple" => ValueType::Tuple(
             homogeneous_element_type(unit, arguments, bindings, name)?,
-            arguments.children.len(),
+            Some(arguments.children.len()),
         ),
         "set" => {
             let Some(item) = homogeneous_element_type(unit, arguments, bindings, name)?.scalar()

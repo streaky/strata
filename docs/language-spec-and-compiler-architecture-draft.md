@@ -2578,7 +2578,10 @@ unique = set; a, b, c
 pair = tuple; first, second
 ```
 
-Tuples are fixed-length value objects.
+Tuples are fixed-length homogeneous value objects. Their applied type is `tuple of Item`; the
+runtime length is not part of the type, so tuples of the same item type may cross the same binding,
+parameter, and return boundaries even when their lengths differ. Tuple length cannot change after
+construction.
 
 Lists, maps, and sets are value-semantic copy-on-write objects by default.
 
