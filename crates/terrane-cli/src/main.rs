@@ -438,11 +438,11 @@ fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     fs::create_dir_all(string.join("src"))?;
     write_if_changed(
         &int.join("Cargo.toml"),
-        b"[package]\nname = \"terrane-int-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nnum-bigint = \"0.4\"\nnum-integer = \"0.1\"\nnum-traits = \"0.2\"\n",
+        b"[package]\nname = \"terrane-int-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nnum-bigint = { version = \"0.4\", features = [\"std\"] }\nnum-integer = \"0.1\"\nnum-traits = \"0.2\"\n",
     )?;
     write_if_changed(
         &collection.join("Cargo.toml"),
-        b"[package]\nname = \"terrane-collection-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nterrane-int-support = { path = \"../terrane-int-support\" }\nunicode-segmentation = \"1\"\n",
+        b"[package]\nname = \"terrane-collection-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nindexmap = \"2\"\nterrane-int-support = { path = \"../terrane-int-support\" }\nunicode-segmentation = \"1\"\n",
     )?;
     write_if_changed(
         &collection.join("src/lib.rs"),

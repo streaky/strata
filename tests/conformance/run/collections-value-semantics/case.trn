@@ -48,3 +48,11 @@ function main
   print; deterministic-set.length
   for value in deterministic-set
     print; value
+  empty-list list of int = list
+  empty-list.append; 5
+  empty-map map of int, string = map
+  empty-map.set; 1, 'one'
+  nested list of list of int = list; (list; 8, 9)
+  print; empty-list.length, empty-map[1], nested.length
+  arbitrary = map; (entry; 2, 'two'), (entry; 3, 'three')
+  print; arbitrary[2], arbitrary[3]

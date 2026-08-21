@@ -77,30 +77,40 @@ pub struct SemanticPackage {
     pub bootstrap_version: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElementType {
-    Scalar(ScalarType),
-    TextRange,
-    Entry(ScalarType, ScalarType),
-}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ElementType(Box<ValueType>);
 
 impl ElementType {
-    pub(crate) fn value_type(self) -> ValueType {
-        match self {
-            Self::Scalar(ty) => ValueType::Scalar(ty),
-            Self::TextRange => ValueType::TextRange,
-            Self::Entry(key, value) => ValueType::Entry(key, value),
+    pub(crate) fn new(value_type: ValueType) -> Self {
+        Self(Box::new(value_type))
+    }
+
+    pub(crate) fn value_type(&self) -> ValueType {
+        self.0.as_ref().clone()
+    }
+
+    fn scalar(&self) -> Option<ScalarType> {
+        match self.0.as_ref() {
+            ValueType::Scalar(scalar) => Some(*scalar),
+            _ => None,
         }
+    }
+}
+
+impl std::fmt::Display for ElementType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 fn iterable_item_type(value_type: ValueType) -> Option<ValueType> {
     match value_type {
         ValueType::Scalar(ScalarType::String) => Some(ValueType::Scalar(ScalarType::String)),
         ValueType::Scalar(ScalarType::Bytes) => Some(ValueType::Scalar(ScalarType::Uint8)),
-        ValueType::Iterator(item) | ValueType::List(item) | ValueType::Tuple(item, _) => {
-            Some(item.value_type())
-        }
-        ValueType::Set(item) | ValueType::UnorderedSet(item) => Some(ValueType::Scalar(item)),
+        ValueType::Iterator(item)
+        | ValueType::List(item)
+        | ValueType::Set(item)
+        | ValueType::UnorderedSet(item)
+        | ValueType::Tuple(item, _) => Some(item.value_type()),
         ValueType::Map(key, value) | ValueType::UnorderedMap(key, value) => {
             Some(ValueType::Entry(key, value))
         }
@@ -109,7 +119,7 @@ fn iterable_item_type(value_type: ValueType) -> Option<ValueType> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ValueType {
     Scalar(ScalarType),
     ScalarOrNone(ScalarType),
@@ -125,13 +135,13 @@ pub enum ValueType {
     IterationStep(ElementType),
     ElementOrNone(ElementType),
     List(ElementType),
-    Map(ScalarType, ScalarType),
-    Set(ScalarType),
+    Map(ElementType, ElementType),
+    Set(ElementType),
     Tuple(ElementType, usize),
     Range,
-    Entry(ScalarType, ScalarType),
-    UnorderedMap(ScalarType, ScalarType),
-    UnorderedSet(ScalarType),
+    Entry(ElementType, ElementType),
+    UnorderedMap(ElementType, ElementType),
+    UnorderedSet(ElementType),
     Encoding,
 }
 
@@ -1890,7 +1900,7 @@ fn validate_call_nodes<'a>(
         loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
-            value_type: item_type,
+            value_type: item_type.clone(),
             destination_arms: Vec::new(),
             storage_type: None,
             mutable: false,
@@ -1996,7 +2006,7 @@ fn validate_resolved_assignment(
         .iter()
         .rev()
         .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-        .map(|binding| binding.value_type)
+        .map(|binding| binding.value_type.clone())
     else {
         return Ok(());
     };
@@ -2027,6 +2037,7 @@ fn resolved_call_type(
     contracts
         .get(&(declaration.file, declaration.start, declaration.end))?
         .return_type
+        .clone()
 }
 
 fn validate_call_arguments(
@@ -2091,7 +2102,7 @@ fn validate_call_arguments(
         }
         let value = argument.children.last().unwrap_or(argument);
         let actual = infer_value_type(unit, value, bindings)?;
-        if let (Some(expected), Some(actual)) = (parameter.value_type, actual) {
+        if let (Some(expected), Some(actual)) = (parameter.value_type.clone(), actual) {
             validate_value_destination(
                 &unit.source,
                 &parameter.name,
@@ -2141,7 +2152,7 @@ fn call_site_bindings(
         .collect::<Vec<_>>();
     if let Some(function) = active_function {
         bindings.extend(function.parameters.iter().filter_map(|parameter| {
-            parameter.value_type.map(|value_type| TypedBinding {
+            parameter.value_type.clone().map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
                 value_type,
@@ -2408,7 +2419,7 @@ fn collect_typed_bindings(
             .expect("analyzed function declaration must have a semantic contract");
         let mut function_bindings = visible_bindings.clone();
         function_bindings.extend(contract.parameters.iter().filter_map(|parameter| {
-            parameter.value_type.map(|value_type| TypedBinding {
+            parameter.value_type.clone().map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
                 value_type,
@@ -2507,7 +2518,7 @@ fn analyze_function_contract(
                     parameter.span,
                 ));
             }
-            if let (Some(expected), Some(default)) = (value_type, default) {
+            if let (Some(expected), Some(default)) = (value_type.clone(), default) {
                 let actual =
                     infer_value_type(unit, default, &unit.typed_bindings)?.ok_or_else(|| {
                         failure(
@@ -2704,22 +2715,6 @@ fn infer_throwing_effects(package: &mut SemanticPackage) {
     }
 }
 
-fn resolve_scalar_type(
-    source: &SourceFile,
-    type_node: &SyntaxNode,
-    aliases: &BTreeMap<String, ScalarType>,
-) -> Result<ScalarType, SemanticFailure> {
-    let name = node_text(source, type_node).trim();
-    aliases.get(name).copied().ok_or_else(|| {
-        failure(
-            source,
-            "T0001",
-            format!("`{name}` does not resolve to a scalar type descriptor"),
-            type_node.span,
-        )
-    })
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "binding analysis keeps destination selection and initialization validation together"
@@ -2738,7 +2733,7 @@ fn analyze_binding_node(
         let expected = match receiver_type {
             ValueType::List(item) => Some(item.value_type()),
             ValueType::Map(_, value) | ValueType::UnorderedMap(_, value) => {
-                Some(ValueType::Scalar(value))
+                Some(value.value_type())
             }
             _ => None,
         };
@@ -2748,7 +2743,7 @@ fn analyze_binding_node(
         {
             return Err(failure(
                 &unit.source,
-                "T0042",
+                "T0046",
                 format!("indexed assignment requires `{expected}`, found `{actual}`"),
                 value.span,
             ));
@@ -2784,7 +2779,7 @@ fn analyze_binding_node(
         && let Some(actual) = infer_value_type(unit, initializer, bindings)?
     {
         if previous.destination_arms.is_empty() {
-            if let ValueType::Scalar(expected) = previous.value_type {
+            if let ValueType::Scalar(expected) = previous.value_type.clone() {
                 validate_numeric_destination(
                     &unit.source,
                     &name,
@@ -2804,49 +2799,82 @@ fn analyze_binding_node(
         }
         return Ok(());
     }
+    let declared_value = declared
+        .map(|type_node| {
+            let aliases = visible_descriptor_aliases(
+                &unit.descriptor_aliases,
+                unit.source.id(),
+                type_node.span.start,
+            );
+            declared_value_type(unit, type_node, &aliases).or_else(|failure| {
+                union_destination_candidates(unit, type_node)
+                    .ok()
+                    .and_then(|candidates| candidates.into_iter().next())
+                    .map(ValueType::Scalar)
+                    .ok_or(failure)
+            })
+        })
+        .transpose()?;
+    if declared_value.is_none()
+        && let Some(initializer) = initializer
+        && let Some(identity) = empty_collection_identity(unit, initializer, bindings)
+    {
+        let collection = identity
+            .strip_prefix("/core/collections::")
+            .expect("matched collection identity");
+        let message = if matches!(collection, "map" | "unordered-map") {
+            format!("an empty `{collection}` requires explicit key and value types")
+        } else {
+            format!("an empty `{collection}` requires an explicit item type")
+        };
+        return Err(failure(&unit.source, "T0043", message, initializer.span));
+    }
     let inferred = initializer
-        .map(|value| infer_value_type(unit, value, bindings))
+        .map(|value| {
+            if let Some(declared_value) = declared_value.clone()
+                && empty_collection_constructor_matches(unit, value, &declared_value, bindings)
+            {
+                Ok(Some(declared_value))
+            } else {
+                infer_value_type(unit, value, bindings)
+            }
+        })
         .transpose()?
         .flatten();
-    let value_type = if let Some(type_node) = declared {
-        let aliases = visible_descriptor_aliases(
-            &unit.descriptor_aliases,
-            unit.source.id(),
-            type_node.span.start,
-        );
-        let declared_type = declared_value_type(unit, type_node, &aliases);
-        let value_type = if matches!(declared_type, Ok(ValueType::ScalarOrNone(_))) {
-            declared_type?
-        } else if let (Some(inferred), Some(initializer), Ok(_)) = (
-            inferred,
-            initializer,
-            union_destination_candidates(unit, type_node),
-        ) {
-            ValueType::Scalar(select_union_destination(
-                unit,
-                type_node,
+    let value_type =
+        if let (Some(type_node), Some(declared_type)) = (declared, declared_value.clone()) {
+            let value_type = if matches!(declared_type, ValueType::ScalarOrNone(_)) {
+                declared_type
+            } else if let (Some(inferred), Some(initializer), Ok(_)) = (
+                inferred.clone(),
                 initializer,
-                inferred,
-            )?)
+                union_destination_candidates(unit, type_node),
+            ) {
+                ValueType::Scalar(select_union_destination(
+                    unit,
+                    type_node,
+                    initializer,
+                    inferred,
+                )?)
+            } else {
+                declared_type
+            };
+            if let (Some(inferred), Some(initializer)) = (inferred.clone(), initializer) {
+                validate_value_destination(
+                    &unit.source,
+                    &name,
+                    value_type.clone(),
+                    inferred,
+                    initializer,
+                    "T0002",
+                )?;
+            }
+            value_type
+        } else if let Some(inferred) = inferred.clone() {
+            inferred
         } else {
-            declared_type?
+            return Ok(());
         };
-        if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
-            validate_value_destination(
-                &unit.source,
-                &name,
-                value_type,
-                inferred,
-                initializer,
-                "T0002",
-            )?;
-        }
-        value_type
-    } else if let Some(inferred) = inferred {
-        inferred
-    } else {
-        return Ok(());
-    };
     let destination_arms = if matches!(value_type, ValueType::ScalarOrNone(_)) {
         Vec::new()
     } else {
@@ -2855,7 +2883,7 @@ fn analyze_binding_node(
             .unwrap_or_default()
     };
     let storage_type = (value_type == ValueType::Scalar(ScalarType::Int))
-        .then(|| initializer.and_then(|value| small_int_storage(unit, value, inferred)))
+        .then(|| initializer.and_then(|value| small_int_storage(unit, value, inferred.clone())))
         .flatten();
 
     bindings.push(TypedBinding {
@@ -2895,6 +2923,28 @@ fn declared_value_type(
         }
     }
     let type_name = node_text(&unit.source, type_node).trim();
+    parse_declared_value_type(type_name, aliases).ok_or_else(|| {
+        failure(
+            &unit.source,
+            "T0001",
+            format!("`{type_name}` does not resolve to a type descriptor"),
+            type_node.span,
+        )
+    })
+}
+
+fn parse_declared_value_type(
+    type_name: &str,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Option<ValueType> {
+    let type_name = type_name.trim();
+    if let Some(scalar) = aliases
+        .get(type_name)
+        .copied()
+        .or_else(|| ScalarType::from_source_name(type_name))
+    {
+        return Some(ValueType::Scalar(scalar));
+    }
     for (constructor, construct) in [
         (
             "overflow-result of ",
@@ -2906,12 +2956,62 @@ fn declared_value_type(
         ),
     ] {
         if let Some(argument) = type_name.strip_prefix(constructor)
-            && let Some(scalar) = aliases.get(argument).copied()
+            && let Some(scalar) = aliases
+                .get(argument.trim())
+                .copied()
+                .or_else(|| ScalarType::from_source_name(argument.trim()))
         {
-            return Ok(construct(scalar));
+            return Some(construct(scalar));
         }
     }
-    resolve_scalar_type(&unit.source, type_node, aliases).map(ValueType::Scalar)
+    for (constructor, construct) in [
+        ("list of ", ValueType::List as fn(ElementType) -> ValueType),
+        ("set of ", ValueType::Set as fn(ElementType) -> ValueType),
+        (
+            "unordered-set of ",
+            ValueType::UnorderedSet as fn(ElementType) -> ValueType,
+        ),
+        (
+            "iterator of ",
+            ValueType::Iterator as fn(ElementType) -> ValueType,
+        ),
+        (
+            "iteration-step of ",
+            ValueType::IterationStep as fn(ElementType) -> ValueType,
+        ),
+    ] {
+        if let Some(argument) = type_name.strip_prefix(constructor) {
+            let item = ElementType::new(parse_declared_value_type(argument, aliases)?);
+            if matches!(constructor, "set of " | "unordered-set of ") && item.scalar().is_none() {
+                return None;
+            }
+            return Some(construct(item));
+        }
+    }
+    for (constructor, construct) in [
+        (
+            "map of ",
+            ValueType::Map as fn(ElementType, ElementType) -> ValueType,
+        ),
+        (
+            "unordered-map of ",
+            ValueType::UnorderedMap as fn(ElementType, ElementType) -> ValueType,
+        ),
+        (
+            "entry of ",
+            ValueType::Entry as fn(ElementType, ElementType) -> ValueType,
+        ),
+    ] {
+        if let Some(arguments) = type_name.strip_prefix(constructor)
+            && let Some((key, value)) = arguments.split_once(',')
+        {
+            let key = ElementType::new(parse_declared_value_type(key, aliases)?);
+            key.scalar()?;
+            let value = ElementType::new(parse_declared_value_type(value, aliases)?);
+            return Some(construct(key, value));
+        }
+    }
+    None
 }
 
 fn union_destination_candidates(
@@ -2965,6 +3065,10 @@ fn select_union_destination(
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "union selection owns the inferred recursive value type for complete matching"
+)]
 fn select_union_candidates(
     source: &SourceFile,
     value: &SyntaxNode,
@@ -3049,6 +3153,10 @@ fn validate_numeric_destination(
     ))
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "destination validation owns both recursive type descriptions for complete matching"
+)]
 fn validate_value_destination(
     source: &SourceFile,
     name: &str,
@@ -3077,6 +3185,10 @@ fn validate_value_destination(
     ))
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "diagnostic rendering owns the recursive actual type description"
+)]
 fn destination_mismatch_message(
     code: &str,
     name: &str,
@@ -3258,7 +3370,7 @@ pub(crate) fn narrowed_value_type(
                 .flatten()
                 == function_span
     })?;
-    narrowed_optional_type(unit, node, binding.value_type)
+    narrowed_optional_type(unit, node, binding.value_type.clone())
 }
 #[expect(
     clippy::too_many_lines,
@@ -3298,7 +3410,7 @@ fn infer_value_type(
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
         {
             return Ok(Some(
-                narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type),
+                narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type.clone()),
             ));
         }
         let resolved_encoding = lexical_scope_chain(unit, node.span.start)
@@ -3343,7 +3455,7 @@ fn infer_value_type(
         return match infer_value_type(unit, receiver, bindings)? {
             Some(ValueType::List(item) | ValueType::Tuple(item, _)) => Ok(Some(item.value_type())),
             Some(ValueType::Map(_, value) | ValueType::UnorderedMap(_, value)) => {
-                Ok(Some(ValueType::Scalar(value)))
+                Ok(Some(value.value_type()))
             }
             _ => Ok(None),
         };
@@ -3396,7 +3508,7 @@ fn infer_value_type(
         {
             let name = node_text(&unit.source, callee);
             if let Some(contract) = unit.functions.iter().find(|contract| contract.name == name) {
-                return Ok(contract.return_type);
+                return Ok(contract.return_type.clone());
             }
             if bindings
                 .iter()
@@ -3422,20 +3534,16 @@ fn element_type(
     value: &SyntaxNode,
     bindings: &[TypedBinding],
 ) -> Result<ElementType, SemanticFailure> {
-    match infer_value_type(unit, value, bindings)? {
-        Some(ValueType::Scalar(ty)) => Ok(ElementType::Scalar(ty)),
-        Some(ValueType::TextRange) => Ok(ElementType::TextRange),
-        Some(ValueType::Entry(key, value)) => Ok(ElementType::Entry(key, value)),
-        other => Err(failure(
-            &unit.source,
-            "T0042",
-            format!(
-                "collection items require a stable value type, found {}",
-                other.map_or_else(|| "unknown".to_owned(), |ty| ty.to_string())
-            ),
-            value.span,
-        )),
-    }
+    infer_value_type(unit, value, bindings)?
+        .map(ElementType::new)
+        .ok_or_else(|| {
+            failure(
+                &unit.source,
+                "T0042",
+                "collection items require a statically known value type",
+                value.span,
+            )
+        })
 }
 
 fn homogeneous_element_type(
@@ -3461,11 +3569,69 @@ fn homogeneous_element_type(
     item_type.ok_or_else(|| {
         failure(
             &unit.source,
-            "T0042",
+            "T0043",
             format!("an empty `{collection}` requires an explicit item type"),
             arguments.span,
         )
     })
+}
+
+fn empty_collection_constructor_matches(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    expected: &ValueType,
+    bindings: &[TypedBinding],
+) -> bool {
+    let Some(identity) = empty_collection_identity(unit, node, bindings) else {
+        return false;
+    };
+    matches!(
+        (identity, expected),
+        ("/core/collections::list", ValueType::List(_))
+            | ("/core/collections::map", ValueType::Map(_, _))
+            | (
+                "/core/collections::unordered-map",
+                ValueType::UnorderedMap(_, _)
+            )
+            | ("/core/collections::set", ValueType::Set(_))
+            | (
+                "/core/collections::unordered-set",
+                ValueType::UnorderedSet(_)
+            )
+    )
+}
+
+fn empty_collection_identity<'a>(
+    unit: &'a SemanticUnit,
+    node: &'a SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Option<&'a str> {
+    let callee = if node.kind == SyntaxKind::Name {
+        node
+    } else {
+        let [callee, arguments] = node.children.as_slice() else {
+            return None;
+        };
+        (node.kind == SyntaxKind::CallExpression && arguments.children.is_empty())
+            .then_some(callee)?
+    };
+    let identity = resolved_compiler_object_identity(unit, callee).or_else(|| {
+        let name = node_text(&unit.source, callee);
+        (!bindings
+            .iter()
+            .rev()
+            .any(|binding| binding.name == name && binding.span.start <= callee.span.start))
+        .then_some(name)
+    })?;
+    matches!(
+        identity,
+        "/core/collections::list"
+            | "/core/collections::map"
+            | "/core/collections::unordered-map"
+            | "/core/collections::set"
+            | "/core/collections::unordered-set"
+    )
+    .then_some(identity)
 }
 
 #[expect(
@@ -3493,7 +3659,7 @@ fn infer_collection_call_type(
                 Some(ValueType::ElementOrNone(item))
             }
             ValueType::Map(_, value) | ValueType::UnorderedMap(_, value) => {
-                Some(ValueType::ScalarOrNone(value))
+                Some(ValueType::ElementOrNone(value))
             }
             _ => None,
         });
@@ -3530,14 +3696,14 @@ fn infer_collection_call_type(
                 Some(ValueType::Scalar(ScalarType::Bool))
             }
             (ValueType::Map(key, _) | ValueType::UnorderedMap(key, _), "keys") => {
-                Some(ValueType::List(ElementType::Scalar(key)))
+                Some(ValueType::List(key))
             }
             (ValueType::Map(_, value) | ValueType::UnorderedMap(_, value), "values") => {
-                Some(ValueType::List(ElementType::Scalar(value)))
+                Some(ValueType::List(value))
             }
-            (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "entries") => {
-                Some(ValueType::List(ElementType::Entry(key, value)))
-            }
+            (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "entries") => Some(
+                ValueType::List(ElementType::new(ValueType::Entry(key, value))),
+            ),
             _ => None,
         });
     }
@@ -3553,6 +3719,18 @@ fn infer_collection_call_type(
     if shadowed {
         return Ok(None);
     }
+    if arguments.children.is_empty()
+        && let Some(expected) = bindings
+            .iter()
+            .filter(|binding| {
+                binding.span.start <= node.span.start && node.span.end <= binding.span.end
+            })
+            .min_by_key(|binding| binding.span.end - binding.span.start)
+            .map(|binding| &binding.value_type)
+        && empty_collection_constructor_matches(unit, node, expected, bindings)
+    {
+        return Ok(Some(expected.clone()));
+    }
     let result = match name {
         "list" => ValueType::List(homogeneous_element_type(unit, arguments, bindings, name)?),
         "tuple" => ValueType::Tuple(
@@ -3560,96 +3738,99 @@ fn infer_collection_call_type(
             arguments.children.len(),
         ),
         "set" => {
-            let ElementType::Scalar(item) =
-                homogeneous_element_type(unit, arguments, bindings, name)?
+            let Some(item) = homogeneous_element_type(unit, arguments, bindings, name)?.scalar()
             else {
                 return Err(failure(
                     &unit.source,
-                    "T0042",
+                    "T0044",
                     "set keys must be immutable scalar values",
                     arguments.span,
                 ));
             };
-            ValueType::Set(item)
+            ValueType::Set(ElementType::new(ValueType::Scalar(item)))
         }
         "unordered-set" => {
-            let ElementType::Scalar(item) =
-                homogeneous_element_type(unit, arguments, bindings, name)?
+            let Some(item) = homogeneous_element_type(unit, arguments, bindings, name)?.scalar()
             else {
                 return Err(failure(
                     &unit.source,
-                    "T0042",
+                    "T0044",
                     "unordered-set keys must be immutable scalar values",
                     arguments.span,
                 ));
             };
-            ValueType::UnorderedSet(item)
+            ValueType::UnorderedSet(ElementType::new(ValueType::Scalar(item)))
         }
         "entry" => {
             let [key, value] = arguments.children.as_slice() else {
                 return Err(failure(
                     &unit.source,
-                    "T0042",
+                    "T0045",
                     "`entry` requires exactly a key and value",
                     arguments.span,
                 ));
             };
-            let ElementType::Scalar(key) =
-                element_type(unit, key.children.last().unwrap_or(key), bindings)?
+            let Some(key) =
+                element_type(unit, key.children.last().unwrap_or(key), bindings)?.scalar()
             else {
                 return Err(failure(
                     &unit.source,
-                    "T0042",
+                    "T0044",
                     "entry keys must be immutable scalar values",
                     key.span,
                 ));
             };
-            let ElementType::Scalar(value) =
-                element_type(unit, value.children.last().unwrap_or(value), bindings)?
-            else {
-                return Err(failure(
-                    &unit.source,
-                    "T0042",
-                    "entry values currently require a scalar type",
-                    value.span,
-                ));
-            };
-            ValueType::Entry(key, value)
+            let value = element_type(unit, value.children.last().unwrap_or(value), bindings)?;
+            ValueType::Entry(ElementType::new(ValueType::Scalar(key)), value)
         }
         "map" | "unordered-map" => {
+            let mut key_type = None;
             let mut value_type = None;
             for argument in &arguments.children {
-                let value = argument.children.last().unwrap_or(argument);
-                let ElementType::Scalar(inferred) = element_type(unit, value, bindings)? else {
+                let value_node = argument.children.last().unwrap_or(argument);
+                let inferred = element_type(unit, value_node, bindings)?;
+                let (key, value) = match inferred.value_type() {
+                    ValueType::Entry(key, value) => (key, value),
+                    _ => (
+                        ElementType::new(ValueType::Scalar(ScalarType::String)),
+                        inferred,
+                    ),
+                };
+                if key_type.as_ref().is_some_and(|existing| existing != &key) {
                     return Err(failure(
                         &unit.source,
                         "T0042",
-                        "map values currently require a scalar type",
-                        value.span,
+                        "map keys must have one statically known type",
+                        value_node.span,
                     ));
-                };
-                if value_type.is_some_and(|existing| existing != inferred) {
+                }
+                if value_type
+                    .as_ref()
+                    .is_some_and(|existing| existing != &value)
+                {
                     return Err(failure(
                         &unit.source,
                         "T0042",
                         "map values must have one statically known type",
-                        value.span,
+                        value_node.span,
                     ));
                 }
-                value_type = Some(inferred);
+                key_type = Some(key);
+                value_type = Some(value);
             }
-            let value = value_type.ok_or_else(|| {
+            let key = key_type.ok_or_else(|| {
                 failure(
                     &unit.source,
-                    "T0042",
+                    "T0043",
                     "an empty map requires explicit key and value types",
                     arguments.span,
                 )
             })?;
+            let value = value_type.expect("a map key and value are inferred together");
             if name == "map" {
-                ValueType::Map(ScalarType::String, value)
+                ValueType::Map(key, value)
             } else {
-                ValueType::UnorderedMap(ScalarType::String, value)
+                ValueType::UnorderedMap(key, value)
             }
         }
         "range" => ValueType::Range,
@@ -3701,8 +3882,8 @@ fn infer_iterator_call_type(
             )
         })?;
         let element = match inferred {
-            ValueType::Scalar(ty) => ElementType::Scalar(ty),
-            ValueType::TextRange => ElementType::TextRange,
+            ValueType::Scalar(ty) => ElementType::new(ValueType::Scalar(ty)),
+            ValueType::TextRange => ElementType::new(ValueType::TextRange),
             other => {
                 return Err(failure(
                     &unit.source,
@@ -3780,8 +3961,8 @@ fn infer_member_value_type(
     }
     if let Some(ValueType::Entry(key, value)) = receiver_type {
         return Ok(match member_name {
-            "key" => Some(ValueType::Scalar(key)),
-            "value" => Some(ValueType::Scalar(value)),
+            "key" => Some(key.value_type()),
+            "value" => Some(value.value_type()),
             _ => None,
         });
     }
@@ -3816,7 +3997,7 @@ fn infer_member_value_type(
     {
         return Ok(Some(ValueType::Scalar(ScalarType::Int)));
     }
-    match (receiver_type, member_name) {
+    match (receiver_type.clone(), member_name) {
         (Some(ValueType::OverflowResult(ty)), "value")
         | (Some(ValueType::DivRemResult(ty)), "quotient" | "remainder") => {
             return Ok(Some(ValueType::Scalar(ty)));
@@ -3836,7 +4017,7 @@ fn infer_member_value_type(
     }
     if matches!(member_name, "round" | "floor" | "ceiling" | "truncate") {
         if matches!(
-            receiver_type,
+            receiver_type.clone(),
             Some(ValueType::Scalar(ScalarType::Float32 | ScalarType::Float64))
         ) {
             return Ok(Some(ValueType::Scalar(ScalarType::Int)));
@@ -4135,7 +4316,7 @@ fn infer_parse_or_radix_type(
             callback.span,
         ));
     }
-    let Some(ValueType::Scalar(result)) = contract.return_type else {
+    let Some(ValueType::Scalar(result)) = contract.return_type.clone() else {
         unreachable!("checked above")
     };
     Ok(Some(if method.child == "checked" {
@@ -4750,6 +4931,10 @@ pub(crate) fn contextual_constant(
         })
     })
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "storage selection owns the optional inferred recursive type"
+)]
 fn small_int_storage(
     unit: &SemanticUnit,
     value: &SyntaxNode,
@@ -5609,7 +5794,7 @@ fn validate_control_flow(package: &SemanticPackage) -> Result<Vec<Vec<Span>>, Se
             let bindings = call_site_bindings(unit, Some(contract));
             let falls_through =
                 validate_flow_block(unit, block, contract, &bindings, 0, &mut unreachable)?;
-            if contract.return_type.is_some() && falls_through {
+            if contract.return_type.clone().is_some() && falls_through {
                 return Err(failure(
                     &unit.source,
                     "T0015",
@@ -5755,7 +5940,7 @@ fn validate_flow_statement(
                 loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
-                    value_type: item_type,
+                    value_type: item_type.clone(),
                     destination_arms: Vec::new(),
                     storage_type: None,
                     mutable: false,
@@ -5877,7 +6062,7 @@ fn validate_return(
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     let value = statement.children.first();
-    match (contract.return_type, value) {
+    match (contract.return_type.clone(), value) {
         (None, None) => Ok(()),
         (None, Some(value)) => Err(failure(
             &unit.source,
@@ -6869,6 +7054,7 @@ pub(crate) fn binding_span_is_mutated(
         package: &SemanticPackage,
         unit: &SemanticUnit,
         declaration_span: Span,
+        iterator_binding: bool,
         node: &SyntaxNode,
     ) -> usize {
         let resolves_to_binding = |target: &SyntaxNode| {
@@ -6899,16 +7085,28 @@ pub(crate) fn binding_span_is_mutated(
                     )
                     && resolves_to_binding(receiver)
             });
-        let writes_here = usize::from(direct_write || mutator_call);
+        let iterator_advance = iterator_binding
+            && node.kind == SyntaxKind::ForStatement
+            && node.children.get(1).is_some_and(resolves_to_binding);
+        let writes_here = usize::from(direct_write || mutator_call || iterator_advance);
         writes_here
             + node
                 .children
                 .iter()
-                .map(|child| writes(package, unit, declaration_span, child))
+                .map(|child| writes(package, unit, declaration_span, iterator_binding, child))
                 .sum::<usize>()
     }
 
-    writes(package, unit, declaration_span, &unit.tree.root) > usize::from(!initially_assigned)
+    let iterator_binding = unit.typed_bindings.iter().any(|binding| {
+        binding.span == declaration_span && matches!(binding.value_type, ValueType::Iterator(_))
+    });
+    writes(
+        package,
+        unit,
+        declaration_span,
+        iterator_binding,
+        &unit.tree.root,
+    ) > usize::from(!initially_assigned)
 }
 
 fn namespace_with_objects<'a>(

@@ -1064,7 +1064,7 @@ fn untyped_assignment_preserves_the_existing_lexical_binding_type() {
         bindings
             .iter()
             .filter(|binding| binding.name == "value")
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .collect::<Vec<_>>(),
         [ValueType::Scalar(ScalarType::Int8)]
     );
@@ -1126,6 +1126,7 @@ fn types_canonical_integer_coercion_family() {
             .find(|binding| binding.name == name)
             .unwrap()
             .value_type
+            .clone()
     };
 
     assert_eq!(type_of("exact"), ValueType::Scalar(ScalarType::Int16));

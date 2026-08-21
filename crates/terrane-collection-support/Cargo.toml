@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+indexmap = "2"
 terrane-int-support = { path = "../terrane-int-support" }
 unicode-segmentation = "1"
 

@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
+use std::hash::{BuildHasherDefault, Hash};
 use std::sync::Arc;
 
 use terrane_int_support::Int;
@@ -82,21 +84,17 @@ impl<T: Clone> List<T> {
     /// Replaces an indexed item.
     ///
     /// # Errors
-    /// Returns [`IndexError`] when `index` is out of range.
-    pub fn set(&mut self, index: usize, value: T) -> Result<Self, IndexError> {
+    ///
+    /// Returns [`IndexError`] when `index` is outside the list.
+    pub fn set(&mut self, index: usize, value: T) -> Result<(), IndexError> {
         let Some(slot) = Arc::make_mut(&mut self.0).get_mut(index) else {
             return Err(IndexError { index });
         };
         *slot = value;
-        Ok(self.clone())
+        Ok(())
     }
-    #[expect(
-        clippy::return_self_not_must_use,
-        reason = "Terrane collection mutator results may be intentionally discarded"
-    )]
-    pub fn append(&mut self, value: T) -> Self {
+    pub fn append(&mut self, value: T) {
         Arc::make_mut(&mut self.0).push(value);
-        self.clone()
     }
 }
 
@@ -152,121 +150,22 @@ impl<K, V> Entry<K, V> {
     }
 }
 
+type FixedState = BuildHasherDefault<DefaultHasher>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Map<K, V>(Arc<Vec<Entry<K, V>>>);
-impl<K: Eq + Clone, V: Clone> Map<K, V> {
+pub struct Map<K: Eq + Hash, V>(Arc<indexmap::IndexMap<K, V, FixedState>>);
+impl<K: Eq + Hash + Clone, V: Clone> Map<K, V> {
     #[must_use]
     pub fn new(entries: Vec<Entry<K, V>>) -> Self {
-        Self(Arc::new(entries))
+        let mut map = indexmap::IndexMap::with_hasher(FixedState::default());
+        for entry in entries {
+            map.insert(entry.key, entry.value);
+        }
+        Self(Arc::new(map))
     }
     #[must_use]
     pub fn length(&self) -> i128 {
         self.0.len() as i128
-    }
-    #[must_use]
-    pub fn get(&self, key: &K) -> Option<&V> {
-        self.0
-            .iter()
-            .find(|entry| &entry.key == key)
-            .map(|entry| &entry.value)
-    }
-    /// Returns the mapped value or an error when the key is absent.
-    ///
-    /// # Errors
-    /// Returns [`MissingKey`] when `key` is absent.
-    pub fn get_or_error(&self, key: &K) -> Result<V, MissingKey> {
-        self.get(key).cloned().ok_or(MissingKey)
-    }
-    #[expect(
-        clippy::return_self_not_must_use,
-        reason = "Terrane collection mutator results may be intentionally discarded"
-    )]
-    pub fn set(&mut self, key: K, value: V) -> Self {
-        let entries = Arc::make_mut(&mut self.0);
-        if let Some(entry) = entries.iter_mut().find(|entry| entry.key == key) {
-            entry.value = value;
-        } else {
-            entries.push(Entry::new(key, value));
-        }
-        self.clone()
-    }
-    #[must_use]
-    pub fn keys(&self) -> List<K> {
-        List::new(self.0.iter().map(|entry| entry.key.clone()).collect())
-    }
-    #[must_use]
-    pub fn values(&self) -> List<V> {
-        List::new(self.0.iter().map(|entry| entry.value.clone()).collect())
-    }
-    #[must_use]
-    pub fn entries(&self) -> List<Entry<K, V>> {
-        List::new(self.0.as_ref().clone())
-    }
-}
-impl<K: Eq + Clone, V: Clone> Iterable for Map<K, V> {
-    type Item = Entry<K, V>;
-    fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        Iterator::new(self.0.as_ref().clone())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Set<T>(Arc<Vec<T>>);
-impl<T: Eq + Clone> Set<T> {
-    #[must_use]
-    pub fn new(items: Vec<T>) -> Self {
-        let mut unique = Vec::new();
-        for item in items {
-            if !unique.contains(&item) {
-                unique.push(item);
-            }
-        }
-        Self(Arc::new(unique))
-    }
-    #[must_use]
-    pub fn length(&self) -> i128 {
-        self.0.len() as i128
-    }
-    #[must_use]
-    pub fn contains(&self, item: &T) -> bool {
-        self.0.contains(item)
-    }
-    #[expect(
-        clippy::return_self_not_must_use,
-        reason = "Terrane collection mutator results may be intentionally discarded"
-    )]
-    pub fn add(&mut self, item: T) -> Self {
-        if !self.0.contains(&item) {
-            Arc::make_mut(&mut self.0).push(item);
-        }
-        self.clone()
-    }
-    pub fn remove(&mut self, item: &T) -> bool {
-        let items = Arc::make_mut(&mut self.0);
-        let Some(index) = items.iter().position(|candidate| candidate == item) else {
-            return false;
-        };
-        items.remove(index);
-        true
-    }
-}
-impl<T: Eq + Clone> Iterable for Set<T> {
-    type Item = T;
-    fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::new(self.0.as_ref().clone())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnorderedMap<K, V>(Map<K, V>);
-impl<K: Eq + Clone, V: Clone> UnorderedMap<K, V> {
-    #[must_use]
-    pub fn new(entries: Vec<Entry<K, V>>) -> Self {
-        Self(Map::new(entries))
-    }
-    #[must_use]
-    pub fn length(&self) -> i128 {
-        self.0.length()
     }
     #[must_use]
     pub fn get(&self, key: &K) -> Option<&V> {
@@ -277,67 +176,159 @@ impl<K: Eq + Clone, V: Clone> UnorderedMap<K, V> {
     /// # Errors
     /// Returns [`MissingKey`] when `key` is absent.
     pub fn get_or_error(&self, key: &K) -> Result<V, MissingKey> {
-        self.0.get_or_error(key)
+        self.get(key).cloned().ok_or(MissingKey)
     }
-    #[expect(
-        clippy::return_self_not_must_use,
-        reason = "Terrane collection mutator results may be intentionally discarded"
-    )]
-    pub fn set(&mut self, key: K, value: V) -> Self {
-        let _ = self.0.set(key, value);
-        self.clone()
+    pub fn set(&mut self, key: K, value: V) {
+        Arc::make_mut(&mut self.0).insert(key, value);
     }
     #[must_use]
     pub fn keys(&self) -> List<K> {
-        self.0.keys()
+        List::new(self.0.keys().cloned().collect())
     }
     #[must_use]
     pub fn values(&self) -> List<V> {
-        self.0.values()
+        List::new(self.0.values().cloned().collect())
     }
     #[must_use]
     pub fn entries(&self) -> List<Entry<K, V>> {
-        self.0.entries()
+        List::new(
+            self.0
+                .iter()
+                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+                .collect(),
+        )
     }
 }
-impl<K: Eq + Clone, V: Clone> Iterable for UnorderedMap<K, V> {
+impl<K: Eq + Hash + Clone, V: Clone> Iterable for Map<K, V> {
     type Item = Entry<K, V>;
     fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        self.0.terrane_iterator()
+        Iterator::new(
+            self.0
+                .iter()
+                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+                .collect(),
+        )
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnorderedSet<T>(Set<T>);
-impl<T: Eq + Clone> UnorderedSet<T> {
+pub struct Set<T: Eq + Hash>(Arc<indexmap::IndexSet<T, FixedState>>);
+impl<T: Eq + Hash + Clone> Set<T> {
     #[must_use]
     pub fn new(items: Vec<T>) -> Self {
-        Self(Set::new(items))
+        let mut set = indexmap::IndexSet::with_hasher(FixedState::default());
+        set.extend(items);
+        Self(Arc::new(set))
     }
     #[must_use]
     pub fn length(&self) -> i128 {
-        self.0.length()
+        self.0.len() as i128
     }
     #[must_use]
     pub fn contains(&self, item: &T) -> bool {
         self.0.contains(item)
     }
-    #[expect(
-        clippy::return_self_not_must_use,
-        reason = "Terrane collection mutator results may be intentionally discarded"
-    )]
-    pub fn add(&mut self, item: T) -> Self {
-        let _ = self.0.add(item);
-        self.clone()
+    pub fn add(&mut self, item: T) {
+        Arc::make_mut(&mut self.0).insert(item);
     }
     pub fn remove(&mut self, item: &T) -> bool {
-        self.0.remove(item)
+        Arc::make_mut(&mut self.0).shift_remove(item)
     }
 }
-impl<T: Eq + Clone> Iterable for UnorderedSet<T> {
+impl<T: Eq + Hash + Clone> Iterable for Set<T> {
     type Item = T;
     fn terrane_iterator(&self) -> Iterator<T> {
-        self.0.terrane_iterator()
+        Iterator::new(self.0.iter().cloned().collect())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnorderedMap<K: Eq + Hash, V>(Arc<HashMap<K, V, FixedState>>);
+impl<K: Eq + Hash + Clone, V: Clone> UnorderedMap<K, V> {
+    #[must_use]
+    pub fn new(entries: Vec<Entry<K, V>>) -> Self {
+        let mut map = HashMap::with_hasher(FixedState::default());
+        for entry in entries {
+            map.insert(entry.key, entry.value);
+        }
+        Self(Arc::new(map))
+    }
+    #[must_use]
+    pub fn length(&self) -> i128 {
+        self.0.len() as i128
+    }
+    #[must_use]
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.0.get(key)
+    }
+    /// Returns the mapped value or an error when the key is absent.
+    ///
+    /// # Errors
+    /// Returns [`MissingKey`] when `key` is absent.
+    pub fn get_or_error(&self, key: &K) -> Result<V, MissingKey> {
+        self.get(key).cloned().ok_or(MissingKey)
+    }
+    pub fn set(&mut self, key: K, value: V) {
+        Arc::make_mut(&mut self.0).insert(key, value);
+    }
+    #[must_use]
+    pub fn keys(&self) -> List<K> {
+        List::new(self.0.keys().cloned().collect())
+    }
+    #[must_use]
+    pub fn values(&self) -> List<V> {
+        List::new(self.0.values().cloned().collect())
+    }
+    #[must_use]
+    pub fn entries(&self) -> List<Entry<K, V>> {
+        List::new(
+            self.0
+                .iter()
+                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+                .collect(),
+        )
+    }
+}
+impl<K: Eq + Hash + Clone, V: Clone> Iterable for UnorderedMap<K, V> {
+    type Item = Entry<K, V>;
+    fn terrane_iterator(&self) -> Iterator<Self::Item> {
+        Iterator::new(
+            self.0
+                .iter()
+                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+                .collect(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnorderedSet<T: Eq + Hash>(Arc<HashSet<T, FixedState>>);
+impl<T: Eq + Hash + Clone> UnorderedSet<T> {
+    #[must_use]
+    pub fn new(items: Vec<T>) -> Self {
+        let mut set = HashSet::with_hasher(FixedState::default());
+        set.extend(items);
+        Self(Arc::new(set))
+    }
+    #[must_use]
+    pub fn length(&self) -> i128 {
+        self.0.len() as i128
+    }
+    #[must_use]
+    pub fn contains(&self, item: &T) -> bool {
+        self.0.contains(item)
+    }
+    pub fn add(&mut self, item: T) {
+        Arc::make_mut(&mut self.0).insert(item);
+    }
+    pub fn remove(&mut self, item: &T) -> bool {
+        Arc::make_mut(&mut self.0).remove(item)
+    }
+}
+impl<T: Eq + Hash + Clone> Iterable for UnorderedSet<T> {
+    type Item = T;
+    fn terrane_iterator(&self) -> Iterator<T> {
+        Iterator::new(self.0.iter().cloned().collect())
     }
 }
 
@@ -460,7 +451,7 @@ mod tests {
     fn list_assignment_separates_on_first_mutation() {
         let original = List::new(vec![1]);
         let mut copy = original.clone();
-        let _ = copy.append(2);
+        copy.append(2);
         assert_eq!(original.length(), 1);
         assert_eq!(copy.length(), 2);
     }

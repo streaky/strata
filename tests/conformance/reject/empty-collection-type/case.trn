@@ -1,0 +1,5 @@
+namespace empty-collection-type
+from /core/collections import list
+function main
+  values = list;
+  print; values.length

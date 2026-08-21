@@ -234,4 +234,12 @@ fn main() {
         };
         println!("{}", terrane_scalar_support::scalar_text(&(value)));
     }
+    let mut empty_list: terrane_collection_support::List<terrane_int_support::Int> = terrane_collection_support::List::<terrane_int_support::Int>::new(Vec::new());
+    (empty_list).append(terrane_int_support::Int::from(5_i128));
+    let mut empty_map: terrane_collection_support::Map<terrane_int_support::Int, String> = terrane_collection_support::Map::<terrane_int_support::Int, String>::new(Vec::new());
+    (empty_map).set(terrane_int_support::Int::from(1_i128), String::from("one"));
+    let nested: terrane_collection_support::List<terrane_collection_support::List<terrane_int_support::Int>> = terrane_collection_support::List::<terrane_collection_support::List<terrane_int_support::Int>>::new(vec![terrane_collection_support::List::<terrane_int_support::Int>::new(vec![terrane_int_support::Int::from(8_i128), terrane_int_support::Int::from(9_i128)])]);
+    println!("{}{}{}", terrane_scalar_support::scalar_text(&(terrane_int_support::Int::from((empty_list).length()))), terrane_scalar_support::scalar_text(&(((empty_map).get_or_error(&(terrane_int_support::Int::from(1_i128)))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collections-value-semantics::main (case.trn:56:29)"))))), terrane_scalar_support::scalar_text(&(terrane_int_support::Int::from((nested).length()))));
+    let arbitrary: terrane_collection_support::Map<terrane_int_support::Int, String> = terrane_collection_support::Map::<terrane_int_support::Int, String>::new(vec![terrane_collection_support::Entry::<terrane_int_support::Int, String>::new(terrane_int_support::Int::from(2_i128), String::from("two")), terrane_collection_support::Entry::<terrane_int_support::Int, String>::new(terrane_int_support::Int::from(3_i128), String::from("three"))]);
+    println!("{}{}", terrane_scalar_support::scalar_text(&(((arbitrary).get_or_error(&(terrane_int_support::Int::from(2_i128)))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collections-value-semantics::main (case.trn:58:10)"))))), terrane_scalar_support::scalar_text(&(((arbitrary).get_or_error(&(terrane_int_support::Int::from(3_i128)))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collections-value-semantics::main (case.trn:58:24)"))))));
 }

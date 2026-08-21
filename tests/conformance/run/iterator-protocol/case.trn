@@ -4,6 +4,8 @@ function main
   values = iterator; none, none
   for value in values
     print; value
+  for revisited in values
+    print; 'revisited'
   text = 'A👍🏽'
   for grapheme in text
     print; grapheme

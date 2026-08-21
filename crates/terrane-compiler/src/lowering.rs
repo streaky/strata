@@ -272,7 +272,7 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == span)
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .or_else(|| emitter.value_type(name_node));
         let Some(ValueType::Scalar(scalar)) = value_type else {
             continue;
@@ -444,7 +444,7 @@ impl Emitter<'_> {
         else {
             return;
         };
-        let ValueType::Scalar(scalar) = binding.value_type else {
+        let ValueType::Scalar(scalar) = binding.value_type.clone() else {
             return;
         };
         let initializers = self
@@ -489,7 +489,7 @@ impl Emitter<'_> {
         self.namespace_initializer = Some((source_name.to_owned(), local.clone()));
         let values = initializers
             .iter()
-            .map(|initializer| self.expression_as(initializer, binding.value_type))
+            .map(|initializer| self.expression_as(initializer, binding.value_type.clone()))
             .collect::<Vec<_>>();
         self.namespace_initializer = None;
         if values.len() == 1 {
@@ -530,6 +530,7 @@ impl Emitter<'_> {
             }
             let ty = parameter
                 .value_type
+                .clone()
                 .map_or_else(|| "i128".to_owned(), rust_value_type);
             let mutable = if parameter.mutable { "mut " } else { "" };
             write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
@@ -539,15 +540,17 @@ impl Emitter<'_> {
         if function_errors {
             let result = contract
                 .return_type
+                .clone()
                 .map_or_else(|| "()".to_owned(), rust_value_type);
             write!(self.output, " -> Result<{result}, TerraneError>").unwrap();
-        } else if let Some(return_type) = contract.return_type
+        } else if let Some(return_type) = contract.return_type.clone()
             && return_type != ValueType::Scalar(ScalarType::None)
         {
             write!(self.output, " -> {}", rust_value_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
-        let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
+        let outer_return_type =
+            std::mem::replace(&mut self.return_type, contract.return_type.clone());
         let outer_function_errors = std::mem::replace(&mut self.function_errors, function_errors);
         let outer_propagation = std::mem::replace(&mut self.propagate_errors, function_errors);
         let outer_function = self.current_function.replace(format!(
@@ -563,6 +566,7 @@ impl Emitter<'_> {
                 .filter_map(|parameter| {
                     parameter
                         .value_type
+                        .clone()
                         .map(|value_type| (parameter.name.clone(), value_type))
                 })
                 .collect(),
@@ -593,6 +597,7 @@ impl Emitter<'_> {
         if function_errors
             && contract
                 .return_type
+                .clone()
                 .is_none_or(|ty| ty == ValueType::Scalar(ScalarType::None))
             && node
                 .children
@@ -728,7 +733,9 @@ impl Emitter<'_> {
             }
             SyntaxKind::Assignment => self.assignment(node),
             SyntaxKind::CallExpression => {
-                let expression = self.expression(node);
+                let expression = self
+                    .collection_mutation_statement(node)
+                    .unwrap_or_else(|| self.expression(node));
                 self.line(&format!("{expression};"));
             }
             SyntaxKind::PostfixExpression => self.postfix(node),
@@ -739,7 +746,7 @@ impl Emitter<'_> {
                 let value = node.children.first().map_or_else(
                     || "()".to_owned(),
                     |value| {
-                        let value = if let Some(return_type) = self.return_type {
+                        let value = if let Some(return_type) = self.return_type.clone() {
                             self.expression_as(value, return_type)
                         } else {
                             self.expression(value)
@@ -777,6 +784,52 @@ impl Emitter<'_> {
         }
     }
 
+    fn collection_mutation_statement(&mut self, node: &SyntaxNode) -> Option<String> {
+        let [callee, arguments] = node.children.as_slice() else {
+            return None;
+        };
+        let [receiver, member] = callee.children.as_slice() else {
+            return None;
+        };
+        if callee.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let receiver_type = self.value_type(receiver)?;
+        let receiver = self.expression(receiver);
+        let values = arguments
+            .children
+            .iter()
+            .map(|argument| argument.children.last().unwrap_or(argument))
+            .collect::<Vec<_>>();
+        match (receiver_type, self.text(member)) {
+            (ValueType::List(item), "append") => Some(format!(
+                "({receiver}).append({})",
+                self.expression_as(values[0], item.value_type())
+            )),
+            (ValueType::List(item), "set") => {
+                let index = self.expression_as(values[0], ValueType::Scalar(ScalarType::Int));
+                let index = self.fallible(
+                    format!("terrane_collection_support::index_from_int(&({index}))"),
+                    node,
+                );
+                let value = self.expression_as(values[1], item.value_type());
+                Some(self.fallible(format!("({receiver}).set({index}, {value})"), node))
+            }
+            (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "set") => {
+                Some(format!(
+                    "({receiver}).set({}, {})",
+                    self.expression_as(values[0], key.value_type()),
+                    self.expression_as(values[1], value.value_type())
+                ))
+            }
+            (ValueType::Set(item) | ValueType::UnorderedSet(item), "add") => Some(format!(
+                "({receiver}).add({})",
+                self.expression_as(values[0], item.value_type())
+            )),
+            _ => None,
+        }
+    }
+
     fn assignment(&mut self, node: &SyntaxNode) {
         if self.global_assignment(node) {
             return;
@@ -800,8 +853,8 @@ impl Emitter<'_> {
                     self.line(&format!("let _ = {mutation};"));
                 }
                 ValueType::Map(key, value_type) | ValueType::UnorderedMap(key, value_type) => {
-                    let key = self.expression_as(index, ValueType::Scalar(key));
-                    let value = self.expression_as(value, ValueType::Scalar(value_type));
+                    let key = self.expression_as(index, key.value_type());
+                    let value = self.expression_as(value, value_type.value_type());
                     self.line(&format!("let _ = ({receiver_value}).set({key}, {value});"));
                 }
                 _ => {}
@@ -835,7 +888,7 @@ impl Emitter<'_> {
             });
         let union_binding = self.union_binding(left);
         let value_type = assigned_binding
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .or_else(|| self.value_type(left));
         let value = if let Some(binding) = union_binding {
             self.union_value(&binding, right)
@@ -917,6 +970,7 @@ impl Emitter<'_> {
         self.try_counter += 1;
         let result = self
             .return_type
+            .clone()
             .map_or_else(|| "()".to_owned(), rust_value_type);
         let mutable = if node
             .children
@@ -1100,7 +1154,7 @@ impl Emitter<'_> {
             if let Some(storage_type) = storage_type {
                 return rust_type(storage_type).to_owned();
             }
-            rust_value_type(binding.value_type)
+            rust_value_type(binding.value_type.clone())
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -1131,7 +1185,7 @@ impl Emitter<'_> {
             } else if let Some(storage_type) = storage_type {
                 self.expression_as(initializer, ValueType::Scalar(storage_type))
             } else if let Some(binding) = binding {
-                self.expression_as(initializer, binding.value_type)
+                self.expression_as(initializer, binding.value_type.clone())
             } else {
                 self.expression(initializer)
             };
@@ -1172,6 +1226,10 @@ impl Emitter<'_> {
         self.line(&format!("{target} = {updated};"));
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the optional recursive value type is matched as a complete lowering decision"
+    )]
     fn postfix_updated_value(
         &self,
         value: &str,
@@ -1261,7 +1319,7 @@ impl Emitter<'_> {
                     Some(ValueType::Scalar(ScalarType::Bytes)) => {
                         format!("terrane_collection_support::bytes_iterator(&({collection}))")
                     }
-                    Some(ValueType::Iterator(_)) => collection,
+                    Some(ValueType::Iterator(_)) => format!("&mut ({collection})"),
                     Some(
                         ValueType::List(_)
                         | ValueType::Map(_, _)
@@ -1354,6 +1412,10 @@ impl Emitter<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "destination-directed lowering keeps every recursive value form in one auditable dispatch"
+    )]
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
         if let ValueType::ScalarOrNone(scalar) = value_type {
             return if self.value_type(node) == Some(value_type) {
@@ -1412,6 +1474,53 @@ impl Emitter<'_> {
                     && self.lazy_namespace_binding_type(node).is_some() =>
             {
                 format!("(*{}).clone()", self.namespace_name(node))
+            }
+            ValueType::List(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::list") =>
+            {
+                format!(
+                    "terrane_collection_support::List::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::Set(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::set") =>
+            {
+                format!(
+                    "terrane_collection_support::Set::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::UnorderedSet(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::unordered-set") =>
+            {
+                format!(
+                    "terrane_collection_support::UnorderedSet::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::Map(key, value)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::map") =>
+            {
+                format!(
+                    "terrane_collection_support::Map::<{}, {}>::new(Vec::new())",
+                    rust_element_type(key),
+                    rust_element_type(value)
+                )
+            }
+            ValueType::UnorderedMap(key, value)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::unordered-map") =>
+            {
+                format!(
+                    "terrane_collection_support::UnorderedMap::<{}, {}>::new(Vec::new())",
+                    rust_element_type(key),
+                    rust_element_type(value)
+                )
             }
             ValueType::List(_)
             | ValueType::Map(_, _)
@@ -1643,7 +1752,7 @@ impl Emitter<'_> {
             }
         {
             let operation_type = ValueType::Scalar(operation_type);
-            let left = Self::unwrapped_expression(self.expression_as(left, operation_type));
+            let left = Self::unwrapped_expression(self.expression_as(left, operation_type.clone()));
             let right = if matches!(source_operator, "<<" | ">>") {
                 self.expression(right)
             } else {
@@ -1740,6 +1849,10 @@ impl Emitter<'_> {
         format!("{{ {effect} {result} }}")
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "category membership matches the optional recursive value type as one decision"
+    )]
     fn category_membership(
         &mut self,
         node: &SyntaxNode,
@@ -1836,12 +1949,12 @@ impl Emitter<'_> {
                     .iter()
                     .rev()
                     .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-                    .map(|binding| binding.value_type)
+                    .map(|binding| binding.value_type.clone())
                     .or_else(|| {
                         self.parameter_types
                             .iter()
                             .find(|(parameter, _)| parameter == name)
-                            .map(|(_, value_type)| *value_type)
+                            .map(|(_, value_type)| value_type.clone())
                     })
             }
             SyntaxKind::TypeExpression
@@ -1854,6 +1967,10 @@ impl Emitter<'_> {
         }
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "string-view dispatch matches the optional recursive receiver type as one decision"
+    )]
     fn direct_string_view_length(
         &mut self,
         receiver: &SyntaxNode,
@@ -1900,7 +2017,7 @@ impl Emitter<'_> {
                 self.fallible(format!("({receiver}).get_or_error({index})"), node)
             }
             Some(ValueType::Map(key, _) | ValueType::UnorderedMap(key, _)) => {
-                let index_value = self.expression_as(index, ValueType::Scalar(key));
+                let index_value = self.expression_as(index, key.value_type());
                 self.fallible(format!("({receiver}).get_or_error(&({index_value}))"), node)
             }
             _ => String::new(),
@@ -1916,7 +2033,9 @@ impl Emitter<'_> {
             return String::new();
         };
         let receiver_type = self.value_type(receiver);
-        if let Some(length) = self.direct_string_view_length(receiver, receiver_type, member) {
+        if let Some(length) =
+            self.direct_string_view_length(receiver, receiver_type.clone(), member)
+        {
             return length;
         }
         let receiver = self.expression(receiver);
@@ -1937,7 +2056,7 @@ impl Emitter<'_> {
                 receiver
             }
             boundary @ ("start" | "end") => {
-                let method = match (receiver_type, boundary) {
+                let method = match (receiver_type.clone(), boundary) {
                     (
                         Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)),
                         "start",
@@ -1998,7 +2117,7 @@ impl Emitter<'_> {
             "type" => "()".to_owned(),
             mode @ ("round" | "floor" | "ceiling" | "truncate")
                 if matches!(
-                    receiver_type,
+                    receiver_type.clone(),
                     Some(ValueType::Scalar(ScalarType::Float32 | ScalarType::Float64))
                 ) =>
             {
@@ -2049,7 +2168,7 @@ impl Emitter<'_> {
                     )
                 }
                 ValueType::Map(key, _) | ValueType::UnorderedMap(key, _) => {
-                    let key = self.expression_as(argument, ValueType::Scalar(key));
+                    let key = self.expression_as(argument, key.value_type());
                     format!("({receiver_value}).get(&({key})).cloned()")
                 }
                 _ => String::new(),
@@ -2071,7 +2190,7 @@ impl Emitter<'_> {
                 .collect::<Vec<_>>();
             let call = match (receiver_type, member_name.as_str()) {
                 (ValueType::List(item), "append") => Some(format!(
-                    "({receiver_value}).append({})",
+                    "({{ let collection = &mut ({receiver_value}); collection.append({}); collection.clone() }})",
                     self.expression_as(values[0], item.value_type())
                 )),
                 (ValueType::List(item), "set") => {
@@ -2081,28 +2200,31 @@ impl Emitter<'_> {
                         node,
                     );
                     let value = self.expression_as(values[1], item.value_type());
-                    Some(self.fallible(format!("({receiver_value}).set({index}, {value})"), node))
+                    let mutation = self.fallible(format!("collection.set({index}, {value})"), node);
+                    Some(format!(
+                        "({{ let collection = &mut ({receiver_value}); {mutation}; collection.clone() }})"
+                    ))
                 }
                 (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "set") => {
                     Some(format!(
-                        "({receiver_value}).set({}, {})",
-                        self.expression_as(values[0], ValueType::Scalar(key)),
-                        self.expression_as(values[1], ValueType::Scalar(value))
+                        "({{ let collection = &mut ({receiver_value}); collection.set({}, {}); collection.clone() }})",
+                        self.expression_as(values[0], key.value_type()),
+                        self.expression_as(values[1], value.value_type())
                     ))
                 }
                 (ValueType::Set(item) | ValueType::UnorderedSet(item), "contains") => {
                     Some(format!(
                         "({receiver_value}).contains(&({}))",
-                        self.expression_as(values[0], ValueType::Scalar(item))
+                        self.expression_as(values[0], item.value_type())
                     ))
                 }
                 (ValueType::Set(item) | ValueType::UnorderedSet(item), "add") => Some(format!(
-                    "({receiver_value}).add({})",
-                    self.expression_as(values[0], ValueType::Scalar(item))
+                    "({{ let collection = &mut ({receiver_value}); collection.add({}); collection.clone() }})",
+                    self.expression_as(values[0], item.value_type())
                 )),
                 (ValueType::Set(item) | ValueType::UnorderedSet(item), "remove") => Some(format!(
                     "({receiver_value}).remove(&({}))",
-                    self.expression_as(values[0], ValueType::Scalar(item))
+                    self.expression_as(values[0], item.value_type())
                 )),
                 (
                     ValueType::Map(_, _) | ValueType::UnorderedMap(_, _),
@@ -2204,7 +2326,7 @@ impl Emitter<'_> {
             );
         }
         if let Some(value_type) = self.value_type(node) {
-            let constructor = match value_type {
+            let constructor = match value_type.clone() {
                 ValueType::List(item) if self.is_builtin(callee, "/core/collections::list") => {
                     Some(("List", item))
                 }
@@ -2214,12 +2336,12 @@ impl Emitter<'_> {
                     Some(("Tuple", item))
                 }
                 ValueType::Set(item) if self.is_builtin(callee, "/core/collections::set") => {
-                    Some(("Set", ElementType::Scalar(item)))
+                    Some(("Set", item))
                 }
                 ValueType::UnorderedSet(item)
                     if self.is_builtin(callee, "/core/collections::unordered-set") =>
                 {
-                    Some(("UnorderedSet", ElementType::Scalar(item)))
+                    Some(("UnorderedSet", item))
                 }
                 _ => None,
             };
@@ -2236,7 +2358,7 @@ impl Emitter<'_> {
                     values.join(", ")
                 );
             }
-            if let ValueType::Entry(key, value) = value_type
+            if let ValueType::Entry(key, value) = value_type.clone()
                 && self.is_builtin(callee, "/core/collections::entry")
             {
                 let values = [
@@ -2245,20 +2367,20 @@ impl Emitter<'_> {
                             .children
                             .last()
                             .unwrap_or(&arguments.children[0]),
-                        ValueType::Scalar(key),
+                        key.value_type(),
                     ),
                     self.expression_as(
                         arguments.children[1]
                             .children
                             .last()
                             .unwrap_or(&arguments.children[1]),
-                        ValueType::Scalar(value),
+                        value.value_type(),
                     ),
                 ];
                 return format!(
                     "terrane_collection_support::Entry::<{}, {}>::new({}, {})",
-                    rust_type(key),
-                    rust_type(value),
+                    rust_element_type(key),
+                    rust_element_type(value),
                     values[0],
                     values[1]
                 );
@@ -2267,7 +2389,7 @@ impl Emitter<'_> {
                 value_type,
                 ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)
             ) {
-                let (kind, key, value) = match value_type {
+                let (kind, key, value) = match value_type.clone() {
                     ValueType::Map(key, value) => ("Map", key, value),
                     ValueType::UnorderedMap(key, value) => ("UnorderedMap", key, value),
                     _ => unreachable!(),
@@ -2285,23 +2407,29 @@ impl Emitter<'_> {
                         .children
                         .iter()
                         .map(|argument| {
+                            let value_node = argument.children.last().unwrap_or(argument);
+                            if matches!(self.value_type(value_node), Some(ValueType::Entry(_, _))) {
+                                return self.expression_as(
+                                    value_node,
+                                    ValueType::Entry(key.clone(), value.clone()),
+                                );
+                            }
                             let name = argument
                                 .children
                                 .first()
                                 .map(|name| self.text(name).to_owned())
                                 .expect("validated named map entry");
-                            let value_node = argument.children.last().unwrap_or(argument);
-                            let value =
-                                self.expression_as(value_node, ValueType::Scalar(value));
+                            let value_expression =
+                                self.expression_as(value_node, value.value_type());
                             format!(
-                                "terrane_collection_support::Entry::new(String::from({name:?}), {value})"
+                                "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
                             )
                         })
                         .collect::<Vec<_>>();
                     return format!(
                         "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
-                        rust_type(key),
-                        rust_type(value),
+                        rust_element_type(key),
+                        rust_element_type(value),
                         entries.join(", ")
                     );
                 }
@@ -2405,7 +2533,7 @@ impl Emitter<'_> {
                 );
                 let value = argument.children.last().unwrap_or(argument);
                 let parameter = &contract.parameters[index];
-                ordered[index] = Some(if let Some(ty) = parameter.value_type {
+                ordered[index] = Some(if let Some(ty) = parameter.value_type.clone() {
                     self.expression_as(value, ty)
                 } else {
                     self.expression(value)
@@ -2881,7 +3009,7 @@ impl Emitter<'_> {
                     .rev()
                     .find(|(name, _)| name == source_name)
                     .and_then(|(_, value_type)| {
-                        narrowed_optional_type(self.unit, node, *value_type)
+                        narrowed_optional_type(self.unit, node, value_type.clone())
                     })
             });
         if let Some(narrowed) = narrowed {
@@ -3011,7 +3139,7 @@ impl Emitter<'_> {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == span)
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
     }
 
     fn is_namespace_binding_span(&self, span: crate::Span) -> bool {
@@ -3060,7 +3188,7 @@ impl Emitter<'_> {
             if let Some(default) = parameter.children.last().filter(|child| {
                 !matches!(child.kind, SyntaxKind::Name | SyntaxKind::TypeExpression)
             }) {
-                let destination = contract.parameters[index].value_type;
+                let destination = contract.parameters[index].value_type.clone();
                 let value = destination
                     .and_then(|destination| match destination {
                         ValueType::Scalar(destination) => {
@@ -3301,16 +3429,12 @@ fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNo
 fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "element lowering owns the recursively described value type"
+)]
 fn rust_element_type(ty: ElementType) -> String {
-    match ty {
-        ElementType::Scalar(scalar) => rust_type(scalar).to_owned(),
-        ElementType::TextRange => "terrane_string_support::TextRange".to_owned(),
-        ElementType::Entry(key, value) => format!(
-            "terrane_collection_support::Entry<{}, {}>",
-            rust_type(key),
-            rust_type(value)
-        ),
-    }
+    rust_value_type(ty.value_type())
 }
 
 fn rust_value_type(ty: ValueType) -> String {
@@ -3352,11 +3476,14 @@ fn rust_value_type(ty: ValueType) -> String {
         }
         ValueType::Map(key, value) => format!(
             "terrane_collection_support::Map<{}, {}>",
-            rust_type(key),
-            rust_type(value)
+            rust_element_type(key),
+            rust_element_type(value)
         ),
         ValueType::Set(item) => {
-            format!("terrane_collection_support::Set<{}>", rust_type(item))
+            format!(
+                "terrane_collection_support::Set<{}>",
+                rust_element_type(item)
+            )
         }
         ValueType::Tuple(item, _) => {
             format!(
@@ -3367,18 +3494,18 @@ fn rust_value_type(ty: ValueType) -> String {
         ValueType::Range => "terrane_collection_support::Range".to_owned(),
         ValueType::Entry(key, value) => format!(
             "terrane_collection_support::Entry<{}, {}>",
-            rust_type(key),
-            rust_type(value)
+            rust_element_type(key),
+            rust_element_type(value)
         ),
         ValueType::UnorderedMap(key, value) => format!(
             "terrane_collection_support::UnorderedMap<{}, {}>",
-            rust_type(key),
-            rust_type(value)
+            rust_element_type(key),
+            rust_element_type(value)
         ),
         ValueType::UnorderedSet(item) => {
             format!(
                 "terrane_collection_support::UnorderedSet<{}>",
-                rust_type(item)
+                rust_element_type(item)
             )
         }
         ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),

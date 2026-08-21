@@ -489,6 +489,7 @@ dependencies = [
 name = "terrane-collection-support"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "terrane-int-support",
  "unicode-segmentation",
 ]
