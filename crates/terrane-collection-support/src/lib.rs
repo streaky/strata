@@ -347,6 +347,12 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
+fn insert_by_stable_hash<T: Hash>(items: &mut Vec<T>, item: T) {
+    let hash = stable_hash(&item);
+    let index = items.partition_point(|candidate| stable_hash(candidate) <= hash);
+    items.insert(index, item);
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct UnorderedMapData<K: Eq + Hash, V> {
     values: HashMap<K, V, FixedState>,
@@ -397,8 +403,7 @@ impl<K: Eq + Hash + Clone, V: Clone> UnorderedMap<K, V> {
     pub fn set(&mut self, key: K, value: V) {
         let data = Arc::make_mut(&mut self.0);
         if !data.values.contains_key(&key) {
-            data.iteration_keys.push(key.clone());
-            data.iteration_keys.sort_by_key(stable_hash);
+            insert_by_stable_hash(&mut data.iteration_keys, key.clone());
         }
         data.values.insert(key, value);
     }
@@ -480,8 +485,7 @@ impl<T: Eq + Hash + Clone> UnorderedSet<T> {
     pub fn add(&mut self, item: T) {
         let data = Arc::make_mut(&mut self.0);
         if data.values.insert(item.clone()) {
-            data.iteration_items.push(item);
-            data.iteration_items.sort_by_key(stable_hash);
+            insert_by_stable_hash(&mut data.iteration_items, item);
         }
     }
     pub fn remove(&mut self, item: &T) -> bool {
@@ -691,5 +695,28 @@ mod tests {
         copy.append(2);
         assert_eq!(original.length(), 1);
         assert_eq!(copy.length(), 2);
+    }
+
+    #[test]
+    fn unordered_insertion_matches_bulk_construction_order() {
+        let entries = vec![
+            Entry::new("third", 3),
+            Entry::new("first", 1),
+            Entry::new("second", 2),
+        ];
+        let bulk_map = UnorderedMap::new(entries.clone());
+        let mut inserted_map = UnorderedMap::new(Vec::new());
+        for entry in entries {
+            inserted_map.set(entry.key, entry.value);
+        }
+        assert_eq!(inserted_map.keys(), bulk_map.keys());
+
+        let items = vec!["third", "first", "second"];
+        let bulk_set = UnorderedSet::new(items.clone());
+        let mut inserted_set = UnorderedSet::new(Vec::new());
+        for item in items {
+            inserted_set.add(item);
+        }
+        assert_eq!(inserted_set, bulk_set);
     }
 }

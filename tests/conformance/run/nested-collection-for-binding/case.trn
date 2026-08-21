@@ -1,0 +1,11 @@
+namespace nested-collection-for-binding
+from /core/collections import list, map, entry
+from /core/output import print
+
+function main
+  nested list of list of int = list; (list; 1, 2), (list; 3)
+  for row in nested
+    print; row.length, row[0]
+  groups map of string, list of int = map; (entry; key='a', value=(list; 4, 5))
+  for group in groups
+    print; group.value[1]

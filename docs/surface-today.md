@@ -346,6 +346,9 @@ value constructor, not a type: every collection type carries its `of` argument o
 Tuples are homogeneous and fixed-length after construction. Their runtime length is not part of
 `tuple of Item`, so differently sized tuples with the same item type share binding and function
 boundaries.
+Iteration takes a value snapshot of its source collection. Mutating or replacing the source binding
+inside a `for` does not change the items remaining in that traversal; copy-on-write separates the
+mutated value while the iterator retains the original shared storage.
 
 ## Type descriptor objects
 

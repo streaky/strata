@@ -2202,10 +2202,11 @@ function parse int|parse-error; source string
 
 A function may return `none` explicitly or implicitly at the end of its body.
 
-Multiple logical results should normally be returned as an object or tuple:
+Multiple logical results should normally be returned as an object. A homogeneous tuple is also
+appropriate when every result has the same item type:
 
 ```terrane
-return tuple; value, error
+return tuple; minimum, maximum
 ```
 
 rather than inventing a second assignment protocol.

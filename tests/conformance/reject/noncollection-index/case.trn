@@ -1,0 +1,4 @@
+namespace noncollection-index
+function main
+  value int = 1
+  item = value[0]

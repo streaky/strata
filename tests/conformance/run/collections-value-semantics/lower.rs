@@ -134,7 +134,7 @@ fn main() {
             terrane_collection_support::IterationStep::Item(item) => item,
             terrane_collection_support::IterationStep::End => break,
         };
-        println!("{}{}", terrane_scalar_support::scalar_text(&(pair.key)), terrane_scalar_support::scalar_text(&(pair.value)));
+        println!("{}{}", terrane_scalar_support::scalar_text(&((pair).key.clone())), terrane_scalar_support::scalar_text(&((pair).value.clone())));
     }
     println!("{}", terrane_scalar_support::scalar_text(&(((ordered).get_or_error(&(String::from("second")))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collections-value-semantics::main (case.trn:15:10)"))))));
     let mut unique: terrane_collection_support::Set<String> = terrane_collection_support::Set::<String>::new(vec![String::from("b"), String::from("a"), String::from("b")]);
@@ -219,7 +219,7 @@ fn main() {
             terrane_collection_support::IterationStep::Item(item) => item,
             terrane_collection_support::IterationStep::End => break,
         };
-        println!("{}", terrane_scalar_support::scalar_text(&(pair.key)));
+        println!("{}", terrane_scalar_support::scalar_text(&((pair).key.clone())));
     }
     let mut deterministic_set: terrane_collection_support::UnorderedSet<String> = terrane_collection_support::UnorderedSet::<String>::new(vec![String::from("x"), String::from("y")]);
     (deterministic_set).add(String::from("z"));
