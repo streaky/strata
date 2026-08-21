@@ -1,0 +1,4 @@
+namespace malformed-byte-escape
+function main
+  value bytes = b'\q'
+  print; value

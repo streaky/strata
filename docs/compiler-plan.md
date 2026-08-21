@@ -416,6 +416,16 @@ S2013 unresolved source name                 S2026 namespace-variable confinemen
 
 Retired codes remain unavailable so a stable code never acquires a second meaning.
 
+Terrane source warnings own the stable `W4xxx` range:
+
+```text
+W4001 initialized local binding is never read
+W4002 initial or later store cannot reach a read before definite replacement
+```
+
+Warnings are non-blocking diagnostics. Their codes have the same stability rule as error
+codes: retired warning codes remain unavailable and are never reassigned.
+
 ### Milestone 4 — Types, calls, and control-flow semantics
 
 Deliver:
@@ -984,18 +994,35 @@ Deliver:
 - shift-count policy per receiver class, and postfix `++`/`--` restricted to the default child.
 
 Exit criterion: every family and child has accepted, rejected, and runtime cases; `div-rem` divides once in reviewed generated Rust; and absent children fail at the source span rather than at runtime.
+Implemented evidence: all nine integer member families lower through one semantic and
+backend route. Fixed-width policy children produce typed optional or overflow-result
+objects; adaptive unavailable children fail during semantic analysis. Runtime conformance
+covers default, checked, wrap, saturate, overflowing, shift, `div-rem`, and postfix update
+paths, and the reviewed `div-rem` golden contains one combined support operation.
+
 
 ### Milestone 11 — Bytes, string views, and encoding objects
 
 Deliver:
 
-- `bytes` as a real sequence value with literals, byte length, indexing, slicing, and iteration, and with no text-display protocol;
+- `bytes` as a real sequence value with literals, byte length, built-in iteration, and no text-display protocol; indexing and slicing move with the range/index contract because the version-one specification currently defines no byte bounds or slice result contract;
 - explicit `bytes`, `scalars`, and `graphemes` string views without changing the default grapheme length;
 - the pinned Unicode version contract, sourced from the toolchain profile rather than the package lock;
 - canonical `utf8`, `utf16-le`, `utf16-be`, `utf32-le`, and `utf32-be` encoding objects, with encoding total and decoding raising a typed `decode-error` carrying encoding and byte offset;
 - prevention of arbitrary bytes reaching `print` through a blanket display implementation.
 
 Exit criterion: a round-trip encode/decode case runs, an invalid byte sequence produces the typed decode error at its offset, and view lengths differ correctly for a multi-scalar grapheme.
+Implemented evidence: bytes literals preserve arbitrary byte values, expose byte length,
+iterate as `uint8`, and deliberately lack scalar display. Explicit UTF-8 byte, scalar, and
+grapheme views produce distinct counts for one multi-scalar grapheme. Compiler-owned
+UTF-8, UTF-16 little-/big-endian, and UTF-32 little-/big-endian encoding objects all
+round-trip through generated crates, while invalid input exits through the typed
+`decode-error` value with its observed byte offset. Unicode behavior currently comes from
+the three support-crate dependencies selected by Cargo; no compiler toolchain profile pins
+one Unicode data version across them yet, so that milestone-11 deliverable remains open.
+Byte indexing and slicing remain sequenced with the range/index contract rather than
+acquiring an implementation-defined bounds policy here.
+
 
 ### Milestone 12 — String transformation and search families
 
@@ -1008,6 +1035,14 @@ Deliver:
 - `text-range` with checked byte, scalar, and grapheme views over an immutable input.
 
 Exit criterion: the specified empty-pattern, position-child, and Unicode-property behaviors each have cases, including a right-to-left sample proving the position children act on logical order.
+Implemented evidence: trim and logical position children, non-overlapping find/count and
+replace, normalization, full Unicode case folding, explicit case operations, and split
+lower through compiler-owned typed calls into the pinned text runtime. Runtime conformance
+covers a decomposed normalization sample, right-to-left start/end behavior, and every
+empty-pattern grapheme-boundary rule: `find.all` includes both ends, `split` emits the
+graphemes without synthetic empties, and `replace` inserts at each boundary. Text ranges
+retain immutable source text and expose byte, scalar, and grapheme boundary views.
+
 
 ### Milestone 13 — Iterator protocol
 

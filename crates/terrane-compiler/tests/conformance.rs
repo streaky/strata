@@ -22,13 +22,49 @@ fn every_manifest_drives_a_conformance_case() {
         match (phase, status) {
             ("run" | "check", "accept") => {
                 let expected = fs::read_to_string(case.join("lower.rs")).unwrap();
-                let compilation = if package_case {
+                let (compilation, sources) = if package_case {
                     let package = terrane_compiler::Package::load(&source_path).unwrap();
-                    terrane_compiler::compile_package(&package).unwrap()
+                    let sources = package
+                        .units
+                        .iter()
+                        .map(|unit| unit.source.clone())
+                        .collect::<Vec<_>>();
+                    (
+                        terrane_compiler::compile_package(&package).unwrap(),
+                        sources,
+                    )
                 } else {
                     let source = fs::read_to_string(&source_path).unwrap();
-                    terrane_compiler::compile(&source_path, source).unwrap()
+                    let compilation = terrane_compiler::compile(&source_path, source).unwrap();
+                    let sources = vec![compilation.source.clone()];
+                    (compilation, sources)
                 };
+                if let Some(warnings_file) = field(&manifest, "warnings") {
+                    let expected_warnings = fs::read_to_string(case.join(warnings_file)).unwrap();
+                    let actual_warnings = compilation
+                        .warnings
+                        .iter()
+                        .map(|warning| {
+                            let source = warning
+                                .primary
+                                .and_then(|span| {
+                                    sources.iter().find(|source| source.id() == span.file)
+                                })
+                                .unwrap_or(&compilation.source);
+                            warning.render(source).replacen(
+                                &source.path().display().to_string(),
+                                &source.path().file_name().unwrap().to_string_lossy(),
+                                1,
+                            )
+                        })
+                        .collect::<String>();
+                    assert_eq!(
+                        actual_warnings,
+                        expected_warnings,
+                        "{} warnings",
+                        case.display()
+                    );
+                }
                 let normalized = compilation
                     .rust
                     .replace(terrane_compiler::VERSION, "<version>");
@@ -148,7 +184,7 @@ fn write_support_crates(directory: &Path) {
     .unwrap();
     fs::write(
         string.join("Cargo.toml"),
-        "[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-segmentation = \"1\"\n",
+        "[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-casefold = \"0.2\"\nunicode-normalization = \"0.1\"\nunicode-segmentation = \"1\"\n",
     )
     .unwrap();
     fs::write(

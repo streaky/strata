@@ -73,6 +73,7 @@ pub struct SemanticPackage {
     pub prelude_bindings: BTreeMap<String, Symbol>,
     pub descriptor_constructs: BTreeMap<String, Symbol>,
     pub units: Vec<SemanticUnit>,
+    binding_events: BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
     pub bootstrap_version: &'static str,
 }
 
@@ -80,6 +81,85 @@ pub struct SemanticPackage {
 pub enum ValueType {
     Scalar(ScalarType),
     ScalarOrNone(ScalarType),
+    OverflowResult(ScalarType),
+    DivRemResult(ScalarType),
+    StringView(TextUnit),
+    StringList,
+    TextRange,
+    TextRangeView(TextUnit),
+    TextRangeOrNone,
+    TextRangeList,
+    Encoding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextUnit {
+    Bytes,
+    Scalars,
+    Graphemes,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StringFamily {
+    Trim,
+    Contains,
+    Find,
+    Upper,
+    Lower,
+    Normalise,
+    CaseFold,
+    Split,
+    Replace,
+    Encode,
+    Decode,
+}
+
+impl StringFamily {
+    pub(crate) const fn source_name(self) -> &'static str {
+        match self {
+            Self::Trim => "trim",
+            Self::Contains => "contains",
+            Self::Find => "find",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+            Self::Normalise => "normalise",
+            Self::CaseFold => "case-fold",
+            Self::Split => "split",
+            Self::Replace => "replace",
+            Self::Encode => "encode",
+            Self::Decode => "decode",
+        }
+    }
+
+    const fn has_children(self) -> bool {
+        matches!(
+            self,
+            Self::Trim | Self::Contains | Self::Find | Self::Normalise | Self::Upper | Self::Lower
+        )
+    }
+
+    fn from_source_name(name: &str) -> Option<Self> {
+        match name {
+            "trim" => Some(Self::Trim),
+            "contains" => Some(Self::Contains),
+            "find" => Some(Self::Find),
+            "upper" => Some(Self::Upper),
+            "lower" => Some(Self::Lower),
+            "normalise" => Some(Self::Normalise),
+            "case-fold" => Some(Self::CaseFold),
+            "split" => Some(Self::Split),
+            "replace" => Some(Self::Replace),
+            "encode" => Some(Self::Encode),
+            "decode" => Some(Self::Decode),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StringCallSelection {
+    pub receiver: Span,
+    pub family: StringFamily,
+    pub child: String,
 }
 
 impl std::fmt::Display for ValueType {
@@ -87,6 +167,63 @@ impl std::fmt::Display for ValueType {
         match self {
             Self::Scalar(ty) => ty.fmt(formatter),
             Self::ScalarOrNone(ty) => write!(formatter, "{ty}|none"),
+            Self::OverflowResult(ty) => write!(formatter, "overflow-result of {ty}"),
+            Self::DivRemResult(ty) => write!(formatter, "div-rem-result of {ty}"),
+            Self::StringView(TextUnit::Bytes) => formatter.write_str("string.bytes"),
+            Self::StringView(TextUnit::Scalars) => formatter.write_str("string.scalars"),
+            Self::StringView(TextUnit::Graphemes) => formatter.write_str("string.graphemes"),
+            Self::StringList => formatter.write_str("list of string"),
+            Self::TextRange => formatter.write_str("text-range"),
+            Self::TextRangeView(TextUnit::Bytes) => formatter.write_str("text-range.bytes"),
+            Self::TextRangeView(TextUnit::Scalars) => formatter.write_str("text-range.scalars"),
+            Self::TextRangeView(TextUnit::Graphemes) => formatter.write_str("text-range.graphemes"),
+            Self::TextRangeOrNone => formatter.write_str("text-range|none"),
+            Self::TextRangeList => formatter.write_str("list of text-range"),
+            Self::Encoding => formatter.write_str("encoding"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArithmeticFamily {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    DivRem,
+    Negate,
+    ShiftLeft,
+    ShiftRight,
+}
+
+impl ArithmeticFamily {
+    pub(crate) const fn source_name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Subtract => "subtract",
+            Self::Multiply => "multiply",
+            Self::Divide => "divide",
+            Self::Remainder => "remainder",
+            Self::DivRem => "div-rem",
+            Self::Negate => "negate",
+            Self::ShiftLeft => "shift-left",
+            Self::ShiftRight => "shift-right",
+        }
+    }
+
+    fn from_source_name(name: &str) -> Option<Self> {
+        match name {
+            "add" => Some(Self::Add),
+            "subtract" => Some(Self::Subtract),
+            "multiply" => Some(Self::Multiply),
+            "divide" => Some(Self::Divide),
+            "remainder" => Some(Self::Remainder),
+            "div-rem" => Some(Self::DivRem),
+            "negate" => Some(Self::Negate),
+            "shift-left" => Some(Self::ShiftLeft),
+            "shift-right" => Some(Self::ShiftRight),
+            _ => None,
         }
     }
 }
@@ -96,6 +233,7 @@ pub enum MemberFamily {
     Coerce,
     Parse,
     Radix,
+    Arithmetic(ArithmeticFamily),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,7 +302,7 @@ pub struct FunctionContract {
     pub name: String,
     pub span: Span,
     pub parameters: Vec<ParameterContract>,
-    pub return_type: Option<ScalarType>,
+    pub return_type: Option<ValueType>,
     pub throws: bool,
 }
 
@@ -172,7 +310,7 @@ pub struct FunctionContract {
 pub struct ParameterContract {
     pub name: String,
     pub span: Span,
-    pub value_type: Option<ScalarType>,
+    pub value_type: Option<ValueType>,
     pub optional: bool,
     pub mutable: bool,
 }
@@ -209,11 +347,13 @@ pub struct SemanticUnit {
     pub source: SourceFile,
     pub tree: SyntaxTree,
     pub namespace: String,
+    prelude: bool,
     pub scopes: Vec<LexicalScope>,
     pub typed_bindings: Vec<TypedBinding>,
     /// Function contracts declared by every source unit in this unit's namespace.
     pub functions: Vec<FunctionContract>,
     function_aliases: BTreeMap<String, FunctionContract>,
+    enclosing_function_spans: BTreeMap<usize, Option<Span>>,
     descriptor_aliases: BTreeMap<String, Vec<DescriptorAlias>>,
     pub unreachable_spans: Vec<Span>,
     pub evaluation_steps: Vec<EvaluationStep>,
@@ -281,6 +421,26 @@ struct Import {
     span: Span,
 }
 
+fn index_enclosing_function_spans(root: &SyntaxNode) -> BTreeMap<usize, Option<Span>> {
+    fn visit(
+        node: &SyntaxNode,
+        enclosing_function: Option<Span>,
+        spans: &mut BTreeMap<usize, Option<Span>>,
+    ) {
+        let enclosing_function = (node.kind == SyntaxKind::FunctionDeclaration)
+            .then_some(node.span)
+            .or(enclosing_function);
+        spans.insert(node.span.start, enclosing_function);
+        for child in &node.children {
+            visit(child, enclosing_function, spans);
+        }
+    }
+
+    let mut spans = BTreeMap::new();
+    visit(root, None, &mut spans);
+    spans
+}
+
 fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> {
     let mut units = Vec::with_capacity(package.units.len());
     for unit in &package.units {
@@ -330,15 +490,18 @@ fn parse_units(package: &Package) -> Result<Vec<SemanticUnit>, SemanticFailure> 
                 diagnostics: vec![diagnostic],
             });
         }
+        let enclosing_function_spans = index_enclosing_function_spans(&parsed.tree.root);
         units.push(SemanticUnit {
             source: source.clone(),
             tree: parsed.tree,
             namespace,
+            prelude: package.prelude,
             scopes: Vec::new(),
             typed_bindings: Vec::new(),
             functions: Vec::new(),
             function_aliases: BTreeMap::new(),
             descriptor_aliases: BTreeMap::new(),
+            enclosing_function_spans,
             unreachable_spans: Vec::new(),
             evaluation_steps: Vec::new(),
         });
@@ -407,6 +570,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
         prelude_bindings,
         descriptor_constructs,
         units,
+        binding_events: BTreeMap::new(),
         bootstrap_version: BOOTSTRAP_VERSION,
     };
     validate_initializer_dependencies(&semantic)?;
@@ -419,6 +583,7 @@ pub fn analyze(package: &Package) -> Result<SemanticPackage, SemanticFailure> {
     record_binding_mutability(&mut semantic);
     validate_calls(&semantic)?;
     validate_definite_assignment(&semantic)?;
+    record_binding_events(&mut semantic);
     let unreachable_units = validate_control_flow(&semantic)?;
     for (unit, unreachable_spans) in semantic.units.iter_mut().zip(unreachable_units) {
         unit.unreachable_spans = unreachable_spans;
@@ -1551,6 +1716,10 @@ fn validate_string_member_expression(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "call validation remains one traversal so every call form shares lexical scope and contracts"
+)]
 fn validate_call_nodes<'a>(
     package: &SemanticPackage,
     unit: &'a SemanticUnit,
@@ -1579,6 +1748,52 @@ fn validate_call_nodes<'a>(
         for argument in &arguments.children {
             let value = argument.children.last().unwrap_or(argument);
             infer_value_type(unit, value, scoped_bindings)?;
+        }
+    }
+    if node.kind == SyntaxKind::CallExpression {
+        infer_value_type(unit, node, scoped_bindings)?;
+    }
+    if node.kind == SyntaxKind::CallExpression
+        && let [callee, arguments] = node.children.as_slice()
+        && callee.kind == SyntaxKind::Name
+        && package
+            .resolve_name_at(unit, callee.span.start, node_text(&unit.source, callee))
+            .is_some_and(|symbol| symbol.identity == "/core/output::print")
+    {
+        for argument in &arguments.children {
+            let value = argument.children.last().unwrap_or(argument);
+            let value_type = infer_value_type(unit, value, scoped_bindings)?;
+            if !matches!(
+                value_type,
+                Some(ValueType::Scalar(
+                    ScalarType::Bool
+                        | ScalarType::Int
+                        | ScalarType::Int8
+                        | ScalarType::Int16
+                        | ScalarType::Int32
+                        | ScalarType::Int64
+                        | ScalarType::Int128
+                        | ScalarType::Uint8
+                        | ScalarType::Uint16
+                        | ScalarType::Uint32
+                        | ScalarType::Uint64
+                        | ScalarType::Uint128
+                        | ScalarType::Float32
+                        | ScalarType::Float64
+                        | ScalarType::String
+                        | ScalarType::None
+                ))
+            ) {
+                return Err(failure(
+                    &unit.source,
+                    "T0035",
+                    format!(
+                        "`print` requires a text-displayable scalar value, found {}",
+                        value_type.map_or_else(|| "unknown".to_owned(), |ty| ty.to_string())
+                    ),
+                    value.span,
+                ));
+            }
         }
     }
     if node.kind == SyntaxKind::CallExpression
@@ -1749,7 +1964,6 @@ fn resolved_call_type(
     contracts
         .get(&(declaration.file, declaration.start, declaration.end))?
         .return_type
-        .map(ValueType::Scalar)
 }
 
 fn validate_call_arguments(
@@ -1815,7 +2029,7 @@ fn validate_call_arguments(
         let value = argument.children.last().unwrap_or(argument);
         let actual = infer_value_type(unit, value, bindings)?;
         if let (Some(expected), Some(actual)) = (parameter.value_type, actual) {
-            validate_numeric_destination(
+            validate_value_destination(
                 &unit.source,
                 &parameter.name,
                 expected,
@@ -1867,7 +2081,7 @@ fn call_site_bindings(
             parameter.value_type.map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
-                value_type: ValueType::Scalar(value_type),
+                value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
                 mutable: false,
@@ -1967,6 +2181,7 @@ fn validate_descriptor_value_node(
     }
     if !descriptor_context
         && node.kind == SyntaxKind::Name
+        && node_text(&unit.source, node) != "none"
         && (descriptor_expression_type(package, unit, node).is_some()
             || descriptor_expression_category(package, unit, node).is_some())
     {
@@ -1986,6 +2201,7 @@ fn validate_descriptor_value_node(
             || node.kind == SyntaxKind::TypeExpression
             || node.kind == SyntaxKind::ImportDeclaration
             || (node.kind == SyntaxKind::TypeMembershipExpression && index == 1)
+            || (node.kind == SyntaxKind::MemberExpression && index == 1)
             || (matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) && index == 0)
             || (node.kind == SyntaxKind::BinaryExpression
                 && node.children.len() == 2
@@ -1993,6 +2209,15 @@ fn validate_descriptor_value_node(
                     ..node.children[1].span.start - node.span.start]
                     .trim()
                     == "is")
+            || (node.kind == SyntaxKind::BinaryExpression
+                && node.children.len() == 2
+                && matches!(
+                    node_text(&unit.source, node)[node.children[0].span.end - node.span.start
+                        ..node.children[1].span.start - node.span.start]
+                        .trim(),
+                    "==" | "!="
+                )
+                && node_text(&unit.source, child).trim() == "none")
             || (node.kind == SyntaxKind::CallExpression
                 && index == 1
                 && node.children.first().is_some_and(|callee| {
@@ -2071,7 +2296,12 @@ fn descriptor_alias(
     aliases: &BTreeMap<String, Vec<DescriptorAlias>>,
     scope: Option<Span>,
 ) -> Option<(String, DescriptorAlias)> {
-    if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment) {
+    if !matches!(node.kind, SyntaxKind::Binding | SyntaxKind::Assignment)
+        || node
+            .children
+            .iter()
+            .any(|child| child.kind == SyntaxKind::TypeExpression)
+    {
         return None;
     }
     let name = node
@@ -2080,6 +2310,9 @@ fn descriptor_alias(
         .find(|child| child.kind == SyntaxKind::Name)?;
     let initializer = node.children.last()?;
     let descriptor_name = node_text(&unit.source, initializer).trim();
+    if descriptor_name == "none" {
+        return None;
+    }
     let value_type = match initializer.kind {
         SyntaxKind::Name => {
             visible_descriptor_aliases(aliases, unit.source.id(), initializer.span.start)
@@ -2115,7 +2348,7 @@ fn collect_typed_bindings(
             parameter.value_type.map(|value_type| TypedBinding {
                 name: parameter.name.clone(),
                 span: parameter.span,
-                value_type: ValueType::Scalar(value_type),
+                value_type,
                 destination_arms: Vec::new(),
                 storage_type: None,
                 mutable: false,
@@ -2132,10 +2365,17 @@ fn collect_typed_bindings(
         && let Some(name) = target.children.first()
     {
         collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
+        let item_type = if infer_value_type(unit, collection, visible_bindings)?
+            == Some(ValueType::Scalar(ScalarType::Bytes))
+        {
+            ValueType::Scalar(ScalarType::Uint8)
+        } else {
+            ValueType::Scalar(ScalarType::String)
+        };
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
-            value_type: ValueType::Scalar(ScalarType::String),
+            value_type: item_type,
             destination_arms: Vec::new(),
             storage_type: None,
             mutable: false,
@@ -2170,7 +2410,7 @@ fn analyze_function_contract(
         .children
         .iter()
         .find(|child| child.kind == SyntaxKind::TypeExpression)
-        .map(|type_node| resolve_scalar_type(&unit.source, type_node, aliases))
+        .map(|type_node| declared_value_type(unit, type_node, aliases))
         .transpose()?;
     let mut parameters = Vec::new();
     let mut optional_seen = false;
@@ -2192,9 +2432,9 @@ fn analyze_function_contract(
                 .iter()
                 .find(|child| child.kind == SyntaxKind::TypeExpression);
             let value_type = type_node
-                .map(|node| resolve_scalar_type(&unit.source, node, aliases))
+                .map(|type_node| declared_value_type(unit, type_node, aliases))
                 .transpose()?;
-            let default = parameter.children.iter().rev().find(|child| {
+            let default = parameter.children.iter().find(|child| {
                 child.span != parameter_name.span && child.kind != SyntaxKind::TypeExpression
             });
             let optional = default.is_some();
@@ -2209,11 +2449,20 @@ fn analyze_function_contract(
                 ));
             }
             if let (Some(expected), Some(default)) = (value_type, default) {
-                validate_numeric_destination(
+                let actual =
+                    infer_value_type(unit, default, &unit.typed_bindings)?.ok_or_else(|| {
+                        failure(
+                            &unit.source,
+                            "T0006",
+                            "parameter default has no value",
+                            default.span,
+                        )
+                    })?;
+                validate_value_destination(
                     &unit.source,
                     node_text(&unit.source, parameter_name),
                     expected,
-                    infer_value_type(unit, default, &[])?.unwrap_or(ValueType::Scalar(expected)),
+                    actual,
                     default,
                     "T0006",
                 )?;
@@ -2412,6 +2661,10 @@ fn resolve_scalar_type(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "binding analysis keeps destination selection and initialization validation together"
+)]
 fn analyze_binding_node(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2471,31 +2724,51 @@ fn analyze_binding_node(
         .transpose()?
         .flatten();
     let value_type = if let Some(type_node) = declared {
-        let type_name = node_text(&unit.source, type_node).trim();
-        let ty = if let Some(ty) = unit.descriptor_alias_at(type_name, type_node.span.start) {
-            ty
-        } else if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
-            select_union_destination(unit, type_node, initializer, inferred)?
+        let aliases = visible_descriptor_aliases(
+            &unit.descriptor_aliases,
+            unit.source.id(),
+            type_node.span.start,
+        );
+        let declared_type = declared_value_type(unit, type_node, &aliases);
+        let value_type = if matches!(declared_type, Ok(ValueType::ScalarOrNone(_))) {
+            declared_type?
+        } else if let (Some(inferred), Some(initializer), Ok(_)) = (
+            inferred,
+            initializer,
+            union_destination_candidates(unit, type_node),
+        ) {
+            ValueType::Scalar(select_union_destination(
+                unit,
+                type_node,
+                initializer,
+                inferred,
+            )?)
         } else {
-            return Err(failure(
-                &unit.source,
-                "T0001",
-                format!("`{type_name}` does not resolve to a scalar type descriptor"),
-                type_node.span,
-            ));
+            declared_type?
         };
         if let (Some(inferred), Some(initializer)) = (inferred, initializer) {
-            validate_numeric_destination(&unit.source, &name, ty, inferred, initializer, "T0002")?;
+            validate_value_destination(
+                &unit.source,
+                &name,
+                value_type,
+                inferred,
+                initializer,
+                "T0002",
+            )?;
         }
-        ValueType::Scalar(ty)
+        value_type
     } else if let Some(inferred) = inferred {
         inferred
     } else {
         return Ok(());
     };
-    let destination_arms = declared
-        .and_then(|type_node| union_destination_candidates(unit, type_node).ok())
-        .unwrap_or_default();
+    let destination_arms = if matches!(value_type, ValueType::ScalarOrNone(_)) {
+        Vec::new()
+    } else {
+        declared
+            .and_then(|type_node| union_destination_candidates(unit, type_node).ok())
+            .unwrap_or_default()
+    };
     let storage_type = (value_type == ValueType::Scalar(ScalarType::Int))
         .then(|| initializer.and_then(|value| small_int_storage(unit, value, inferred)))
         .flatten();
@@ -2509,6 +2782,51 @@ fn analyze_binding_node(
         mutable: false,
     });
     Ok(())
+}
+
+fn declared_value_type(
+    unit: &SemanticUnit,
+    type_node: &SyntaxNode,
+    aliases: &BTreeMap<String, ScalarType>,
+) -> Result<ValueType, SemanticFailure> {
+    if let Some(union) = type_node
+        .children
+        .first()
+        .filter(|child| child.kind == SyntaxKind::UnionType)
+    {
+        let mut non_none = union
+            .children
+            .iter()
+            .filter(|arm| node_text(&unit.source, arm).trim() != "none");
+        if union.children.len() == 2
+            && let Some(arm) = non_none.next()
+            && non_none.next().is_none()
+            && let Some(scalar) = aliases
+                .get(node_text(&unit.source, arm).trim())
+                .copied()
+                .or_else(|| ScalarType::from_source_name(node_text(&unit.source, arm).trim()))
+        {
+            return Ok(ValueType::ScalarOrNone(scalar));
+        }
+    }
+    let type_name = node_text(&unit.source, type_node).trim();
+    for (constructor, construct) in [
+        (
+            "overflow-result of ",
+            ValueType::OverflowResult as fn(ScalarType) -> ValueType,
+        ),
+        (
+            "div-rem-result of ",
+            ValueType::DivRemResult as fn(ScalarType) -> ValueType,
+        ),
+    ] {
+        if let Some(argument) = type_name.strip_prefix(constructor)
+            && let Some(scalar) = aliases.get(argument).copied()
+        {
+            return Ok(construct(scalar));
+        }
+    }
+    resolve_scalar_type(&unit.source, type_node, aliases).map(ValueType::Scalar)
 }
 
 fn union_destination_candidates(
@@ -2646,6 +2964,34 @@ fn validate_numeric_destination(
     ))
 }
 
+fn validate_value_destination(
+    source: &SourceFile,
+    name: &str,
+    expected: ValueType,
+    actual: ValueType,
+    value: &SyntaxNode,
+    mismatch_code: &'static str,
+) -> Result<(), SemanticFailure> {
+    if let ValueType::Scalar(expected) = expected {
+        return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
+    }
+    if let ValueType::ScalarOrNone(expected) = expected {
+        if actual == ValueType::Scalar(ScalarType::None) {
+            return Ok(());
+        }
+        return validate_numeric_destination(source, name, expected, actual, value, mismatch_code);
+    }
+    if expected == actual {
+        return Ok(());
+    }
+    Err(failure(
+        source,
+        mismatch_code,
+        format!("`{name}` requires `{expected}`, found `{actual}`"),
+        value.span,
+    ))
+}
+
 fn destination_mismatch_message(
     code: &str,
     name: &str,
@@ -2665,6 +3011,173 @@ const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
 
+fn optional_inner(value_type: ValueType) -> Option<ValueType> {
+    match value_type {
+        ValueType::ScalarOrNone(scalar) => Some(ValueType::Scalar(scalar)),
+        ValueType::TextRangeOrNone => Some(ValueType::TextRange),
+        _ => None,
+    }
+}
+
+fn ungrouped_expression(mut node: &SyntaxNode) -> &SyntaxNode {
+    while node.kind == SyntaxKind::GroupExpression {
+        let Some(child) = node.children.first() else {
+            break;
+        };
+        node = child;
+    }
+    node
+}
+
+fn membership_names<'a>(
+    source: &'a SourceFile,
+    node: &'a SyntaxNode,
+) -> Option<(&'a str, &'a str)> {
+    let [left, right] = node.children.as_slice() else {
+        return None;
+    };
+    let left = ungrouped_expression(left);
+    let right = ungrouped_expression(right);
+    Some((node_text(source, left), node_text(source, right)))
+}
+
+fn condition_proves_present(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
+    if node.kind == SyntaxKind::GroupExpression {
+        return node
+            .children
+            .first()
+            .is_some_and(|child| condition_proves_present(source, child, name));
+    }
+    if node.kind == SyntaxKind::BinaryExpression {
+        let [left, right] = node.children.as_slice() else {
+            return false;
+        };
+        let operator = source.text()[left.span.end..right.span.start].trim();
+        let left = ungrouped_expression(left);
+        let right = ungrouped_expression(right);
+        let names = (node_text(source, left), node_text(source, right));
+        return operator == "!="
+            && matches!(names, (left, "none") | ("none", left) if left == name);
+    }
+    if node.kind == SyntaxKind::UnaryExpression
+        && let Some(child) = node.children.first()
+        && source.text()[node.span.start..child.span.start].trim() == "not"
+    {
+        let child = child.children.first().unwrap_or(child);
+        return child.kind == SyntaxKind::TypeMembershipExpression
+            && membership_names(source, child).is_some_and(|names| names == (name, "none"));
+    }
+    false
+}
+
+fn is_presence_test_occurrence(
+    source: &SourceFile,
+    current: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if current.kind == SyntaxKind::BinaryExpression
+        && condition_proves_present(source, current, name)
+    {
+        return true;
+    }
+    current
+        .children
+        .iter()
+        .filter(|child| child.span.start <= position && position <= child.span.end)
+        .any(|child| is_presence_test_occurrence(source, child, position, name))
+}
+
+fn assigns_name_before(
+    source: &SourceFile,
+    node: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if node.span.start >= position {
+        return false;
+    }
+    if node.kind == SyntaxKind::Assignment
+        && node
+            .children
+            .first()
+            .is_some_and(|target| node_text(source, target) == name)
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| assigns_name_before(source, child, position, name))
+}
+
+fn enclosed_by_present_guard(
+    source: &SourceFile,
+    current: &SyntaxNode,
+    position: usize,
+    name: &str,
+) -> bool {
+    if current.kind == SyntaxKind::IfStatement
+        && let Some(condition) = current.children.first()
+        && let Some(block) = current.children.iter().find(|child| {
+            child.kind == SyntaxKind::Block
+                && child.span.start <= position
+                && position <= child.span.end
+        })
+    {
+        if condition_proves_present(source, condition, name)
+            && !assigns_name_before(source, block, position, name)
+        {
+            return true;
+        }
+        return enclosed_by_present_guard(source, block, position, name);
+    }
+    current
+        .children
+        .iter()
+        .filter(|child| child.span.start <= position && position <= child.span.end)
+        .any(|child| enclosed_by_present_guard(source, child, position, name))
+}
+
+pub(crate) fn narrowed_optional_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    value_type: ValueType,
+) -> Option<ValueType> {
+    let name = node_text(&unit.source, node);
+    if is_presence_test_occurrence(&unit.source, &unit.tree.root, node.span.start, name) {
+        return None;
+    }
+    let inner = optional_inner(value_type)?;
+    enclosed_by_present_guard(&unit.source, &unit.tree.root, node.span.start, name).then_some(inner)
+}
+
+pub(crate) fn narrowed_value_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Option<ValueType> {
+    let name = node_text(&unit.source, node);
+    let function_span = unit
+        .enclosing_function_spans
+        .get(&node.span.start)
+        .copied()
+        .flatten();
+    let binding = bindings.iter().rev().find(|binding| {
+        binding.name == name
+            && binding.span.start <= node.span.start
+            && unit
+                .enclosing_function_spans
+                .get(&binding.span.start)
+                .copied()
+                .flatten()
+                == function_span
+    })?;
+    narrowed_optional_type(unit, node, binding.value_type)
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "value inference centralizes the precedence among syntax forms and typed member families"
+)]
 fn infer_value_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2690,11 +3203,44 @@ fn infer_value_type(
     }
     if node.kind == SyntaxKind::Name {
         let name = node_text(&unit.source, node);
-        return Ok(bindings
+        if name == "none" {
+            return Ok(Some(ValueType::Scalar(ScalarType::None)));
+        }
+        if let Some(binding) = bindings
             .iter()
             .rev()
             .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-            .map(|binding| binding.value_type));
+        {
+            return Ok(Some(
+                narrowed_value_type(unit, node, bindings).unwrap_or(binding.value_type),
+            ));
+        }
+        let resolved_encoding = lexical_scope_chain(unit, node.span.start)
+            .find_map(|scope| {
+                scope.symbols.get(name)?.iter().rev().find(|symbol| {
+                    symbol
+                        .declaration_span
+                        .is_none_or(|span| span.end <= node.span.start)
+                })
+            })
+            .map(|symbol| symbol.identity.as_str())
+            .or_else(|| {
+                unit.prelude.then_some(name).and_then(|name| {
+                    matches!(
+                        name,
+                        "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
+                    )
+                    .then_some(name)
+                })
+            })
+            .is_some_and(|identity| {
+                identity.starts_with("/core/encodings::")
+                    || matches!(
+                        identity,
+                        "utf8" | "utf16-le" | "utf16-be" | "utf32-le" | "utf32-be"
+                    )
+            });
+        return Ok(resolved_encoding.then_some(ValueType::Encoding));
     }
     if member_family_receiver(unit, node) {
         return Err(failure(
@@ -2708,6 +3254,12 @@ fn infer_value_type(
         return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
+        if let Some(value_type) = infer_string_call_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
+        if let Some(value_type) = infer_arithmetic_family_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
         if let Some(value_type) = infer_parse_or_radix_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
@@ -2739,19 +3291,36 @@ fn infer_value_type(
             && callee.kind == SyntaxKind::Name
         {
             let name = node_text(&unit.source, callee);
-            if let Some(return_type) = unit
-                .functions
+            if let Some(contract) = unit.functions.iter().find(|contract| contract.name == name) {
+                return Ok(contract.return_type);
+            }
+            if bindings
                 .iter()
-                .find(|contract| contract.name == name)
-                .and_then(|contract| contract.return_type)
+                .rev()
+                .any(|binding| binding.name == name && binding.span.start <= callee.span.start)
             {
-                return Ok(Some(ValueType::Scalar(return_type)));
+                return Err(failure(
+                    &unit.source,
+                    "T0039",
+                    format!("`{name}` is a value and cannot be called"),
+                    callee.span,
+                ));
             }
             return Ok(None);
         }
         return Ok(None);
     }
     Ok(None)
+}
+
+fn text_range_member_type(member_name: &str) -> Option<ValueType> {
+    match member_name {
+        "text" => Some(ValueType::Scalar(ScalarType::String)),
+        "bytes" => Some(ValueType::TextRangeView(TextUnit::Bytes)),
+        "scalars" => Some(ValueType::TextRangeView(TextUnit::Scalars)),
+        "graphemes" => Some(ValueType::TextRangeView(TextUnit::Graphemes)),
+        _ => None,
+    }
 }
 
 fn infer_member_value_type(
@@ -2772,6 +3341,55 @@ fn infer_member_value_type(
     }
     let member_name = node_text(&unit.source, member);
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+        let view = match member_name {
+            "bytes" => Some(TextUnit::Bytes),
+            "scalars" => Some(TextUnit::Scalars),
+            "graphemes" => Some(TextUnit::Graphemes),
+            _ => None,
+        };
+        if let Some(view) = view {
+            return Ok(Some(ValueType::StringView(view)));
+        }
+    }
+    if receiver_type == Some(ValueType::TextRange) {
+        return Ok(text_range_member_type(member_name));
+    }
+    if matches!(receiver_type, Some(ValueType::TextRangeView(_)))
+        && matches!(member_name, "start" | "end")
+    {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    if matches!(
+        receiver_type,
+        Some(
+            ValueType::StringView(_)
+                | ValueType::StringList
+                | ValueType::TextRangeList
+                | ValueType::Scalar(ScalarType::Bytes)
+        )
+    ) && member_name == "length"
+    {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    match (receiver_type, member_name) {
+        (Some(ValueType::OverflowResult(ty)), "value")
+        | (Some(ValueType::DivRemResult(ty)), "quotient" | "remainder") => {
+            return Ok(Some(ValueType::Scalar(ty)));
+        }
+        (Some(ValueType::OverflowResult(_)), "overflowed") => {
+            return Ok(Some(ValueType::Scalar(ScalarType::Bool)));
+        }
+        (Some(ValueType::OverflowResult(_) | ValueType::DivRemResult(_)), _) => {
+            return Err(failure(
+                &unit.source,
+                "T0031",
+                format!("result object has no member `.{member_name}`"),
+                member.span,
+            ));
+        }
+        _ => {}
+    }
     if matches!(member_name, "round" | "floor" | "ceiling" | "truncate") {
         if matches!(
             receiver_type,
@@ -2790,14 +3408,17 @@ fn infer_member_value_type(
         return Ok(None);
     }
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
-    if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
+    if matches!(
+        receiver_type,
+        Some(ValueType::Scalar(ScalarType::String | ScalarType::Bytes))
+    ) {
         return Ok(Some(ValueType::Scalar(ScalarType::Int)));
     }
     Err(failure(
         &unit.source,
         "T0013",
         format!(
-            "`.length` requires `string`, found `{}`",
+            "`.length` requires `string` or `bytes`, found `{}`",
             receiver_type
                 .map_or_else(|| "unknown".to_owned(), |value_type| value_type.to_string(),)
         ),
@@ -2805,6 +3426,124 @@ fn infer_member_value_type(
     ))
 }
 
+pub(crate) fn string_call_selection(
+    source: &SourceFile,
+    node: &SyntaxNode,
+) -> Option<StringCallSelection> {
+    let callee = node.children.first()?;
+    let [receiver, member] = callee.children.as_slice() else {
+        return None;
+    };
+    if callee.kind != SyntaxKind::MemberExpression {
+        return None;
+    }
+    let (receiver_span, family, child) = if receiver.kind == SyntaxKind::MemberExpression
+        && let [nested_receiver, nested_family] = receiver.children.as_slice()
+        && let Some(candidate) = StringFamily::from_source_name(node_text(source, nested_family))
+        && candidate.has_children()
+    {
+        (
+            nested_receiver.span,
+            candidate,
+            node_text(source, member).to_owned(),
+        )
+    } else {
+        (
+            receiver.span,
+            StringFamily::from_source_name(node_text(source, member))?,
+            "default".to_owned(),
+        )
+    };
+    Some(StringCallSelection {
+        receiver: receiver_span,
+        family,
+        child,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn infer_string_call_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let Some(selection) = string_call_selection(&unit.source, node) else {
+        return Ok(None);
+    };
+    let subject = find_node_by_span(&unit.tree.root, selection.receiver)
+        .expect("selected string receiver belongs to this syntax tree");
+    let family = selection.family.source_name();
+    let child = selection.child.as_str();
+    let subject_type = infer_value_type(unit, subject, bindings)?;
+    let receiver_valid = match family {
+        "decode" => subject_type == Some(ValueType::Scalar(ScalarType::Bytes)),
+        _ => subject_type == Some(ValueType::Scalar(ScalarType::String)),
+    };
+    if !receiver_valid {
+        return Err(failure(
+            &unit.source,
+            "T0032",
+            format!("`.{family}` is not available on this receiver"),
+            subject.span,
+        ));
+    }
+    let arguments = node
+        .children
+        .get(1)
+        .map_or(&[][..], |arguments| arguments.children.as_slice());
+    let (minimum, maximum) = match (family, child) {
+        ("trim", "default") | ("upper" | "lower" | "normalise" | "case-fold", _) => (0, 0),
+        ("trim", "start" | "end") => (0, 1),
+        ("replace", _) => (2, 2),
+        _ => (1, 1),
+    };
+    if arguments.len() < minimum || arguments.len() > maximum {
+        return Err(failure(
+            &unit.source,
+            "T0023",
+            format!("`.{family}` received the wrong number of arguments"),
+            node.span,
+        ));
+    }
+    for argument in arguments {
+        let argument = argument.children.last().unwrap_or(argument);
+        let expected = if matches!(family, "encode" | "decode") {
+            ValueType::Encoding
+        } else {
+            ValueType::Scalar(ScalarType::String)
+        };
+        if infer_value_type(unit, argument, bindings)? != Some(expected) {
+            return Err(failure(
+                &unit.source,
+                "T0033",
+                format!("`.{family}` received an incompatible argument"),
+                argument.span,
+            ));
+        }
+    }
+    let result = match (family, child) {
+        ("contains", "default" | "start" | "end") => ValueType::Scalar(ScalarType::Bool),
+        ("find", "default") => ValueType::TextRangeOrNone,
+        ("find", "all") => ValueType::TextRangeList,
+        ("find", "count") => ValueType::Scalar(ScalarType::Int),
+        ("split", "default") => ValueType::StringList,
+        ("encode", "default") => ValueType::Scalar(ScalarType::Bytes),
+        ("decode" | "case-fold" | "replace", "default")
+        | ("trim", "default" | "start" | "end")
+        | ("upper", "default" | "first" | "words")
+        | ("lower", "default" | "first")
+        | ("normalise", "nfc" | "nfd" | "nfkc" | "nfkd") => ValueType::Scalar(ScalarType::String),
+        _ => {
+            return Err(failure(
+                &unit.source,
+                "T0034",
+                format!("`.{family}.{child}` is not available"),
+                node.span,
+            ));
+        }
+    };
+    Ok(Some(result))
+}
 fn infer_unary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -2860,7 +3599,10 @@ fn infer_parse_or_radix_type(
     let Some(method) = bound_method(&unit.source, callee) else {
         return Ok(None);
     };
-    if method.family == MemberFamily::Coerce {
+    if matches!(
+        method.family,
+        MemberFamily::Coerce | MemberFamily::Arithmetic(_)
+    ) {
         return Ok(None);
     }
     let arguments = node.children.get(1);
@@ -2874,7 +3616,7 @@ fn infer_parse_or_radix_type(
                 match method.family {
                     MemberFamily::Parse => "parse",
                     MemberFamily::Radix => "radix",
-                    MemberFamily::Coerce => unreachable!(),
+                    MemberFamily::Coerce | MemberFamily::Arithmetic(_) => unreachable!(),
                 }
             ),
             node.span,
@@ -2937,24 +3679,172 @@ fn infer_parse_or_radix_type(
         ));
     };
     if contract.parameters.len() != 1
-        || contract.parameters[0].value_type != Some(ScalarType::String)
-        || contract.return_type.is_none()
+        || contract.parameters[0].value_type != Some(ValueType::Scalar(ScalarType::String))
+        || !matches!(contract.return_type, Some(ValueType::Scalar(_)))
     {
         return Err(failure(
             &unit.source,
             "T0026",
             format!(
-                "parse callback `{callback_name}` must take one `string` value and declare a return"
+                "parse callback `{callback_name}` must take one `string` value and declare a scalar return"
             ),
             callback.span,
         ));
     }
-    let result = contract.return_type.expect("checked above");
+    let Some(ValueType::Scalar(result)) = contract.return_type else {
+        unreachable!("checked above")
+    };
     Ok(Some(if method.child == "checked" {
         ValueType::ScalarOrNone(result)
     } else {
         ValueType::Scalar(result)
     }))
+}
+
+#[allow(clippy::too_many_lines)]
+fn infer_arithmetic_family_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let Some(callee) = node.children.first() else {
+        return Ok(None);
+    };
+    let Some(method) = bound_method(&unit.source, callee) else {
+        return Ok(None);
+    };
+    let MemberFamily::Arithmetic(family) = method.family else {
+        return Ok(None);
+    };
+    let receiver = find_node_by_span(&unit.tree.root, method.receiver)
+        .expect("bound arithmetic receiver belongs to this syntax tree");
+    let Some(ValueType::Scalar(receiver_type)) = infer_value_type(unit, receiver, bindings)? else {
+        return Err(failure(
+            &unit.source,
+            "T0036",
+            format!("`.{}` requires an integer receiver", family.source_name()),
+            receiver.span,
+        ));
+    };
+    if !receiver_type.is_integer() {
+        return Err(failure(
+            &unit.source,
+            "T0036",
+            format!("`.{}` requires an integer receiver", family.source_name()),
+            receiver.span,
+        ));
+    }
+    if family == ArithmeticFamily::Negate
+        && !matches!(
+            receiver_type,
+            ScalarType::Int
+                | ScalarType::Int8
+                | ScalarType::Int16
+                | ScalarType::Int32
+                | ScalarType::Int64
+                | ScalarType::Int128
+        )
+    {
+        return Err(failure(
+            &unit.source,
+            "T0037",
+            "`.negate` is not available on unsigned integers",
+            receiver.span,
+        ));
+    }
+    let arguments = node.children.get(1);
+    let arguments = arguments.map_or(&[][..], |arguments| arguments.children.as_slice());
+    let expected = usize::from(family != ArithmeticFamily::Negate);
+    if arguments.len() != expected {
+        return Err(failure(
+            &unit.source,
+            "T0023",
+            format!(
+                "`.{}` requires exactly {expected} argument{}",
+                family.source_name(),
+                if expected == 1 { "" } else { "s" }
+            ),
+            node.span,
+        ));
+    }
+    if let Some(argument) = arguments.first() {
+        let argument = argument.children.last().unwrap_or(argument);
+        let argument_type = infer_value_type(unit, argument, bindings)?;
+        let valid = if matches!(
+            family,
+            ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+        ) {
+            matches!(argument_type, Some(ValueType::Scalar(ty)) if ty.is_integer())
+        } else {
+            argument_type == Some(ValueType::Scalar(receiver_type))
+                || contextual_constant(&unit.source, argument, receiver_type).is_some()
+        };
+        if !valid {
+            return Err(failure(
+                &unit.source,
+                "T0028",
+                format!(
+                    "`.{}` argument is incompatible with `{receiver_type}`",
+                    family.source_name()
+                ),
+                argument.span,
+            ));
+        }
+    }
+    let fixed = receiver_type != ScalarType::Int;
+    let child_allowed = match method.child {
+        "default" => true,
+        "checked" => {
+            fixed
+                || matches!(
+                    family,
+                    ArithmeticFamily::Divide
+                        | ArithmeticFamily::Remainder
+                        | ArithmeticFamily::DivRem
+                )
+        }
+        "wrap" => fixed && family != ArithmeticFamily::DivRem,
+        "saturate" | "overflowing" => {
+            fixed
+                && !matches!(
+                    family,
+                    ArithmeticFamily::DivRem
+                        | ArithmeticFamily::ShiftLeft
+                        | ArithmeticFamily::ShiftRight
+                )
+        }
+        _ => false,
+    };
+    if !child_allowed {
+        return Err(failure(
+            &unit.source,
+            "T0029",
+            format!(
+                "`.{}.{}` is not available on `{receiver_type}`",
+                family.source_name(),
+                method.child
+            ),
+            callee.span,
+        ));
+    }
+    let result = if method.child == "overflowing" {
+        ValueType::OverflowResult(receiver_type)
+    } else if family == ArithmeticFamily::DivRem {
+        if method.child == "checked" {
+            return Err(failure(
+                &unit.source,
+                "T0030",
+                "`div-rem.checked` optional result values are not yet representable",
+                callee.span,
+            ));
+        }
+        ValueType::DivRemResult(receiver_type)
+    } else if method.child == "checked" {
+        ValueType::ScalarOrNone(receiver_type)
+    } else {
+        ValueType::Scalar(receiver_type)
+    };
+    Ok(Some(result))
 }
 
 fn infer_integer_coercion_type(
@@ -3091,7 +3981,8 @@ pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<B
         "coerce" => Some((MemberFamily::Coerce, "default")),
         "parse" => Some((MemberFamily::Parse, "default")),
         "radix" => Some((MemberFamily::Radix, "default")),
-        _ => None,
+        name => ArithmeticFamily::from_source_name(name)
+            .map(|family| (MemberFamily::Arithmetic(family), "default")),
     };
     if let Some((family, child)) = direct {
         return Some(BoundMethod {
@@ -3111,6 +4002,19 @@ pub(crate) fn bound_method(source: &SourceFile, callee: &SyntaxNode) -> Option<B
         ("coerce", "wrap") => (MemberFamily::Coerce, "wrap"),
         ("coerce", "saturate") => (MemberFamily::Coerce, "saturate"),
         ("parse", "checked") => (MemberFamily::Parse, "checked"),
+        (family, child @ ("checked" | "wrap" | "saturate" | "overflowing")) => {
+            let child = match child {
+                "checked" => "checked",
+                "wrap" => "wrap",
+                "saturate" => "saturate",
+                "overflowing" => "overflowing",
+                _ => unreachable!(),
+            };
+            (
+                MemberFamily::Arithmetic(ArithmeticFamily::from_source_name(family)?),
+                child,
+            )
+        }
         _ => return None,
     };
     Some(BoundMethod {
@@ -3167,10 +4071,29 @@ fn member_family_receiver(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
     let [receiver, member] = node.children.as_slice() else {
         return false;
     };
+    if node_text(&unit.source, member) == "remainder"
+        && matches!(
+            infer_value_type(unit, receiver, &unit.typed_bindings),
+            Ok(Some(ValueType::DivRemResult(_)))
+        )
+    {
+        return false;
+    }
     node.kind == SyntaxKind::MemberExpression
         && (matches!(
             node_text(&unit.source, member),
-            "coerce" | "parse" | "radix"
+            "coerce"
+                | "parse"
+                | "radix"
+                | "add"
+                | "subtract"
+                | "multiply"
+                | "divide"
+                | "remainder"
+                | "div-rem"
+                | "negate"
+                | "shift-left"
+                | "shift-right"
         ) || member_family_receiver(unit, receiver))
 }
 
@@ -3191,6 +4114,10 @@ fn obsolete_integer_coercion_member<'a>(
         })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "binary inference keeps operator precedence, optional equality, and numeric promotion auditable"
+)]
 fn infer_binary_type(
     unit: &SemanticUnit,
     node: &SyntaxNode,
@@ -3206,7 +4133,30 @@ fn infer_binary_type(
     let left = infer_value_type(unit, left_node, bindings)?;
     let right = infer_value_type(unit, right_node, bindings)?;
     let operator = unit.source.text()[left_node.span.end..right_node.span.start].trim();
+    if operator == "is"
+        && (node_text(&unit.source, left_node).trim() == "none"
+            || node_text(&unit.source, right_node).trim() == "none")
+    {
+        return Err(failure(
+            &unit.source,
+            "T0038",
+            "`is none` is invalid; type membership is written `is a none`",
+            node.span,
+        ));
+    }
     if operator == "is" {
+        return Ok(ValueType::Scalar(ScalarType::Bool));
+    }
+    if matches!(operator, "==" | "!=")
+        && ((matches!(
+            left,
+            Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+        ) && node_text(&unit.source, right_node).trim() == "none")
+            || (matches!(
+                right,
+                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+            ) && node_text(&unit.source, left_node).trim() == "none"))
+    {
         return Ok(ValueType::Scalar(ScalarType::Bool));
     }
     let comparison = matches!(operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
@@ -3315,6 +4265,7 @@ fn infer_literal_type_from_source(source: &SourceFile, node: &SyntaxNode) -> Opt
     let text = node_text(source, node);
     match text {
         "true" | "false" => Some(ScalarType::Bool),
+        value if value.starts_with("b'") => Some(ScalarType::Bytes),
         value if value.starts_with(['\'', '"', '>']) => Some(ScalarType::String),
         value if value.contains('.') => Some(ScalarType::Float64),
         _ => Some(ScalarType::Int),
@@ -4333,11 +5284,14 @@ fn validate_flow_statement(
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
                 let collection_type = infer_value_type(unit, collection, bindings)?;
-                if collection_type != Some(ValueType::Scalar(ScalarType::String)) {
+                if !matches!(
+                    collection_type,
+                    Some(ValueType::Scalar(ScalarType::String | ScalarType::Bytes))
+                ) {
                     return Err(failure(
                         &unit.source,
                         "T0016",
-                        "version-one collection iteration supports `string` only",
+                        "collection iteration requires `string` or `bytes`",
                         collection.span,
                     ));
                 }
@@ -4345,14 +5299,19 @@ fn validate_flow_statement(
                     return Err(failure(
                         &unit.source,
                         "T0016",
-                        "string iteration requires exactly one target",
+                        "string and bytes iteration require exactly one target",
                         target.span,
                     ));
                 }
+                let item_type = if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
+                    ValueType::Scalar(ScalarType::Uint8)
+                } else {
+                    ValueType::Scalar(ScalarType::String)
+                };
                 loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
                     name: node_text(&unit.source, name).to_owned(),
                     span: name.span,
-                    value_type: ValueType::Scalar(ScalarType::String),
+                    value_type: item_type,
                     destination_arms: Vec::new(),
                     storage_type: None,
                     mutable: false,
@@ -4497,7 +5456,7 @@ fn validate_return(
                     value.span,
                 ));
             };
-            validate_numeric_destination(
+            validate_value_destination(
                 &unit.source,
                 &contract.name,
                 expected,
@@ -4643,7 +5602,7 @@ fn visible_from(symbol: &Symbol, namespace: &str) -> bool {
 }
 
 fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
-    const PRELUDE: [(&str, &str, &str); 7] = [
+    const PRELUDE: [(&str, &str, &str); 12] = [
         ("print", "/core/output::print", "/core/output"),
         ("int", "/core/types::int", "/core/types"),
         ("float", "/core/types::float", "/core/types"),
@@ -4651,6 +5610,11 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
         ("string", "/core/types::string", "/core/types"),
         ("bytes", "/core/types::bytes", "/core/types"),
         ("none", "/core/types::none", "/core/types"),
+        ("utf8", "/core/encodings::utf8", "/core/encodings"),
+        ("utf16-le", "/core/encodings::utf16-le", "/core/encodings"),
+        ("utf16-be", "/core/encodings::utf16-be", "/core/encodings"),
+        ("utf32-le", "/core/encodings::utf32-le", "/core/encodings"),
+        ("utf32-be", "/core/encodings::utf32-be", "/core/encodings"),
     ];
     PRELUDE
         .into_iter()
@@ -4663,9 +5627,11 @@ fn bootstrap_prelude() -> BTreeMap<String, Symbol> {
                     namespace: namespace.to_owned(),
                     visibility: Visibility::Public,
                     global: false,
-                    constant: false,
+                    constant: name != "print",
                     kind: if name == "print" {
                         SymbolKind::Function
+                    } else if identity.starts_with("/core/encodings::") {
+                        SymbolKind::Binding
                     } else {
                         SymbolKind::TypeDescriptor
                     },
@@ -4713,6 +5679,8 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "none".to_owned(),
         "float32".to_owned(),
         "float64".to_owned(),
+        "overflow-result".to_owned(),
+        "div-rem-result".to_owned(),
     ];
     types.extend(
         TypeCategory::ABSTRACT_SOURCE_NAMES
@@ -4740,6 +5708,7 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
             "integer-conversion-overflow",
             "negative-shift-count",
             "coercion-error",
+            "decode-error",
         ],
         SymbolKind::ErrorObject,
     );
@@ -5116,6 +6085,315 @@ fn record_binding_mutability(package: &mut SemanticPackage) {
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ControlRegion {
+    statement: Span,
+    arm: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+enum BindingEvent {
+    Read {
+        loops: Vec<Span>,
+        regions: Vec<ControlRegion>,
+    },
+    Write {
+        span: Span,
+        loops: Vec<Span>,
+        regions: Vec<ControlRegion>,
+    },
+}
+
+fn span_key(span: Span) -> (u32, usize, usize) {
+    (span.file, span.start, span.end)
+}
+
+fn binding_event_child_repeats(node: &SyntaxNode, index: usize) -> bool {
+    match node.kind {
+        SyntaxKind::WhileStatement => true,
+        SyntaxKind::ForStatement if node.children.len() == 3 => index == 2,
+        SyntaxKind::ForStatement if node.children.len() == 4 => index != 0,
+        _ => false,
+    }
+}
+
+fn binding_event_child_region(
+    node: &SyntaxNode,
+    child: &SyntaxNode,
+    index: usize,
+) -> Option<ControlRegion> {
+    if node.kind == SyntaxKind::IfStatement
+        && matches!(child.kind, SyntaxKind::Block | SyntaxKind::ElseClause)
+    {
+        return Some(ControlRegion {
+            statement: node.span,
+            arm: Some(index),
+        });
+    }
+    if child.kind != SyntaxKind::Block {
+        return None;
+    }
+    let statement = match node.kind {
+        SyntaxKind::WhileStatement | SyntaxKind::ForStatement => node.span,
+        SyntaxKind::TryStatement | SyntaxKind::CatchClause | SyntaxKind::FinallyClause => {
+            child.span
+        }
+        _ => return None,
+    };
+    Some(ControlRegion {
+        statement,
+        arm: None,
+    })
+}
+
+fn collect_binding_events(
+    package: &SemanticPackage,
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    events: &mut BTreeMap<(u32, usize, usize), Vec<BindingEvent>>,
+    declaration_name: bool,
+    loops: &mut Vec<Span>,
+    regions: &mut Vec<ControlRegion>,
+) {
+    if node.kind == SyntaxKind::Name {
+        if !declaration_name
+            && let Some(declaration_span) = package
+                .resolve_name_at(unit, node.span.start, node_text(&unit.source, node))
+                .and_then(|symbol| symbol.declaration_span)
+        {
+            events
+                .entry(span_key(declaration_span))
+                .or_default()
+                .push(BindingEvent::Read {
+                    loops: loops.clone(),
+                    regions: regions.clone(),
+                });
+        }
+        return;
+    }
+
+    let declared_binding = unit
+        .typed_bindings
+        .iter()
+        .find(|binding| binding.span == node.span);
+    let assignment_target = if matches!(
+        node.kind,
+        SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+    ) && declared_binding.is_none()
+    {
+        node.children
+            .first()
+            .filter(|target| target.kind == SyntaxKind::Name)
+    } else {
+        None
+    };
+
+    for (index, child) in node.children.iter().enumerate() {
+        let declares_child = (declared_binding.is_some()
+            || matches!(node.kind, SyntaxKind::Parameter | SyntaxKind::ForTarget))
+            && child.kind == SyntaxKind::Name
+            && !node.children[..index]
+                .iter()
+                .any(|prior| prior.kind == SyntaxKind::Name);
+        let plain_assignment_target =
+            assignment_target.is_some() && node.kind == SyntaxKind::Assignment && index == 0;
+        if !plain_assignment_target {
+            let repeats = binding_event_child_repeats(node, index);
+            let region = binding_event_child_region(node, child, index);
+            if repeats {
+                loops.push(node.span);
+            }
+            if let Some(region) = region {
+                regions.push(region);
+            }
+            collect_binding_events(package, unit, child, events, declares_child, loops, regions);
+            if region.is_some() {
+                regions.pop();
+            }
+            if repeats {
+                loops.pop();
+            }
+        }
+    }
+
+    if let Some(binding) = declared_binding
+        && unit.source.text()[node.span.start..node.span.end].contains('=')
+    {
+        events
+            .entry(span_key(binding.span))
+            .or_default()
+            .push(BindingEvent::Write {
+                span: node.span,
+                loops: loops.clone(),
+                regions: regions.clone(),
+            });
+    } else if let Some(target) = assignment_target
+        && let Some(declaration_span) = package
+            .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
+            .and_then(|symbol| symbol.declaration_span)
+    {
+        events
+            .entry(span_key(declaration_span))
+            .or_default()
+            .push(BindingEvent::Write {
+                span: node.span,
+                loops: loops.clone(),
+                regions: regions.clone(),
+            });
+    }
+}
+
+fn record_binding_events(package: &mut SemanticPackage) {
+    let mut events = BTreeMap::new();
+    for unit in &package.units {
+        collect_binding_events(
+            package,
+            unit,
+            &unit.tree.root,
+            &mut events,
+            false,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+    }
+    package.binding_events = events;
+}
+
+fn regions_conflict(left: &[ControlRegion], right: &[ControlRegion]) -> bool {
+    left.iter().any(|left| {
+        right.iter().any(|right| {
+            left.statement == right.statement
+                && left.arm.is_some()
+                && right.arm.is_some()
+                && left.arm != right.arm
+        })
+    })
+}
+
+fn later_store_replaces(earlier: &[ControlRegion], later: &[ControlRegion]) -> bool {
+    later.iter().all(|region| earlier.contains(region))
+}
+
+pub(crate) fn binding_store_value_is_read(
+    package: &SemanticPackage,
+    declaration_span: Span,
+    store_span: Span,
+) -> bool {
+    let Some(events) = package.binding_events.get(&span_key(declaration_span)) else {
+        return false;
+    };
+    let Some((store, store_loops, store_regions)) =
+        events.iter().enumerate().find_map(|(index, event)| {
+            let BindingEvent::Write {
+                span,
+                loops,
+                regions,
+            } = event
+            else {
+                return None;
+            };
+            (*span == store_span).then_some((index, loops, regions))
+        })
+    else {
+        return false;
+    };
+    let mut intervening_stores: Vec<&[ControlRegion]> = Vec::new();
+    for event in &events[store + 1..] {
+        match event {
+            BindingEvent::Read { regions, .. }
+                if !regions_conflict(store_regions, regions)
+                    && !intervening_stores
+                        .iter()
+                        .any(|intervening| later_store_replaces(regions, intervening)) =>
+            {
+                return true;
+            }
+            BindingEvent::Write { regions, .. } => {
+                if later_store_replaces(store_regions, regions) {
+                    return false;
+                }
+                intervening_stores.push(regions.as_slice());
+            }
+            BindingEvent::Read { .. } => {}
+        }
+    }
+    !store_loops.is_empty()
+        && events.iter().any(|event| {
+            let BindingEvent::Read {
+                loops: read_loops, ..
+            } = event
+            else {
+                return false;
+            };
+            store_loops
+                .iter()
+                .any(|store_loop| read_loops.contains(store_loop))
+        })
+}
+
+pub(crate) fn binding_span_is_read(package: &SemanticPackage, declaration_span: Span) -> bool {
+    package
+        .binding_events
+        .get(&span_key(declaration_span))
+        .is_some_and(|events| {
+            events
+                .iter()
+                .any(|event| matches!(event, BindingEvent::Read { .. }))
+        })
+}
+
+pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
+    let mut warnings = Vec::new();
+    for unit in &package.units {
+        for binding in &unit.typed_bindings {
+            if package
+                .globals
+                .values()
+                .any(|symbol| symbol.declaration_span == Some(binding.span))
+            {
+                continue;
+            }
+            let Some(events) = package.binding_events.get(&span_key(binding.span)) else {
+                continue;
+            };
+            for (index, event) in events.iter().enumerate() {
+                let BindingEvent::Write {
+                    span: store_span, ..
+                } = event
+                else {
+                    continue;
+                };
+                if binding_store_value_is_read(package, binding.span, *store_span) {
+                    continue;
+                }
+                let later_store = events[index + 1..]
+                    .iter()
+                    .any(|event| matches!(event, BindingEvent::Write { .. }));
+                let (code, message) = if *store_span == binding.span && !later_store {
+                    ("W4001", format!("binding `{}` is never read", binding.name))
+                } else if *store_span == binding.span {
+                    (
+                        "W4002",
+                        format!("initial value assigned to `{}` is never read", binding.name),
+                    )
+                } else {
+                    (
+                        "W4002",
+                        format!("value assigned to `{}` is never read", binding.name),
+                    )
+                };
+                warnings.push(Diagnostic::warning(code, message, *store_span));
+            }
+        }
+    }
+    warnings.sort_by_key(|diagnostic| {
+        diagnostic
+            .primary
+            .map_or((u32::MAX, usize::MAX), |span| (span.file, span.start))
+    });
+    warnings
 }
 
 pub(crate) fn binding_span_is_mutated(

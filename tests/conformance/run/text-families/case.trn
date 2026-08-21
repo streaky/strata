@@ -1,0 +1,18 @@
+namespace text-families
+function main
+  text string = '  Straße  '
+  print; (text.trim;)
+  print; (text.trim.start;), (text.trim.end;)
+  print; (text.case-fold;)
+  print; ('straße'.upper.first;), ('hello world'.upper.words;)
+  print; ('Hello'.lower.first;)
+  decomposed string = 'é'
+  print; (decomposed.normalise.nfc;)
+  print; ('banana'.replace; 'ana', 'X')
+  print; ('banana'.find.count; 'ana'), ('banana'.find.count; '')
+  rtl string = 'שלום'
+  print; (rtl.contains.start; 'ש'), (rtl.contains.end; 'ם')
+  print; (decomposed.find.all; '').length
+  print; (decomposed.split; '').length
+  print; (decomposed.replace; '', 'X')
+  print; decomposed.bytes.length, decomposed.scalars.length, decomposed.graphemes.length

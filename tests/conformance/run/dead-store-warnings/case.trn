@@ -1,0 +1,10 @@
+namespace dead-store-warnings
+from /core/types import int8
+function main
+  value int8 = 1
+  value = 2
+  print; value
+  stale int8 = 3
+  stale = 4
+  for ignored in 'ab'
+    print; 'tick'

@@ -1,0 +1,2 @@
+.decode-error: invalid utf8 sequence at byte offset 1
+at /decode-error-offset::main (case.trn:4:11)

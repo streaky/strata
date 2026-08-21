@@ -6,9 +6,11 @@ use crate::{
     ScalarType, SourceFile, TypeCategory,
     rust_ir::{Item, Module, Program},
     semantics::{
-        CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily, SemanticPackage,
-        SemanticUnit, SymbolKind, TypedBinding, ValueType, binding_span_is_mutated, bound_method,
-        contextual_constant, promoted_integer_type,
+        ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
+        SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
+        binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read, bound_method,
+        contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
+        string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -90,8 +92,8 @@ struct Emitter<'a> {
     indent: usize,
     continue_label: Option<String>,
     loop_counter: usize,
-    return_type: Option<ScalarType>,
-    parameter_types: Vec<(String, ScalarType)>,
+    return_type: Option<ValueType>,
+    parameter_types: Vec<(String, ValueType)>,
     namespace_initializer: Option<(String, String)>,
     propagate_errors: bool,
     function_errors: bool,
@@ -103,14 +105,16 @@ struct Emitter<'a> {
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
-    fn contains(node: &SyntaxNode) -> bool {
+    fn contains(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
         matches!(
             node.kind,
             SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
-        ) || node.children.iter().any(contains)
+        ) || string_call_selection(&unit.source, node)
+            .is_some_and(|selection| selection.family == StringFamily::Decode)
+            || node.children.iter().any(|child| contains(unit, child))
     }
     package.units.iter().any(|unit| {
-        unit.functions.iter().any(|contract| contract.throws) || contains(&unit.tree.root)
+        unit.functions.iter().any(|contract| contract.throws) || contains(unit, &unit.tree.root)
     })
 }
 
@@ -119,7 +123,7 @@ fn emit_error_support(output: &mut String) {
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
          enum TerraneErrorKind {\n\
          ArithmeticOverflow,\nDivisionByZero,\nIntegerConversionOverflow,\nNegativeShiftCount,\n\
-         CoercionError,\nResourceError,\nSourceError,\n}\n\
+         CoercionError,\nDecodeError,\nResourceError,\nSourceError,\n}\n\
          impl TerraneErrorKind {\n\
          fn from_source_name(name: &str) -> Self {\nmatch name {\n\
          \".arithmetic-overflow\" => Self::ArithmeticOverflow,\n\
@@ -127,6 +131,7 @@ fn emit_error_support(output: &mut String) {
          \".integer-conversion-overflow\" => Self::IntegerConversionOverflow,\n\
          \".negative-shift-count\" => Self::NegativeShiftCount,\n\
          \".coercion-error\" => Self::CoercionError,\n\
+         \".decode-error\" => Self::DecodeError,\n\
          \".resource-error\" => Self::ResourceError,\n\
          _ => Self::SourceError,\n}\n}\n\
          fn source_name(self) -> &'static str {\nmatch self {\n\
@@ -135,6 +140,7 @@ fn emit_error_support(output: &mut String) {
          Self::IntegerConversionOverflow => \".integer-conversion-overflow\",\n\
          Self::NegativeShiftCount => \".negative-shift-count\",\n\
          Self::CoercionError => \".coercion-error\",\n\
+         Self::DecodeError => \".decode-error\",\n\
          Self::ResourceError => \".resource-error\",\n\
          Self::SourceError => \".error\",\n}\n}\n}\n\
          #[derive(Clone, Debug)]\nstruct TerraneError {\n\
@@ -161,6 +167,9 @@ fn emit_error_support(output: &mut String) {
          impl From<terrane_int_support::ArithmeticError> for TerraneError {\n\
          fn from(error: terrane_int_support::ArithmeticError) -> Self {\n\
          Self::new(TerraneErrorKind::from_source_name(error.source_name()), error.to_string())\n}\n}\n\
+         impl From<terrane_string_support::DecodeError> for TerraneError {\n\
+         fn from(error: terrane_string_support::DecodeError) -> Self {\n\
+         Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(\".decode-error: \"))\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
          eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
          fn __terrane_generated_defect(message: &str) -> ! {\n\
@@ -478,19 +487,23 @@ impl Emitter<'_> {
             if index != 0 {
                 self.output.push_str(", ");
             }
-            let ty = parameter.value_type.map_or("i128", rust_type);
+            let ty = parameter
+                .value_type
+                .map_or_else(|| "i128".to_owned(), rust_value_type);
             let mutable = if parameter.mutable { "mut " } else { "" };
             write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
         }
         self.output.push(')');
         let function_errors = contract.throws && contract.name != "main";
         if function_errors {
-            let result = contract.return_type.map_or("()", rust_type);
+            let result = contract
+                .return_type
+                .map_or_else(|| "()".to_owned(), rust_value_type);
             write!(self.output, " -> Result<{result}, TerraneError>").unwrap();
         } else if let Some(return_type) = contract.return_type
-            && return_type != ScalarType::None
+            && return_type != ValueType::Scalar(ScalarType::None)
         {
-            write!(self.output, " -> {}", rust_type(return_type)).unwrap();
+            write!(self.output, " -> {}", rust_value_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
         let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
@@ -514,15 +527,32 @@ impl Emitter<'_> {
                 .collect(),
         );
         self.indent += 1;
-        if let Some(block) = node
+        let block = node
             .children
             .iter()
-            .find(|child| child.kind == SyntaxKind::Block)
-        {
+            .find(|child| child.kind == SyntaxKind::Block);
+        let unused_parameters = contract
+            .parameters
+            .iter()
+            .filter(|parameter| {
+                block.is_none_or(|block| {
+                    !node_contains_name(&self.unit.source, block, &parameter.name)
+                })
+            })
+            .map(|parameter| format!("&{}", rust_name(&parameter.name)))
+            .collect::<Vec<_>>();
+        match unused_parameters.as_slice() {
+            [] => {}
+            [parameter] => self.line(&format!("let _ = {parameter};")),
+            parameters => self.line(&format!("let _ = ({});", parameters.join(", "))),
+        }
+        if let Some(block) = block {
             self.block(block);
         }
         if function_errors
-            && contract.return_type.is_none_or(|ty| ty == ScalarType::None)
+            && contract
+                .return_type
+                .is_none_or(|ty| ty == ValueType::Scalar(ScalarType::None))
             && node
                 .children
                 .iter()
@@ -568,7 +598,7 @@ impl Emitter<'_> {
             .value_type(value)
             .and_then(|value_type| match value_type {
                 ValueType::Scalar(scalar) => Some(scalar),
-                ValueType::ScalarOrNone(_) => None,
+                _ => None,
             });
         let constant = binding
             .destination_arms
@@ -655,35 +685,7 @@ impl Emitter<'_> {
                     self.binding(node);
                 }
             }
-            SyntaxKind::Assignment => {
-                if self.global_assignment(node) {
-                    return;
-                }
-                if self
-                    .unit
-                    .typed_bindings
-                    .iter()
-                    .any(|binding| binding.span == node.span)
-                {
-                    self.binding(node);
-                } else {
-                    let [left, right] = node.children.as_slice() else {
-                        return;
-                    };
-                    let union_binding = self.union_binding(left);
-                    let value_type = self.value_type(left);
-                    let value = if let Some(binding) = union_binding {
-                        self.union_value(&binding, right)
-                    } else if let Some(value_type) = value_type {
-                        self.expression_as(right, value_type)
-                    } else {
-                        self.expression(right)
-                    };
-                    let value = Self::unwrapped_expression(value);
-                    let target = self.expression(left);
-                    self.line(&format!("{target} = {value};"));
-                }
-            }
+            SyntaxKind::Assignment => self.assignment(node),
             SyntaxKind::CallExpression => {
                 let expression = self.expression(node);
                 self.line(&format!("{expression};"));
@@ -697,7 +699,7 @@ impl Emitter<'_> {
                     || "()".to_owned(),
                     |value| {
                         let value = if let Some(return_type) = self.return_type {
-                            self.expression_as(value, ValueType::Scalar(return_type))
+                            self.expression_as(value, return_type)
                         } else {
                             self.expression(value)
                         };
@@ -731,6 +733,60 @@ impl Emitter<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn assignment(&mut self, node: &SyntaxNode) {
+        if self.global_assignment(node) {
+            return;
+        }
+        if self
+            .unit
+            .typed_bindings
+            .iter()
+            .any(|binding| binding.span == node.span)
+        {
+            self.binding(node);
+            return;
+        }
+        let [left, right] = node.children.as_slice() else {
+            return;
+        };
+        let assigned_binding = (left.kind == SyntaxKind::Name)
+            .then(|| {
+                self.package
+                    .resolve_name_at(self.unit, left.span.start, self.text(left))
+            })
+            .flatten()
+            .and_then(|symbol| symbol.declaration_span)
+            .and_then(|span| {
+                self.unit
+                    .typed_bindings
+                    .iter()
+                    .find(|binding| binding.span == span)
+            });
+        let union_binding = self.union_binding(left);
+        let value_type = assigned_binding
+            .map(|binding| binding.value_type)
+            .or_else(|| self.value_type(left));
+        let value = if let Some(binding) = union_binding {
+            self.union_value(&binding, right)
+        } else if let Some(value_type) = value_type {
+            self.expression_as(right, value_type)
+        } else {
+            self.expression(right)
+        };
+        let value = Self::unwrapped_expression(value);
+        let target = if left.kind == SyntaxKind::Name {
+            rust_name(self.text(left))
+        } else {
+            self.expression(left)
+        };
+        self.line(&format!("{target} = {value};"));
+        if let Some(binding) = assigned_binding
+            && !binding_store_value_is_read(self.package, binding.span, node.span)
+        {
+            self.line(&format!("let _ = &mut {target};"));
         }
     }
 
@@ -791,7 +847,9 @@ impl Emitter<'_> {
         };
         let index = self.try_counter;
         self.try_counter += 1;
-        let result = self.return_type.map_or("()", rust_type);
+        let result = self
+            .return_type
+            .map_or_else(|| "()".to_owned(), rust_value_type);
         let mutable = if node
             .children
             .iter()
@@ -974,10 +1032,7 @@ impl Emitter<'_> {
             if let Some(storage_type) = storage_type {
                 return rust_type(storage_type).to_owned();
             }
-            match binding.value_type {
-                ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
-                ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
-            }
+            rust_value_type(binding.value_type)
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -1016,6 +1071,11 @@ impl Emitter<'_> {
             write!(self.output, " = {value}").unwrap();
         }
         self.output.push_str(";\n");
+        if initializer.is_some() && !binding_store_value_is_read(self.package, node.span, node.span)
+        {
+            let borrow = if mutable { "&mut " } else { "&" };
+            self.line(&format!("let _ = {borrow}{name};"));
+        }
     }
 
     fn postfix(&mut self, node: &SyntaxNode) {
@@ -1023,34 +1083,47 @@ impl Emitter<'_> {
             return;
         };
         let operator = &self.source.text()[value.span.end..node.span.end];
-        let operation = if operator.trim() == "++" { "+" } else { "-" };
+        let addition = operator.trim() == "++";
+        let value_type = self.value_type(value);
         if let Some(storage) = self.global_storage(value) {
-            let one = if self.is_adaptive_expression(value) {
-                "terrane_int_support::Int::from(1_i128)"
-            } else {
-                "1"
-            };
             self.line("{");
             self.indent += 1;
             self.line(&format!(
                 "let mut value = {storage}.lock().expect(\"program-global lock poisoned\");"
             ));
             let failure = self.uninitialized_global_failure(value);
-            self.line(&format!(
-                "*value = Some(value.clone().unwrap_or_else(|| {failure}) {operation} {one});"
-            ));
+            let current = format!("value.clone().unwrap_or_else(|| {failure})");
+            let updated = self.postfix_updated_value(&current, value_type, addition, node);
+            self.line(&format!("*value = Some({updated});"));
             self.indent -= 1;
             self.line("}");
             return;
         }
         let target = self.expression(value);
-        if self.is_adaptive_expression(value) {
-            self.line(&format!(
-                "{target} = {target}.clone() {operation} terrane_int_support::Int::from(1_i128);"
-            ));
-        } else {
-            self.line(&format!("{target} {operation}= 1;"));
+        let updated = self.postfix_updated_value(&target, value_type, addition, node);
+        self.line(&format!("{target} = {updated};"));
+    }
+
+    fn postfix_updated_value(
+        &self,
+        value: &str,
+        value_type: Option<ValueType>,
+        addition: bool,
+        node: &SyntaxNode,
+    ) -> String {
+        if value_type == Some(ValueType::Scalar(ScalarType::Int)) {
+            let operator = if addition { "+" } else { "-" };
+            return format!("{value}.clone() {operator} terrane_int_support::Int::from(1_i128)");
         }
+        if matches!(value_type, Some(ValueType::Scalar(ty)) if ty.is_integer()) {
+            let helper = if addition {
+                "fixed_addition"
+            } else {
+                "fixed_subtraction"
+            };
+            return self.fallible(format!("terrane_int_support::{helper}({value}, 1)"), node);
+        }
+        unreachable!("semantic analysis validated postfix integer target");
     }
 
     fn if_statement(&mut self, node: &SyntaxNode) {
@@ -1105,17 +1178,28 @@ impl Emitter<'_> {
                 let Some(name) = target.children.first() else {
                     return;
                 };
+                let name_span = name.span;
                 let mutable = if binding_span_is_mutated(self.package, self.unit, name.span, true) {
                     "mut "
                 } else {
                     ""
                 };
                 let name = rust_name(self.text(name));
+                let collection_type = self.value_type(collection);
                 let collection = self.expression(collection);
-                self.line(&format!(
-                    "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
-                ));
+                if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
+                    self.line(&format!(
+                        "for {mutable}{name} in ({collection}).iter().copied() {{"
+                    ));
+                } else {
+                    self.line(&format!(
+                        "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
+                    ));
+                }
                 self.indent += 1;
+                if !binding_span_is_read(self.package, name_span) {
+                    self.line(&format!("let _ = &{name};"));
+                }
                 let outer_continue = self.continue_label.take();
                 let outer_loop = std::mem::replace(&mut self.in_loop, true);
                 self.block(block);
@@ -1183,6 +1267,20 @@ impl Emitter<'_> {
     }
 
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if let ValueType::ScalarOrNone(scalar) = value_type {
+            return if self.value_type(node) == Some(value_type) {
+                self.expression(node)
+            } else if self.text(node).trim() == "none"
+                || self.value_type(node) == Some(ValueType::Scalar(ScalarType::None))
+            {
+                "None".to_owned()
+            } else {
+                format!(
+                    "Some({})",
+                    self.expression_as(node, ValueType::Scalar(scalar))
+                )
+            };
+        }
         if let ValueType::Scalar(destination) = value_type
             && (node.kind != SyntaxKind::Literal
                 || self.value_type(node) != Some(ValueType::Scalar(destination)))
@@ -1308,7 +1406,7 @@ impl Emitter<'_> {
     fn numeric_operation_type(&self, left: &SyntaxNode, right: &SyntaxNode) -> Option<ScalarType> {
         let scalar = |value_type| match value_type {
             ValueType::Scalar(scalar) => Some(scalar),
-            ValueType::ScalarOrNone(_) => None,
+            _ => None,
         };
         let left_type = self.value_type(left).and_then(scalar);
         let right_type = self.value_type(right).and_then(scalar);
@@ -1339,6 +1437,36 @@ impl Emitter<'_> {
         }
     }
 
+    fn optional_none_comparison(
+        &mut self,
+        left: &SyntaxNode,
+        operator: &str,
+        right: &SyntaxNode,
+    ) -> Option<String> {
+        if !matches!(operator, "==" | "!=") {
+            return None;
+        }
+        let left_type = self.value_type(left);
+        let right_type = self.value_type(right);
+        let is_optional = |value_type| {
+            matches!(
+                value_type,
+                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+            )
+        };
+        let left_is_none = self.text(left).trim() == "none"
+            || left_type == Some(ValueType::Scalar(ScalarType::None));
+        let right_is_none = self.text(right).trim() == "none"
+            || right_type == Some(ValueType::Scalar(ScalarType::None));
+        if is_optional(left_type) && right_is_none {
+            return Some(format!("({} {operator} None)", self.expression(left)));
+        }
+        if left_is_none && is_optional(right_type) {
+            return Some(format!("(None {operator} {})", self.expression(right)));
+        }
+        None
+    }
+
     fn binary(&mut self, node: &SyntaxNode) -> String {
         let [left, right] = node.children.as_slice() else {
             return String::new();
@@ -1360,6 +1488,9 @@ impl Emitter<'_> {
                 effects.push(effect);
             }
             return format!("{{ {} {result} }}", effects.join(" "));
+        }
+        if let Some(comparison) = self.optional_none_comparison(left, source_operator, right) {
+            return comparison;
         }
         let comparison = matches!(source_operator, "==" | "!=" | "<" | "<=" | ">" | ">=");
         let left_is_small = self.small_int_binding(left).is_some()
@@ -1550,7 +1681,7 @@ impl Emitter<'_> {
     fn unwrapped_expression(mut expression: String) -> String {
         loop {
             let bytes = expression.as_bytes();
-            if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+            if bytes.len() <= 2 || bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
                 break;
             }
             let mut depth = 0_usize;
@@ -1581,6 +1712,7 @@ impl Emitter<'_> {
         match node.kind {
             SyntaxKind::Literal => match self.text(node).trim() {
                 "true" | "false" => Some(ValueType::Scalar(ScalarType::Bool)),
+                text if text.starts_with("b'") => Some(ValueType::Scalar(ScalarType::Bytes)),
                 text if text.starts_with('\'') || text.starts_with('>') => {
                     Some(ValueType::Scalar(ScalarType::String))
                 }
@@ -1605,7 +1737,7 @@ impl Emitter<'_> {
                         self.parameter_types
                             .iter()
                             .find(|(parameter, _)| parameter == name)
-                            .map(|(_, value_type)| ValueType::Scalar(*value_type))
+                            .map(|(_, value_type)| *value_type)
                     })
             }
             SyntaxKind::TypeExpression
@@ -1618,14 +1750,102 @@ impl Emitter<'_> {
         }
     }
 
+    fn direct_string_view_length(
+        &mut self,
+        receiver: &SyntaxNode,
+        receiver_type: Option<ValueType>,
+        member: &SyntaxNode,
+    ) -> Option<String> {
+        if self.text(member) != "length" {
+            return None;
+        }
+        let Some(ValueType::StringView(unit)) = receiver_type else {
+            return None;
+        };
+        receiver.children.first().map(|source| {
+            let source = self.expression(source);
+            match unit {
+                crate::semantics::TextUnit::Bytes => format!("({source}).len() as i128"),
+                crate::semantics::TextUnit::Scalars => {
+                    format!("({source}).chars().count() as i128")
+                }
+                crate::semantics::TextUnit::Graphemes => {
+                    format!("terrane_string_support::length(&({source})) as i128")
+                }
+            }
+        })
+    }
+
     fn member(&mut self, node: &SyntaxNode) -> String {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
         };
         let receiver_type = self.value_type(receiver);
+        if let Some(length) = self.direct_string_view_length(receiver, receiver_type, member) {
+            return length;
+        }
         let receiver = self.expression(receiver);
         match self.text(member) {
-            "length" => format!("terrane_string_support::length(&{receiver}) as i128"),
+            "bytes" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("({receiver}).as_bytes().to_vec()")
+            }
+            "scalars" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("({receiver}).chars().map(|value| value.to_string()).collect::<Vec<_>>()")
+            }
+            "graphemes" if receiver_type == Some(ValueType::Scalar(ScalarType::String)) => {
+                format!("terrane_string_support::graphemes(&({receiver})).collect::<Vec<_>>()")
+            }
+            "text" if receiver_type == Some(ValueType::TextRange) => {
+                format!("({receiver}).text().to_owned()")
+            }
+            "bytes" | "scalars" | "graphemes" if receiver_type == Some(ValueType::TextRange) => {
+                receiver
+            }
+            boundary @ ("start" | "end") => {
+                let method = match (receiver_type, boundary) {
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)),
+                        "start",
+                    ) => "byte_start",
+                    (Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)), "end") => {
+                        "byte_end"
+                    }
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Scalars)),
+                        "start",
+                    ) => "scalar_start",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Scalars)),
+                        "end",
+                    ) => "scalar_end",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Graphemes)),
+                        "start",
+                    ) => "grapheme_start",
+                    (
+                        Some(ValueType::TextRangeView(crate::semantics::TextUnit::Graphemes)),
+                        "end",
+                    ) => "grapheme_end",
+                    _ => unreachable!("semantic analysis validated text-range boundary"),
+                };
+                format!("({receiver}).{method}() as i128")
+            }
+            "length" => match receiver_type {
+                Some(
+                    ValueType::StringView(crate::semantics::TextUnit::Bytes)
+                    | ValueType::Scalar(ScalarType::Bytes),
+                ) => {
+                    format!("({receiver}).len() as i128")
+                }
+                Some(
+                    ValueType::StringView(
+                        crate::semantics::TextUnit::Scalars | crate::semantics::TextUnit::Graphemes,
+                    )
+                    | ValueType::StringList
+                    | ValueType::TextRangeList,
+                ) => format!("({receiver}).len() as i128"),
+                _ => format!("terrane_string_support::length(&{receiver}) as i128"),
+            },
             "type" => "()".to_owned(),
             mode @ ("round" | "floor" | "ceiling" | "truncate")
                 if matches!(
@@ -1661,12 +1881,24 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
+        if let Some(string_call) = self.string_call(node, arguments) {
+            return string_call;
+        }
         if let Some(method) = bound_method(self.source, callee) {
             let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
                 .expect("validated bound method receiver");
             let receiver = self.expression(receiver_node);
             if method.family == MemberFamily::Coerce {
                 return self.integer_coercion(&method, receiver_node, callee, arguments);
+            }
+            if let MemberFamily::Arithmetic(family) = method.family {
+                return self.arithmetic_family(
+                    family,
+                    method.child,
+                    receiver_node,
+                    arguments,
+                    node,
+                );
             }
             let argument = arguments
                 .children
@@ -1692,7 +1924,7 @@ impl Emitter<'_> {
                 MemberFamily::Radix => {
                     format!("terrane_int_support::format_radix(&({receiver}), &({argument}))")
                 }
-                MemberFamily::Coerce => unreachable!(),
+                MemberFamily::Coerce | MemberFamily::Arithmetic(_) => unreachable!(),
             };
             return if method.family == MemberFamily::Parse && !callback_throws {
                 if method.child == "checked" {
@@ -1795,7 +2027,7 @@ impl Emitter<'_> {
                 let value = argument.children.last().unwrap_or(argument);
                 let parameter = &contract.parameters[index];
                 ordered[index] = Some(if let Some(ty) = parameter.value_type {
-                    self.expression_as(value, ValueType::Scalar(ty))
+                    self.expression_as(value, ty)
                 } else {
                     self.expression(value)
                 });
@@ -1934,6 +2166,220 @@ impl Emitter<'_> {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn string_call(&mut self, node: &SyntaxNode, arguments: &SyntaxNode) -> Option<String> {
+        let selection = string_call_selection(self.source, node)?;
+        let subject = find_node_by_span(&self.unit.tree.root, selection.receiver)
+            .expect("selected string receiver belongs to this syntax tree");
+        let family = selection.family.source_name();
+        let child = selection.child.as_str();
+        let receiver = self.expression(subject);
+        let values = arguments
+            .children
+            .iter()
+            .map(|argument| argument.children.last().unwrap_or(argument))
+            .map(|value| self.expression(value))
+            .collect::<Vec<_>>();
+        let result = match (family, child) {
+            ("trim", "default") => {
+                format!("terrane_string_support::trim(&({receiver}))")
+            }
+            ("trim", mode @ ("start" | "end")) => {
+                let helper = if mode == "start" {
+                    "trim_start"
+                } else {
+                    "trim_end"
+                };
+                let pattern = values
+                    .first()
+                    .map_or_else(|| "None".to_owned(), |value| format!("Some(&({value}))"));
+                format!("terrane_string_support::{helper}(&({receiver}), {pattern})")
+            }
+            ("contains", "default") => format!("({receiver}).contains(&({}))", values[0]),
+            ("contains", "start") => format!("({receiver}).starts_with(&({}))", values[0]),
+            ("contains", "end") => format!("({receiver}).ends_with(&({}))", values[0]),
+            ("find", "default") => {
+                format!(
+                    "terrane_string_support::find(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("find", "all") => {
+                format!(
+                    "terrane_string_support::find_all(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("find", "count") => format!(
+                "terrane_int_support::Int::from(terrane_string_support::find_all(&({receiver}), &({})).len() as i128)",
+                values[0]
+            ),
+            ("upper", mode) => {
+                let helper = match mode {
+                    "default" => "upper",
+                    "first" => "upper_first",
+                    "words" => "upper_words",
+                    _ => unreachable!(),
+                };
+                format!("terrane_string_support::{helper}(&({receiver}))")
+            }
+            ("lower", mode) => {
+                let helper = match mode {
+                    "default" => "lower",
+                    "first" => "lower_first",
+                    _ => unreachable!(),
+                };
+                format!("terrane_string_support::{helper}(&({receiver}))")
+            }
+            ("case-fold", _) => format!("terrane_string_support::case_fold(&({receiver}))"),
+            ("normalise", form) => {
+                format!("terrane_string_support::normalise(&({receiver}), {form:?})")
+            }
+            ("split", _) => {
+                format!(
+                    "terrane_string_support::split(&({receiver}), &({}))",
+                    values[0]
+                )
+            }
+            ("replace", _) => format!(
+                "terrane_string_support::replace(&({receiver}), &({}), &({}))",
+                values[0], values[1]
+            ),
+            ("encode", _) => {
+                format!(
+                    "terrane_string_support::encode(&({receiver}), {})",
+                    values[0]
+                )
+            }
+            ("decode", _) => self.fallible(
+                format!(
+                    "terrane_string_support::decode(&({receiver}), {})",
+                    values[0]
+                ),
+                node,
+            ),
+            _ => unreachable!("semantic analysis validated string family"),
+        };
+        Some(result)
+    }
+    #[allow(clippy::too_many_lines)]
+    fn arithmetic_family(
+        &mut self,
+        family: ArithmeticFamily,
+        child: &str,
+        receiver_node: &SyntaxNode,
+        arguments: &SyntaxNode,
+        call: &SyntaxNode,
+    ) -> String {
+        let Some(ValueType::Scalar(receiver_type)) = self.value_type(receiver_node) else {
+            unreachable!("validated arithmetic receiver");
+        };
+        let receiver = if receiver_type == ScalarType::Int {
+            self.adaptive_expression(receiver_node)
+        } else {
+            self.expression(receiver_node)
+        };
+        let argument = arguments
+            .children
+            .first()
+            .and_then(|argument| argument.children.last())
+            .map(|argument| {
+                if receiver_type == ScalarType::Int {
+                    self.adaptive_expression(argument)
+                } else if matches!(
+                    family,
+                    ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+                ) {
+                    self.expression(argument)
+                } else {
+                    self.expression_as(argument, ValueType::Scalar(receiver_type))
+                }
+            });
+        if receiver_type == ScalarType::Int {
+            let expression = match family {
+                ArithmeticFamily::Add => format!("({receiver} + {})", argument.unwrap()),
+                ArithmeticFamily::Subtract => format!("({receiver} - {})", argument.unwrap()),
+                ArithmeticFamily::Multiply => format!("({receiver} * {})", argument.unwrap()),
+                ArithmeticFamily::Divide => {
+                    format!("({receiver}).euclidean_div(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::Remainder => {
+                    format!("({receiver}).modulo(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::DivRem => {
+                    format!("({receiver}).div_rem(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::Negate => format!("-({receiver})"),
+                ArithmeticFamily::ShiftLeft => {
+                    format!("({receiver}).shift_left(&({}))", argument.unwrap())
+                }
+                ArithmeticFamily::ShiftRight => {
+                    format!("({receiver}).shift_right(&({}))", argument.unwrap())
+                }
+            };
+            return if child == "checked" {
+                format!("({expression}).ok()")
+            } else if matches!(
+                family,
+                ArithmeticFamily::Divide
+                    | ArithmeticFamily::Remainder
+                    | ArithmeticFamily::DivRem
+                    | ArithmeticFamily::ShiftLeft
+                    | ArithmeticFamily::ShiftRight
+            ) {
+                self.fallible(expression, call)
+            } else {
+                expression
+            };
+        }
+        let operation = match family {
+            ArithmeticFamily::Add => "addition",
+            ArithmeticFamily::Subtract => "subtraction",
+            ArithmeticFamily::Multiply => "multiplication",
+            ArithmeticFamily::Divide => "division",
+            ArithmeticFamily::Remainder => "remainder",
+            ArithmeticFamily::DivRem => "div_rem",
+            ArithmeticFamily::Negate => "negation",
+            ArithmeticFamily::ShiftLeft => "shift_left",
+            ArithmeticFamily::ShiftRight => "shift_right",
+        };
+        let helper = if child == "default" {
+            format!("fixed_{operation}")
+        } else {
+            format!("fixed_{operation}_{child}")
+        };
+        let expression = if family == ArithmeticFamily::Negate {
+            format!("terrane_int_support::{helper}({receiver})")
+        } else if matches!(
+            family,
+            ArithmeticFamily::ShiftLeft | ArithmeticFamily::ShiftRight
+        ) {
+            format!(
+                "terrane_int_support::{helper}({receiver}, &({}))",
+                argument.unwrap()
+            )
+        } else {
+            format!(
+                "terrane_int_support::{helper}({receiver}, {})",
+                argument.unwrap()
+            )
+        };
+        let fallible = child == "default"
+            || matches!(
+                family,
+                ArithmeticFamily::Divide
+                    | ArithmeticFamily::Remainder
+                    | ArithmeticFamily::DivRem
+                    | ArithmeticFamily::ShiftLeft
+                    | ArithmeticFamily::ShiftRight
+            );
+        if fallible {
+            self.fallible(expression, call)
+        } else {
+            expression
+        }
+    }
+
     fn integer_coercion(
         &mut self,
         method: &crate::BoundMethod,
@@ -2009,7 +2455,7 @@ impl Emitter<'_> {
                 .value_type(receiver)
                 .and_then(|value_type| match value_type {
                     ValueType::Scalar(value_type) => Some(format!("type:{value_type}")),
-                    ValueType::ScalarOrNone(_) => None,
+                    _ => None,
                 });
         }
         crate::semantics::descriptor_expression_type(self.package, self.unit, node)
@@ -2046,12 +2492,52 @@ impl Emitter<'_> {
 
     fn name(&self, node: &SyntaxNode) -> String {
         let source_name = self.text(node);
+        if source_name == "none" {
+            return "()".to_owned();
+        }
+        let narrowed =
+            narrowed_value_type(self.unit, node, &self.unit.typed_bindings).or_else(|| {
+                self.parameter_types
+                    .iter()
+                    .rev()
+                    .find(|(name, _)| name == source_name)
+                    .and_then(|(_, value_type)| {
+                        narrowed_optional_type(self.unit, node, *value_type)
+                    })
+            });
+        if let Some(narrowed) = narrowed {
+            let access = format!(
+                "{}.as_ref().expect(\"semantic optional narrowing\")",
+                rust_name(source_name)
+            );
+            return if matches!(narrowed, ValueType::Scalar(_)) {
+                format!("*{access}")
+            } else {
+                access
+            };
+        }
         if let Some((_, local)) = self
             .namespace_initializer
             .as_ref()
             .filter(|(name, _)| name == source_name)
         {
             return local.clone();
+        }
+        let resolved = self
+            .package
+            .resolve_name_at(self.unit, node.span.start, source_name);
+        let encoding = resolved
+            .and_then(|symbol| symbol.identity.strip_prefix("/core/encodings::"))
+            .and_then(|name| match name {
+                "utf8" => Some("Utf8"),
+                "utf16-le" => Some("Utf16Le"),
+                "utf16-be" => Some("Utf16Be"),
+                "utf32-le" => Some("Utf32Le"),
+                "utf32-be" => Some("Utf32Be"),
+                _ => None,
+            });
+        if let Some(encoding) = encoding {
+            return format!("terrane_string_support::Encoding::{encoding}");
         }
         let Some(symbol) = self
             .package
@@ -2197,10 +2683,13 @@ impl Emitter<'_> {
             }) {
                 let destination = contract.parameters[index].value_type;
                 let value = destination
-                    .and_then(|destination| {
-                        contextual_constant(&owner.source, default, destination)
-                            .and_then(Result::ok)
-                            .map(|constant| lower_contextual_constant(constant, destination))
+                    .and_then(|destination| match destination {
+                        ValueType::Scalar(destination) => {
+                            contextual_constant(&owner.source, default, destination)
+                                .and_then(Result::ok)
+                                .map(|constant| lower_contextual_constant(constant, destination))
+                        }
+                        _ => None,
                     })
                     .unwrap_or_else(|| literal_or_text(&owner.source, default));
                 values[index] = Some(value);
@@ -2270,6 +2759,11 @@ fn literal(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed == "true" || trimmed == "false" {
         return trimmed.to_owned();
+    }
+    if trimmed.starts_with("b'") && trimmed.ends_with('\'') {
+        let value = crate::lexer::unescape_bytes(&trimmed[2..trimmed.len() - 1])
+            .expect("lexer rejects malformed byte escapes before lowering");
+        return format!("Vec::from({value:?})");
     }
     let compact = trimmed.replace('_', "");
     if let Some(value) = integer_literal(&compact) {
@@ -2429,6 +2923,26 @@ fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
 
+fn rust_value_type(ty: ValueType) -> String {
+    match ty {
+        ValueType::Scalar(scalar) => rust_type(scalar).to_owned(),
+        ValueType::ScalarOrNone(scalar) => format!("Option<{}>", rust_type(scalar)),
+        ValueType::OverflowResult(scalar) => {
+            format!("terrane_int_support::OverflowResult<{}>", rust_type(scalar))
+        }
+        ValueType::DivRemResult(scalar) => {
+            format!("terrane_int_support::DivRemResult<{}>", rust_type(scalar))
+        }
+        ValueType::StringView(crate::semantics::TextUnit::Bytes) => "Vec<u8>".to_owned(),
+        ValueType::StringView(_) | ValueType::TextRangeView(_) => "String".to_owned(),
+        ValueType::StringList => "Vec<String>".to_owned(),
+        ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
+        ValueType::TextRange => "terrane_string_support::TextRange".to_owned(),
+        ValueType::TextRangeOrNone => "Option<terrane_string_support::TextRange>".to_owned(),
+        ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
+    }
+}
+
 const fn is_numeric(ty: ScalarType) -> bool {
     ty.is_integer() || matches!(ty, ScalarType::Float32 | ScalarType::Float64)
 }
@@ -2472,6 +2986,20 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
         ScalarType::Uint128 => Some((false, 128)),
         _ => None,
     }
+}
+
+fn node_contains_name(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
+    if node.kind == SyntaxKind::Name && &source.text()[node.span.start..node.span.end] == name {
+        return true;
+    }
+    let children = match node.kind {
+        SyntaxKind::Binding => node.children.get(1..).unwrap_or_default(),
+        SyntaxKind::MemberExpression => node.children.get(..1).unwrap_or_default(),
+        _ => &node.children,
+    };
+    children
+        .iter()
+        .any(|child| node_contains_name(source, child, name))
 }
 
 fn block_may_fall_through(block: &SyntaxNode) -> bool {
@@ -2541,6 +3069,7 @@ fn rust_error_kind(kind: &str) -> &'static str {
         "integer-conversion-overflow" => "IntegerConversionOverflow",
         "negative-shift-count" => "NegativeShiftCount",
         "coercion-error" => "CoercionError",
+        "decode-error" => "DecodeError",
         "resource-error" => "ResourceError",
         _ => "SourceError",
     }
@@ -2553,6 +3082,7 @@ fn error_message(kind: &str) -> &'static str {
         "integer-conversion-overflow" => "integer conversion overflow",
         "negative-shift-count" => "negative integer shift count",
         "coercion-error" => "coercion has no compatible result",
+        "decode-error" => "invalid byte sequence for selected encoding",
         "resource-error" => "integer shift count cannot be represented on this target",
         _ => "source error",
     }

@@ -1,0 +1,40 @@
+namespace bounded-arithmetic-families
+from /core/types import int8, int
+function main
+  small int8 = 120
+  wrapped int8 = small.add.wrap; 10
+  print; wrapped
+  overflowed = small.add.overflowing; 10
+  print; overflowed.value, overflowed.overflowed
+  pair = ( -7).div-rem; 3
+  print; pair.quotient, pair.remainder
+  exact int = 5
+  print; (exact.multiply; 9)
+  small.subtract.checked; 20
+  print; (small.multiply.saturate; 2)
+  print; (small.divide; 3), (small.remainder; 7)
+  negated = small.negate.overflowing;
+  print; negated.value, negated.overflowed
+  print; (small.shift-left.wrap; 1)
+  small.shift-right.checked; 2
+  count int8 = 1
+  count++
+  count--
+  print; count
+  print; (small.add.checked; 10) == none, (small.add.saturate; 10)
+  print; (small.subtract.wrap; -20), (small.subtract.saturate; -20)
+  sub-overflow = small.subtract.overflowing; -20
+  print; sub-overflow.value, sub-overflow.overflowed, (small.subtract.checked; -20) == none
+  print; (small.multiply.wrap; 2), (small.multiply.checked; 2) == none
+  mul-overflow = small.multiply.overflowing; 2
+  print; mul-overflow.value, mul-overflow.overflowed
+  minimum int8 = -128
+  print; (minimum.divide.wrap; -1), (minimum.divide.saturate; -1)
+  div-overflow = minimum.divide.overflowing; -1
+  print; div-overflow.value, div-overflow.overflowed, (minimum.divide.checked; -1) == none
+  rem-overflow = minimum.remainder.overflowing; -1
+  print; (minimum.remainder.wrap; -1), (minimum.remainder.saturate; -1)
+  print; rem-overflow.value, rem-overflow.overflowed, (minimum.remainder.checked; -1) == none
+  print; (( -7).divide; 3), (( -7).remainder; 3)
+  print; ((7).divide; -3), ((7).remainder; -3)
+  print; (( -7).divide; -3), (( -7).remainder; -3)

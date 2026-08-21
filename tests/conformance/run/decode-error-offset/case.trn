@@ -1,0 +1,4 @@
+namespace decode-error-offset
+function main
+  invalid bytes = b'a\xff'
+  print; (invalid.decode; utf8)

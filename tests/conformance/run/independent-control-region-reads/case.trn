@@ -1,0 +1,25 @@
+namespace independent-control-region-reads
+from /core/types import int8
+from /core/errors import arithmetic-overflow
+function main
+  across-if int8 = 0
+  if 1 == 1
+    across-if = 1
+  if 1 == 1
+    print; across-if
+  across-loop int8 = 0
+  for first in 'ab'
+    across-loop = 1
+  for second in 'cd'
+    print; across-loop
+  across-catch int8 = 0
+  try
+    across-catch = 7
+    throw arithmetic-overflow
+  catch arithmetic-overflow
+    print; across-catch
+  exclusive int8 = 0
+  if 1 == 1
+    exclusive = 9
+  else
+    print; exclusive

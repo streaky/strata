@@ -364,6 +364,7 @@ backing_object: real - type returns it, 'is a' compares it, identity survives re
 - Type descriptors are semantic objects with stable canonical identity, not ordinary values. Version-one type expressions/coercion destinations must resolve to finite compiler-known descriptor alternatives; lowering may erase the descriptor only when source behavior is unchanged.
 
 Union destinations choose an exact type match first, otherwise the unique arm admitted by contextual constant typing or numeric destination conversion. Multiple admitted arms are a compile-time ambiguity; arm order never decides.
+- `T|none` is a declared type anywhere a source type is accepted: bindings, parameters, and returns. A direct guard `value != none`, `none != value`, or `not (value is a none)` narrows that named binding to `T` in the guarded block; `and`/`or` combinations do not, and assignment invalidates the fact.
 
 ## INTEGER
 
@@ -583,10 +584,19 @@ position_children: start means logical index 0 and end the logical last scalar, 
 position_reason: writing direction is a display property; a string stores none, so left/right belong to a directional text type
 contains: 'text.contains;' anywhere (default) | contains.start | contains.end; all boolean
 contains_v1: exactly start and end; any/all await variadics or collections; 'at' awaits an index-unit decision
-find: separate family returning text-range|none, with find.all and find.count
+find: separate family; default -> text-range|none, find.all -> list of text-range, find.count -> int
+empty_search: contains empty -> true; find empty -> first zero-width grapheme boundary; find.all empty -> every grapheme boundary including both ends; count = graphemes + 1
+literal_search_boundary: non-empty find/contains operate on scalar sequences, not only grapheme boundaries; a match may end inside a grapheme
+trim_modes: default Unicode whitespace; literal argument removes exactly one matching selected prefix/suffix
+case_mapping: upper/lower default, .first, and upper.words are locale-independent Unicode operations; case-fold is explicit and locale-independent
+normalise: explicit nfc/nfd/nfkc/nfkd children
+split_replace: literal, left-to-right, non-overlapping; empty split -> grapheme list without synthetic empties; empty replace -> insert at every grapheme boundary including ends
 family_rule: a family is modes of ONE operation, not a bucket of related operations; group by subject uses a namespace instead
 case_search: no case-insensitive child; apply explicit case-fold to both operands
 regex: never a child of contains; regex stays match/matches; no member dispatches on whether its argument is a pattern object
+string_views: length defaults to graphemes; bytes/scalars/graphemes explicit; text-range retains immutable source with checked byte/scalar/grapheme views
+bytes: immutable octets, distinct from string; b'...' literals; only \\, \', \n, \r, \t, \0, \xHH escapes; iteration -> uint8
+encoding: explicit utf8/utf16-le/utf16-be/utf32-le/utf32-be; encode total; decode validates all input and throws decode-error, never replacement text
 ```
 
 ## OBJECT_MODEL
@@ -746,6 +756,8 @@ Contracts:
 - Development compilation explains lowering/cost/copies/COW/ref/move/foreign transitions.
 - Cache keys include source set, compiler version, target, dependencies, import/modifier plans, build selections, relevant options.
 - Conformance cases are implementation truth. Accepted compile cases compile generated crates; runtime changes execute; generated-Rust goldens reviewed.
+- Source warnings do not fail `check`/`rust`/`build`/`run`; generated/compiler Rust warnings remain denied. Warning conformance files match code, source-relative span, severity, message, order, and multiplicity exactly.
+- Binding usage is indexed once by resolved declaration identity. `W4001`: initialized local value is never read. `W4002`: initial/later store cannot reach a read before definite replacement; conditional stores do not kill incoming values. Parameters and loop targets are excluded from `W4001`; parameter-name linting is deferred to an explicit policy. Lowering consumes warning-only locals so generated Rust stays warning-free.
 - See `docs/compiler-plan.md` for milestone sequencing; do not infer implementation status from this design reference.
 
 ## DIAGNOSTIC HOTSPOTS

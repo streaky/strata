@@ -99,6 +99,7 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
             });
         }
     };
+    emit_warnings(&compilation, &package);
     if command == "rust" {
         print_rust(&compilation);
         return Ok(ExitCode::SUCCESS);
@@ -134,6 +135,22 @@ fn run(arguments: &[OsString]) -> Result<ExitCode, CliFailure> {
     Ok(ExitCode::from(
         u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
     ))
+}
+
+fn emit_warnings(compilation: &terrane_compiler::Compilation, package: &terrane_compiler::Package) {
+    for warning in &compilation.warnings {
+        let source = warning
+            .primary
+            .and_then(|span| {
+                package
+                    .units
+                    .iter()
+                    .find(|unit| unit.source.id() == span.file)
+                    .map(|unit| &unit.source)
+            })
+            .unwrap_or(&compilation.source);
+        eprint!("{}", warning.render(source));
+    }
 }
 
 fn prepare_artifact(
@@ -434,7 +451,7 @@ fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     )?;
     write_if_changed(
         &string.join("Cargo.toml"),
-        b"[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-segmentation = \"1\"\n",
+        b"[package]\nname = \"terrane-string-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nunicode-casefold = \"0.2\"\nunicode-normalization = \"0.1\"\nunicode-segmentation = \"1\"\n",
     )?;
     write_if_changed(
         &string.join("src/lib.rs"),

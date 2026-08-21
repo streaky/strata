@@ -1,0 +1,12 @@
+namespace dominated-store-reads
+from /core/types import int8
+function main
+  nested-value int8 = 0
+  if 1 == 1
+    nested-value = 1
+    if 1 == 1
+      print; nested-value
+  escaping int8 = 0
+  if 1 == 1
+    escaping = 2
+  print; escaping

@@ -1,0 +1,1 @@
+case.trn:23:5: warning[W4002]: value assigned to `exclusive` is never read

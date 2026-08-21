@@ -1,0 +1,5 @@
+namespace checked-div-rem-result
+from /core/types import int8
+function main
+  value int8 = 7
+  print; (value.div-rem.checked; 3)

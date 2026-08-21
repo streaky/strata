@@ -152,7 +152,10 @@ fn prelude_has_exact_ordinary_bindings_and_can_be_disabled() {
     let names = enabled.prelude_bindings.keys().cloned().collect::<Vec<_>>();
     assert_eq!(
         names,
-        ["bool", "bytes", "float", "int", "none", "print", "string"]
+        [
+            "bool", "bytes", "float", "int", "none", "print", "string", "utf16-be", "utf16-le",
+            "utf32-be", "utf32-le", "utf8",
+        ]
     );
 
     let disabled = analyze(&package(false, &[("main.trn", "namespace app\n")])).unwrap();
@@ -238,6 +241,7 @@ fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
         [
             "arithmetic-overflow",
             "coercion-error",
+            "decode-error",
             "division-by-zero",
             "error",
             "integer-conversion-overflow",
@@ -869,10 +873,19 @@ fn records_typed_parameters_defaults_and_return_contracts() {
 
     let contract = &analyzed.units[0].functions[0];
     assert_eq!(contract.name, "connect");
-    assert_eq!(contract.return_type, Some(ScalarType::Bool));
-    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::String));
+    assert_eq!(
+        contract.return_type,
+        Some(ValueType::Scalar(ScalarType::Bool))
+    );
+    assert_eq!(
+        contract.parameters[0].value_type,
+        Some(ValueType::Scalar(ScalarType::String))
+    );
     assert!(!contract.parameters[0].optional);
-    assert_eq!(contract.parameters[1].value_type, Some(ScalarType::Int));
+    assert_eq!(
+        contract.parameters[1].value_type,
+        Some(ValueType::Scalar(ScalarType::Int))
+    );
     assert!(contract.parameters[1].optional);
 }
 
@@ -893,8 +906,14 @@ fn imported_descriptor_aliases_resolve_function_contracts() {
     .unwrap();
 
     let contract = &analyzed.units[0].functions[0];
-    assert_eq!(contract.return_type, Some(ScalarType::Uint8));
-    assert_eq!(contract.parameters[0].value_type, Some(ScalarType::Uint8));
+    assert_eq!(
+        contract.return_type,
+        Some(ValueType::Scalar(ScalarType::Uint8))
+    );
+    assert_eq!(
+        contract.parameters[0].value_type,
+        Some(ValueType::Scalar(ScalarType::Uint8))
+    );
 
     let failure = analyze(&package(
         false,
@@ -1356,7 +1375,7 @@ fn string_length_has_integer_type_and_rejects_other_receivers() {
     assert_eq!(failure.diagnostics[0].code, "T0013");
     assert_eq!(
         failure.diagnostics[0].message,
-        "`.length` requires `string`, found `int`"
+        "`.length` requires `string` or `bytes`, found `int`"
     );
 }
 

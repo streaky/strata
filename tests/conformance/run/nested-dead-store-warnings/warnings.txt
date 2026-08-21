@@ -1,0 +1,2 @@
+case.trn:5:5: warning[W4002]: initial value assigned to `nested` is never read
+case.trn:8:3: warning[W4002]: initial value assigned to `top` is never read

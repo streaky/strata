@@ -1,0 +1,8 @@
+namespace narrowing-after-reassignment
+from /core/types import int8
+function main
+    small int8 = 120
+    result = small.add.checked; 1
+    if result != none
+        result = small.add.checked; 10
+        print; result

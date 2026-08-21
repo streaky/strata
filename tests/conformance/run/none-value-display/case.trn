@@ -1,0 +1,5 @@
+namespace none-value-display
+function main
+  print; none
+  value = none
+  print; value

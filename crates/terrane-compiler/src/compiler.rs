@@ -11,6 +11,7 @@ pub struct Compilation {
     pub source: SourceFile,
     pub rust: String,
     pub rust_files: Vec<RenderedFile>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +95,7 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         .find(|unit| unit.source.id() == entry_span.file)
         .unwrap_or(&semantic.units[0]);
     let source = &unit.source;
+    let warnings = semantics::warnings(&semantic);
     let rust_ir = crate::lowering::lower(&semantic);
     let rust = rust_ir.render();
     let rust_files = rust_ir.render_files();
@@ -101,5 +103,6 @@ pub fn compile_package(package: &Package) -> Result<Compilation, CompilationFail
         source: (*source).clone(),
         rust,
         rust_files,
+        warnings,
     })
 }

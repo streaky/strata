@@ -1,0 +1,6 @@
+namespace result-object-member
+from /core/types import int8
+function main
+  value int8 = 120
+  result = value.add.overflowing; 10
+  print; result.missing

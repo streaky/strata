@@ -1,0 +1,9 @@
+namespace catch-decode-error
+from /core/errors import decode-error
+function main
+  raw = b'\xff'
+  try
+    decoded = raw.decode; utf8
+    print; decoded
+  catch decode-error
+    print; >caught decode

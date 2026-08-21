@@ -18,6 +18,7 @@ pub enum ScalarType {
     Float32,
     Float64,
     String,
+    Bytes,
     None,
 }
 
@@ -87,7 +88,7 @@ const FLOATING_CATEGORIES: &[TypeCategory] = &[
 ];
 
 impl ScalarType {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Bool,
         Self::Int,
         Self::Int8,
@@ -103,10 +104,11 @@ impl ScalarType {
         Self::Float32,
         Self::Float64,
         Self::String,
+        Self::Bytes,
         Self::None,
     ];
 
-    pub const SOURCE_NAMES: [(&'static str, Self); 17] = [
+    pub const SOURCE_NAMES: [(&'static str, Self); 18] = [
         ("bool", Self::Bool),
         ("int", Self::Int),
         ("int8", Self::Int8),
@@ -123,6 +125,7 @@ impl ScalarType {
         ("float32", Self::Float32),
         ("float64", Self::Float64),
         ("string", Self::String),
+        ("bytes", Self::Bytes),
         ("none", Self::None),
     ];
 
@@ -144,6 +147,7 @@ impl ScalarType {
             Self::Float32 => "float32",
             Self::Float64 => "float64",
             Self::String => "string",
+            Self::Bytes => "bytes",
             Self::None => "none",
         }
     }
@@ -168,6 +172,7 @@ impl ScalarType {
             Self::Float64 => Some("f64"),
             Self::Float32 => Some("f32"),
             Self::String => Some("String"),
+            Self::Bytes => Some("Vec<u8>"),
             Self::None => Some("()"),
         }
     }
@@ -199,7 +204,7 @@ impl ScalarType {
                 UNSIGNED_FIXED_CATEGORIES
             }
             Self::Float32 | Self::Float64 => FLOATING_CATEGORIES,
-            Self::Bool | Self::String | Self::None => VALUE_CATEGORIES,
+            Self::Bool | Self::String | Self::Bytes | Self::None => VALUE_CATEGORIES,
         };
         DescriptorSchema { categories }
     }

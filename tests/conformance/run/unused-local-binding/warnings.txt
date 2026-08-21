@@ -1,0 +1,1 @@
+case.trn:3:3: warning[W4001]: binding `unused` is never read

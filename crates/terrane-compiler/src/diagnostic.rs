@@ -5,6 +5,7 @@ use crate::source::{SourceFile, Span};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
     Error,
+    Warning,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +22,16 @@ impl Diagnostic {
     pub fn error(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
         Self {
             severity: Severity::Error,
+            code,
+            message: message.into(),
+            primary: Some(primary),
+            help: None,
+        }
+    }
+    #[must_use]
+    pub fn warning(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
+        Self {
+            severity: Severity::Warning,
             code,
             message: message.into(),
             primary: Some(primary),
@@ -47,10 +58,14 @@ impl Diagnostic {
 
     #[must_use]
     pub fn render(&self, source: &SourceFile) -> String {
+        let severity = match self.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
         let mut rendered = if let Some(primary) = self.primary {
             let (line, column) = source.line_column(primary.start);
             format!(
-                "{}:{}:{}: error[{}]: {}\n",
+                "{}:{}:{}: {severity}[{}]: {}\n",
                 source.path().display(),
                 line,
                 column,
@@ -59,7 +74,7 @@ impl Diagnostic {
             )
         } else {
             format!(
-                "{}: error[{}]: {}\n",
+                "{}: {severity}[{}]: {}\n",
                 source.path().display(),
                 self.code,
                 self.message

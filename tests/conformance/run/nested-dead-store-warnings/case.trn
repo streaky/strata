@@ -1,0 +1,10 @@
+namespace nested-dead-store-warnings
+from /core/types import int8
+function main
+  if 1 == 1
+    nested int8 = 1
+    nested = 2
+    print; nested
+  top int8 = 3
+  top = 4
+  print; top

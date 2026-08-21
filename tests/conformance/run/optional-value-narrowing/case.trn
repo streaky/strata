@@ -1,0 +1,38 @@
+namespace optional-value-narrowing
+from /core/types import int8
+function helper
+    found string = 'shadow'
+    print; found
+function show; value int8|none
+    if value != none
+        print; value
+function maybe int8|none
+    return 4
+function missing int8|none
+    return none
+function main
+    value int8|none = 7
+    if (value) != none
+        print; value
+        value = none
+        print; true
+    if value != none
+        print; value
+    other int8|none = 8
+    if none != (other)
+        print; other
+    show; 9
+    show; none
+    returned = maybe;
+    if returned != none
+        print; returned
+    missingvalue int8|none = none
+    if missingvalue != none
+        print; missingvalue
+    missing;
+    print; true
+    helper;
+    found = 'banana'.find; 'ana'
+    if found != none
+        if found != none
+            print; found.text
