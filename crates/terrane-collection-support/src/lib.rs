@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
-use std::hash::{BuildHasherDefault, Hash};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 
 use terrane_int_support::Int;
@@ -11,19 +12,43 @@ pub enum IterationStep<T> {
     End,
 }
 
-#[derive(Clone, Debug)]
 pub struct Iterator<T> {
-    items: Arc<Vec<T>>,
-    index: usize,
+    next_item: Box<dyn FnMut() -> Option<T>>,
     ended: bool,
 }
 
-impl<T: Clone> Iterator<T> {
+impl<T> fmt::Debug for Iterator<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Iterator")
+            .field("ended", &self.ended)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: 'static> Iterator<T> {
     #[must_use]
     pub fn new(items: Vec<T>) -> Self {
+        let mut items = items.into_iter();
+        Self::from_fn(move || items.next())
+    }
+
+    fn from_arc<S, F>(source: Arc<S>, mut item_at: F) -> Self
+    where
+        S: 'static,
+        F: FnMut(&S, usize) -> Option<T> + 'static,
+    {
+        let mut index = 0;
+        Self::from_fn(move || {
+            let item = item_at(&source, index);
+            index += usize::from(item.is_some());
+            item
+        })
+    }
+
+    fn from_fn(next_item: impl FnMut() -> Option<T> + 'static) -> Self {
         Self {
-            items: Arc::new(items),
-            index: 0,
+            next_item: Box::new(next_item),
             ended: false,
         }
     }
@@ -37,8 +62,7 @@ impl<T: Clone> Iterator<T> {
         if self.ended {
             return IterationStep::End;
         }
-        if let Some(item) = self.items.get(self.index).cloned() {
-            self.index += 1;
+        if let Some(item) = (self.next_item)() {
             IterationStep::Item(item)
         } else {
             self.ended = true;
@@ -48,7 +72,7 @@ impl<T: Clone> Iterator<T> {
 }
 
 pub trait Iterable {
-    type Item: Clone;
+    type Item: Clone + 'static;
     fn terrane_iterator(&self) -> Iterator<Self::Item>;
 }
 
@@ -98,10 +122,12 @@ impl<T: Clone> List<T> {
     }
 }
 
-impl<T: Clone> Iterable for List<T> {
+impl<T: Clone + 'static> Iterable for List<T> {
     type Item = T;
     fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::new(self.0.as_ref().clone())
+        Iterator::from_arc(Arc::clone(&self.0), |items, index| {
+            items.get(index).cloned()
+        })
     }
 }
 
@@ -131,10 +157,12 @@ impl<T> Tuple<T> {
         self.0.get(index).cloned().ok_or(IndexError { index })
     }
 }
-impl<T: Clone> Iterable for Tuple<T> {
+impl<T: Clone + 'static> Iterable for Tuple<T> {
     type Item = T;
     fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::new(self.0.as_ref().clone())
+        Iterator::from_arc(Arc::clone(&self.0), |items, index| {
+            items.get(index).cloned()
+        })
     }
 }
 
@@ -150,7 +178,29 @@ impl<K, V> Entry<K, V> {
     }
 }
 
-type FixedState = BuildHasherDefault<DefaultHasher>;
+#[derive(Clone, Debug)]
+struct StableHasher(u64);
+
+impl Default for StableHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for StableHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+}
+
+type FixedState = BuildHasherDefault<StableHasher>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Map<K: Eq + Hash, V>(Arc<indexmap::IndexMap<K, V, FixedState>>);
@@ -199,15 +249,13 @@ impl<K: Eq + Hash + Clone, V: Clone> Map<K, V> {
         )
     }
 }
-impl<K: Eq + Hash + Clone, V: Clone> Iterable for Map<K, V> {
+impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> Iterable for Map<K, V> {
     type Item = Entry<K, V>;
     fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        Iterator::new(
-            self.0
-                .iter()
+        Iterator::from_arc(Arc::clone(&self.0), |map, index| {
+            map.get_index(index)
                 .map(|(key, value)| Entry::new(key.clone(), value.clone()))
-                .collect(),
-        )
+        })
     }
 }
 
@@ -235,31 +283,60 @@ impl<T: Eq + Hash + Clone> Set<T> {
         Arc::make_mut(&mut self.0).shift_remove(item)
     }
 }
-impl<T: Eq + Hash + Clone> Iterable for Set<T> {
+impl<T: Eq + Hash + Clone + 'static> Iterable for Set<T> {
     type Item = T;
     fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::new(self.0.iter().cloned().collect())
+        Iterator::from_arc(Arc::clone(&self.0), |set, index| {
+            set.get_index(index).cloned()
+        })
+    }
+}
+
+fn stable_hash<T: Hash>(value: &T) -> u64 {
+    let mut hasher = StableHasher::default();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UnorderedMapData<K: Eq + Hash, V> {
+    values: HashMap<K, V, FixedState>,
+    iteration_keys: Vec<K>,
+}
+
+impl<K: Eq + Hash, V> UnorderedMapData<K, V> {
+    fn indexed_value(&self, key: &K) -> &V {
+        self.values.get(key).expect("indexed key must exist")
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnorderedMap<K: Eq + Hash, V>(Arc<HashMap<K, V, FixedState>>);
+pub struct UnorderedMap<K: Eq + Hash, V>(Arc<UnorderedMapData<K, V>>);
+
 impl<K: Eq + Hash + Clone, V: Clone> UnorderedMap<K, V> {
     #[must_use]
     pub fn new(entries: Vec<Entry<K, V>>) -> Self {
-        let mut map = HashMap::with_hasher(FixedState::default());
+        let mut values = HashMap::with_hasher(FixedState::default());
+        let mut iteration_keys = Vec::new();
         for entry in entries {
-            map.insert(entry.key, entry.value);
+            if !values.contains_key(&entry.key) {
+                iteration_keys.push(entry.key.clone());
+            }
+            values.insert(entry.key, entry.value);
         }
-        Self(Arc::new(map))
+        iteration_keys.sort_by_key(stable_hash);
+        Self(Arc::new(UnorderedMapData {
+            values,
+            iteration_keys,
+        }))
     }
     #[must_use]
     pub fn length(&self) -> i128 {
-        self.0.len() as i128
+        self.0.values.len() as i128
     }
     #[must_use]
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.0.get(key)
+        self.0.values.get(key)
     }
     /// Returns the mapped value or an error when the key is absent.
     ///
@@ -269,66 +346,111 @@ impl<K: Eq + Hash + Clone, V: Clone> UnorderedMap<K, V> {
         self.get(key).cloned().ok_or(MissingKey)
     }
     pub fn set(&mut self, key: K, value: V) {
-        Arc::make_mut(&mut self.0).insert(key, value);
+        let data = Arc::make_mut(&mut self.0);
+        if !data.values.contains_key(&key) {
+            data.iteration_keys.push(key.clone());
+            data.iteration_keys.sort_by_key(stable_hash);
+        }
+        data.values.insert(key, value);
     }
     #[must_use]
     pub fn keys(&self) -> List<K> {
-        List::new(self.0.keys().cloned().collect())
+        List::new(self.0.iteration_keys.clone())
     }
     #[must_use]
     pub fn values(&self) -> List<V> {
-        List::new(self.0.values().cloned().collect())
+        List::new(
+            self.0
+                .iteration_keys
+                .iter()
+                .map(|key| self.0.indexed_value(key).clone())
+                .collect(),
+        )
     }
     #[must_use]
     pub fn entries(&self) -> List<Entry<K, V>> {
         List::new(
             self.0
+                .iteration_keys
                 .iter()
-                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
-                .collect(),
-        )
-    }
-}
-impl<K: Eq + Hash + Clone, V: Clone> Iterable for UnorderedMap<K, V> {
-    type Item = Entry<K, V>;
-    fn terrane_iterator(&self) -> Iterator<Self::Item> {
-        Iterator::new(
-            self.0
-                .iter()
-                .map(|(key, value)| Entry::new(key.clone(), value.clone()))
+                .map(|key| Entry::new(key.clone(), self.0.indexed_value(key).clone()))
                 .collect(),
         )
     }
 }
 
+impl<K: Eq + Hash + Clone + 'static, V: Clone + 'static> Iterable for UnorderedMap<K, V> {
+    type Item = Entry<K, V>;
+    fn terrane_iterator(&self) -> Iterator<Self::Item> {
+        Iterator::from_arc(Arc::clone(&self.0), |data, index| {
+            let key = data.iteration_keys.get(index)?;
+            Some(Entry::new(
+                key.clone(),
+                data.values
+                    .get(key)
+                    .expect("indexed key must exist")
+                    .clone(),
+            ))
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnorderedSet<T: Eq + Hash>(Arc<HashSet<T, FixedState>>);
+struct UnorderedSetData<T: Eq + Hash> {
+    values: HashSet<T, FixedState>,
+    iteration_items: Vec<T>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnorderedSet<T: Eq + Hash>(Arc<UnorderedSetData<T>>);
+
 impl<T: Eq + Hash + Clone> UnorderedSet<T> {
     #[must_use]
     pub fn new(items: Vec<T>) -> Self {
-        let mut set = HashSet::with_hasher(FixedState::default());
-        set.extend(items);
-        Self(Arc::new(set))
+        let mut values = HashSet::with_hasher(FixedState::default());
+        let mut iteration_items = Vec::new();
+        for item in items {
+            if values.insert(item.clone()) {
+                iteration_items.push(item);
+            }
+        }
+        iteration_items.sort_by_key(stable_hash);
+        Self(Arc::new(UnorderedSetData {
+            values,
+            iteration_items,
+        }))
     }
     #[must_use]
     pub fn length(&self) -> i128 {
-        self.0.len() as i128
+        self.0.values.len() as i128
     }
     #[must_use]
     pub fn contains(&self, item: &T) -> bool {
-        self.0.contains(item)
+        self.0.values.contains(item)
     }
     pub fn add(&mut self, item: T) {
-        Arc::make_mut(&mut self.0).insert(item);
+        let data = Arc::make_mut(&mut self.0);
+        if data.values.insert(item.clone()) {
+            data.iteration_items.push(item);
+            data.iteration_items.sort_by_key(stable_hash);
+        }
     }
     pub fn remove(&mut self, item: &T) -> bool {
-        Arc::make_mut(&mut self.0).remove(item)
+        let data = Arc::make_mut(&mut self.0);
+        if !data.values.remove(item) {
+            return false;
+        }
+        data.iteration_items.retain(|candidate| candidate != item);
+        true
     }
 }
-impl<T: Eq + Hash + Clone> Iterable for UnorderedSet<T> {
+
+impl<T: Eq + Hash + Clone + 'static> Iterable for UnorderedSet<T> {
     type Item = T;
     fn terrane_iterator(&self) -> Iterator<T> {
-        Iterator::new(self.0.iter().cloned().collect())
+        Iterator::from_arc(Arc::clone(&self.0), |data, index| {
+            data.iteration_items.get(index).cloned()
+        })
     }
 }
 
@@ -369,22 +491,24 @@ impl Range {
 impl Iterable for Range {
     type Item = Int;
     fn terrane_iterator(&self) -> Iterator<Int> {
-        let zero = Int::from(0_i64);
-        let ascending = self.step > zero;
-        if (ascending && self.start > self.end) || (!ascending && self.start < self.end) {
-            return Iterator::new(Vec::new());
-        }
-        let mut values = Vec::new();
+        let end = self.end.clone();
+        let step = self.step.clone();
+        let inclusive = self.inclusive;
         let mut current = self.start.clone();
-        while if ascending {
-            current < self.end || (self.inclusive && current == self.end)
-        } else {
-            current > self.end || (self.inclusive && current == self.end)
-        } {
-            values.push(current.clone());
-            current = current + self.step.clone();
-        }
-        Iterator::new(values)
+        let ascending = step > Int::from(0_i64);
+        Iterator::from_fn(move || {
+            let in_bounds = if ascending {
+                current < end || (inclusive && current == end)
+            } else {
+                current > end || (inclusive && current == end)
+            };
+            if !in_bounds {
+                return None;
+            }
+            let item = current.clone();
+            current = current.clone() + step.clone();
+            Some(item)
+        })
     }
 }
 
@@ -445,6 +569,38 @@ mod tests {
         assert_eq!(iterator.next(), IterationStep::Item(None));
         assert_eq!(iterator.next(), IterationStep::End);
         assert_eq!(iterator.next(), IterationStep::End);
+    }
+
+    #[test]
+    fn stable_hasher_owns_its_algorithm() {
+        let mut hasher = StableHasher::default();
+        hasher.write(b"terrane");
+        assert_eq!(hasher.finish(), 0x3f87_dd9c_872a_eb2c);
+    }
+
+    #[test]
+    fn collection_iteration_does_not_clone_items_before_advancing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug)]
+        struct CountedClone(Arc<AtomicUsize>);
+
+        impl Clone for CountedClone {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Self(Arc::clone(&self.0))
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let list = List::new(vec![
+            CountedClone(Arc::clone(&clones)),
+            CountedClone(Arc::clone(&clones)),
+        ]);
+        let mut iterator = list.terrane_iterator();
+        assert_eq!(clones.load(Ordering::Relaxed), 0);
+        assert!(matches!(iterator.next(), IterationStep::Item(_)));
+        assert_eq!(clones.load(Ordering::Relaxed), 1);
     }
 
     #[test]

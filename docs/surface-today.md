@@ -325,6 +325,25 @@ objects are compiler-owned values; string `.encode` is total for each one. Built
 iteration yields `uint8` values. General bytes indexing and slicing remain deferred until
 the range/index contract is implemented.
 
+### Collection types
+
+The collection constructors also define applied value types for binding annotations, function
+parameters, and function returns:
+
+```text
+list of Item
+map of Key, Value
+set of Item
+tuple of Item
+unordered-map of Key, Value
+unordered-set of Item
+entry of Key, Value
+```
+
+Collection type application is recursive, so an item or value may itself be an applied collection
+type. Map and set keys must be immutable scalar values. A bare constructor name such as `list` is a
+value constructor, not a type: every collection type carries its `of` argument or arguments.
+
 ## Type descriptor objects
 
 Every implemented scalar type has one canonical descriptor object:
