@@ -160,6 +160,10 @@ impl Int {
             Self::Big(value) => value.clone(),
         }
     }
+    #[must_use]
+    pub fn as_usize(&self) -> Option<usize> {
+        self.as_big().to_usize()
+    }
 
     /// Constructs an exact integer from a compiler-validated decimal literal.
     ///

@@ -81,6 +81,7 @@ pub struct SemanticPackage {
 pub enum ElementType {
     Scalar(ScalarType),
     TextRange,
+    Entry(ScalarType, ScalarType),
 }
 
 impl ElementType {
@@ -88,7 +89,23 @@ impl ElementType {
         match self {
             Self::Scalar(ty) => ValueType::Scalar(ty),
             Self::TextRange => ValueType::TextRange,
+            Self::Entry(key, value) => ValueType::Entry(key, value),
         }
+    }
+}
+fn iterable_item_type(value_type: ValueType) -> Option<ValueType> {
+    match value_type {
+        ValueType::Scalar(ScalarType::String) => Some(ValueType::Scalar(ScalarType::String)),
+        ValueType::Scalar(ScalarType::Bytes) => Some(ValueType::Scalar(ScalarType::Uint8)),
+        ValueType::Iterator(item) | ValueType::List(item) | ValueType::Tuple(item, _) => {
+            Some(item.value_type())
+        }
+        ValueType::Set(item) | ValueType::UnorderedSet(item) => Some(ValueType::Scalar(item)),
+        ValueType::Map(key, value) | ValueType::UnorderedMap(key, value) => {
+            Some(ValueType::Entry(key, value))
+        }
+        ValueType::Range => Some(ValueType::Scalar(ScalarType::Int)),
+        _ => None,
     }
 }
 
@@ -106,6 +123,14 @@ pub enum ValueType {
     TextRangeList,
     Iterator(ElementType),
     IterationStep(ElementType),
+    List(ElementType),
+    Map(ScalarType, ScalarType),
+    Set(ScalarType),
+    Tuple(ElementType, usize),
+    Range,
+    Entry(ScalarType, ScalarType),
+    UnorderedMap(ScalarType, ScalarType),
+    UnorderedSet(ScalarType),
     Encoding,
 }
 
@@ -200,6 +225,18 @@ impl std::fmt::Display for ValueType {
             Self::IterationStep(item) => {
                 write!(formatter, "iteration-step of {}", item.value_type())
             }
+            Self::List(item) => write!(formatter, "list of {}", item.value_type()),
+            Self::Map(key, value) => write!(formatter, "map of {key}, {value}"),
+            Self::Set(item) => write!(formatter, "set of {item}"),
+            Self::Tuple(item, length) => {
+                write!(formatter, "tuple of {} ({length} items)", item.value_type())
+            }
+            Self::Range => formatter.write_str("range"),
+            Self::Entry(key, value) => write!(formatter, "entry of {key}, {value}"),
+            Self::UnorderedMap(key, value) => {
+                write!(formatter, "unordered-map of {key}, {value}")
+            }
+            Self::UnorderedSet(item) => write!(formatter, "unordered-set of {item}"),
             Self::Encoding => formatter.write_str("encoding"),
         }
     }
@@ -1844,11 +1881,9 @@ fn validate_call_nodes<'a>(
             active_function,
             scoped_bindings,
         )?;
-        let item_type = match infer_value_type(unit, collection, scoped_bindings)? {
-            Some(ValueType::Scalar(ScalarType::Bytes)) => ValueType::Scalar(ScalarType::Uint8),
-            Some(ValueType::Iterator(item)) => item.value_type(),
-            _ => ValueType::Scalar(ScalarType::String),
-        };
+        let item_type = infer_value_type(unit, collection, scoped_bindings)?
+            .and_then(iterable_item_type)
+            .unwrap_or(ValueType::Scalar(ScalarType::String));
         let mut loop_bindings = scoped_bindings.to_vec();
         loop_bindings.extend(target.children.iter().map(|name| TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
@@ -2391,14 +2426,9 @@ fn collect_typed_bindings(
         && let Some(name) = target.children.first()
     {
         collect_typed_bindings(unit, collection, visible_bindings, bindings)?;
-        let collection_type = infer_value_type(unit, collection, visible_bindings)?;
-        let item_type = match collection_type {
-            Some(ValueType::Scalar(ScalarType::Bytes)) => {
-                ValueType::Scalar(ScalarType::Uint8)
-            }
-            Some(ValueType::Iterator(item)) => item.value_type(),
-            _ => ValueType::Scalar(ScalarType::String),
-        };
+        let item_type = infer_value_type(unit, collection, visible_bindings)?
+            .and_then(iterable_item_type)
+            .unwrap_or(ValueType::Scalar(ScalarType::String));
         let loop_binding = TypedBinding {
             name: node_text(&unit.source, name).to_owned(),
             span: name.span,
@@ -3277,10 +3307,25 @@ fn infer_value_type(
             node.span,
         ));
     }
+    if node.kind == SyntaxKind::IndexExpression {
+        let Some(receiver) = node.children.first() else {
+            return Ok(None);
+        };
+        return match infer_value_type(unit, receiver, bindings)? {
+            Some(ValueType::List(item) | ValueType::Tuple(item, _)) => Ok(Some(item.value_type())),
+            Some(ValueType::Map(_, value) | ValueType::UnorderedMap(_, value)) => {
+                Ok(Some(ValueType::Scalar(value)))
+            }
+            _ => Ok(None),
+        };
+    }
     if node.kind == SyntaxKind::MemberExpression {
         return infer_member_value_type(unit, node, bindings);
     }
     if node.kind == SyntaxKind::CallExpression {
+        if let Some(value_type) = infer_collection_call_type(unit, node, bindings)? {
+            return Ok(Some(value_type));
+        }
         if let Some(value_type) = infer_iterator_call_type(unit, node, bindings)? {
             return Ok(Some(value_type));
         }
@@ -3341,6 +3386,217 @@ fn infer_value_type(
         return Ok(None);
     }
     Ok(None)
+}
+
+fn element_type(
+    unit: &SemanticUnit,
+    value: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<ElementType, SemanticFailure> {
+    match infer_value_type(unit, value, bindings)? {
+        Some(ValueType::Scalar(ty)) => Ok(ElementType::Scalar(ty)),
+        Some(ValueType::TextRange) => Ok(ElementType::TextRange),
+        Some(ValueType::Entry(key, value)) => Ok(ElementType::Entry(key, value)),
+        other => Err(failure(
+            &unit.source,
+            "T0042",
+            format!(
+                "collection items require a stable value type, found {}",
+                other.map_or_else(|| "unknown".to_owned(), |ty| ty.to_string())
+            ),
+            value.span,
+        )),
+    }
+}
+
+fn homogeneous_element_type(
+    unit: &SemanticUnit,
+    arguments: &SyntaxNode,
+    bindings: &[TypedBinding],
+    collection: &str,
+) -> Result<ElementType, SemanticFailure> {
+    let mut item_type = None;
+    for argument in &arguments.children {
+        let value = argument.children.last().unwrap_or(argument);
+        let inferred = element_type(unit, value, bindings)?;
+        if item_type.is_some_and(|existing| existing != inferred) {
+            return Err(failure(
+                &unit.source,
+                "T0042",
+                format!("`{collection}` items must have one statically known type"),
+                value.span,
+            ));
+        }
+        item_type = Some(inferred);
+    }
+    item_type.ok_or_else(|| {
+        failure(
+            &unit.source,
+            "T0042",
+            format!("an empty `{collection}` requires an explicit item type"),
+            arguments.span,
+        )
+    })
+}
+
+fn infer_collection_call_type(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Result<Option<ValueType>, SemanticFailure> {
+    let [callee, arguments] = node.children.as_slice() else {
+        return Ok(None);
+    };
+    if callee.kind == SyntaxKind::MemberExpression
+        && let [receiver, member] = callee.children.as_slice()
+        && node_text(&unit.source, member) == "through"
+        && (resolved_compiler_object_identity(unit, receiver) == Some("/core/collections::range")
+            || (node_text(&unit.source, receiver) == "range"
+                && !bindings.iter().rev().any(|binding| {
+                    binding.name == "range" && binding.span.start <= receiver.span.start
+                })))
+    {
+        return Ok(Some(ValueType::Range));
+    }
+    if callee.kind == SyntaxKind::MemberExpression
+        && let [receiver, member] = callee.children.as_slice()
+        && matches!(
+            node_text(&unit.source, member),
+            "append" | "set" | "add" | "contains" | "remove" | "keys" | "values" | "entries"
+        )
+        && let Some(receiver_type) = infer_value_type(unit, receiver, bindings)?
+    {
+        let member = node_text(&unit.source, member);
+        return Ok(match (receiver_type, member) {
+            (ValueType::List(item), "append" | "set") => Some(ValueType::List(item)),
+            (ValueType::Map(key, value), "set") => Some(ValueType::Map(key, value)),
+            (ValueType::Set(item), "add") => Some(ValueType::Set(item)),
+            (ValueType::Set(_), "contains" | "remove") => Some(ValueType::Scalar(ScalarType::Bool)),
+            (ValueType::Map(key, _), "keys") => Some(ValueType::List(ElementType::Scalar(key))),
+            (ValueType::Map(_, value), "values") => {
+                Some(ValueType::List(ElementType::Scalar(value)))
+            }
+            (ValueType::Map(key, value), "entries") => {
+                Some(ValueType::List(ElementType::Entry(key, value)))
+            }
+            _ => None,
+        });
+    }
+    let identity = resolved_compiler_object_identity(unit, callee);
+    let source_name = node_text(&unit.source, callee);
+    let name = identity
+        .and_then(|identity| identity.strip_prefix("/core/collections::"))
+        .unwrap_or(source_name);
+    let shadowed = bindings
+        .iter()
+        .rev()
+        .any(|binding| binding.name == source_name && binding.span.start <= callee.span.start);
+    if shadowed {
+        return Ok(None);
+    }
+    let result = match name {
+        "list" => ValueType::List(homogeneous_element_type(unit, arguments, bindings, name)?),
+        "tuple" => ValueType::Tuple(
+            homogeneous_element_type(unit, arguments, bindings, name)?,
+            arguments.children.len(),
+        ),
+        "set" => {
+            let ElementType::Scalar(item) =
+                homogeneous_element_type(unit, arguments, bindings, name)?
+            else {
+                return Err(failure(
+                    &unit.source,
+                    "T0042",
+                    "set keys must be immutable scalar values",
+                    arguments.span,
+                ));
+            };
+            ValueType::Set(item)
+        }
+        "unordered-set" => {
+            let ElementType::Scalar(item) =
+                homogeneous_element_type(unit, arguments, bindings, name)?
+            else {
+                return Err(failure(
+                    &unit.source,
+                    "T0042",
+                    "unordered-set keys must be immutable scalar values",
+                    arguments.span,
+                ));
+            };
+            ValueType::UnorderedSet(item)
+        }
+        "entry" => {
+            let [key, value] = arguments.children.as_slice() else {
+                return Err(failure(
+                    &unit.source,
+                    "T0042",
+                    "`entry` requires exactly a key and value",
+                    arguments.span,
+                ));
+            };
+            let ElementType::Scalar(key) =
+                element_type(unit, key.children.last().unwrap_or(key), bindings)?
+            else {
+                return Err(failure(
+                    &unit.source,
+                    "T0042",
+                    "entry keys must be immutable scalar values",
+                    key.span,
+                ));
+            };
+            let ElementType::Scalar(value) =
+                element_type(unit, value.children.last().unwrap_or(value), bindings)?
+            else {
+                return Err(failure(
+                    &unit.source,
+                    "T0042",
+                    "entry values currently require a scalar type",
+                    value.span,
+                ));
+            };
+            ValueType::Entry(key, value)
+        }
+        "map" | "unordered-map" => {
+            let mut value_type = None;
+            for argument in &arguments.children {
+                let value = argument.children.last().unwrap_or(argument);
+                let ElementType::Scalar(inferred) = element_type(unit, value, bindings)? else {
+                    return Err(failure(
+                        &unit.source,
+                        "T0042",
+                        "map values currently require a scalar type",
+                        value.span,
+                    ));
+                };
+                if value_type.is_some_and(|existing| existing != inferred) {
+                    return Err(failure(
+                        &unit.source,
+                        "T0042",
+                        "map values must have one statically known type",
+                        value.span,
+                    ));
+                }
+                value_type = Some(inferred);
+            }
+            let value = value_type.ok_or_else(|| {
+                failure(
+                    &unit.source,
+                    "T0042",
+                    "an empty map requires explicit key and value types",
+                    arguments.span,
+                )
+            })?;
+            if name == "map" {
+                ValueType::Map(ScalarType::String, value)
+            } else {
+                ValueType::UnorderedMap(ScalarType::String, value)
+            }
+        }
+        "range" => ValueType::Range,
+        _ => return Ok(None),
+    };
+    Ok(Some(result))
 }
 
 fn resolved_compiler_object_identity<'a>(
@@ -3445,6 +3701,27 @@ fn infer_member_value_type(
     }
     let member_name = node_text(&unit.source, member);
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    if matches!(
+        receiver_type,
+        Some(
+            ValueType::List(_)
+                | ValueType::Map(_, _)
+                | ValueType::Set(_)
+                | ValueType::Tuple(_, _)
+                | ValueType::UnorderedMap(_, _)
+                | ValueType::UnorderedSet(_)
+        )
+    ) && member_name == "length"
+    {
+        return Ok(Some(ValueType::Scalar(ScalarType::Int)));
+    }
+    if let Some(ValueType::Entry(key, value)) = receiver_type {
+        return Ok(match member_name {
+            "key" => Some(ValueType::Scalar(key)),
+            "value" => Some(ValueType::Scalar(value)),
+            _ => None,
+        });
+    }
     if receiver_type == Some(ValueType::Scalar(ScalarType::String)) {
         let view = match member_name {
             "bytes" => Some(TextUnit::Bytes),
@@ -5388,22 +5665,13 @@ fn validate_flow_statement(
                 validate_bool_condition(unit, &statement.children[1], bindings)?;
             } else if let [target, collection, _block] = statement.children.as_slice() {
                 let collection_type = infer_value_type(unit, collection, bindings)?;
-                let item_type = match collection_type {
-                    Some(ValueType::Scalar(ScalarType::String)) => {
-                        ValueType::Scalar(ScalarType::String)
-                    }
-                    Some(ValueType::Scalar(ScalarType::Bytes)) => {
-                        ValueType::Scalar(ScalarType::Uint8)
-                    }
-                    Some(ValueType::Iterator(item)) => item.value_type(),
-                    _ => {
-                        return Err(failure(
-                            &unit.source,
-                            "T0016",
-                            "collection iteration requires an iterable value",
-                            collection.span,
-                        ));
-                    }
+                let Some(item_type) = collection_type.and_then(iterable_item_type) else {
+                    return Err(failure(
+                        &unit.source,
+                        "T0016",
+                        "collection iteration requires an iterable value",
+                        collection.span,
+                    ));
                 };
                 if target.children.len() != 1 {
                     return Err(failure(
@@ -5826,7 +6094,17 @@ fn bootstrap_namespaces() -> BTreeMap<String, Namespace> {
         "/core/collections".to_owned(),
         namespace_with_objects(
             "/core/collections",
-            ["iterator"],
+            [
+                "iterator",
+                "list",
+                "map",
+                "set",
+                "tuple",
+                "range",
+                "entry",
+                "unordered-map",
+                "unordered-set",
+            ],
             SymbolKind::TypeDescriptor,
         ),
     );
@@ -6520,27 +6798,31 @@ pub(crate) fn binding_span_is_mutated(
         declaration_span: Span,
         node: &SyntaxNode,
     ) -> usize {
-        let writes_here = usize::from(
-            matches!(
-                node.kind,
-                SyntaxKind::Assignment | SyntaxKind::PostfixExpression
-            ) && node.span != declaration_span
-                && node.children.first().is_some_and(|target| {
-                    target.kind == SyntaxKind::Name
-                        && !package.is_lexical_replacement(
-                            unit,
-                            node.span,
-                            node_text(&unit.source, target),
-                        )
-                        && package
-                            .resolve_name_at(
-                                unit,
-                                target.span.start,
-                                node_text(&unit.source, target),
-                            )
-                            .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
-                }),
-        );
+        let resolves_to_binding = |target: &SyntaxNode| {
+            target.kind == SyntaxKind::Name
+                && !package.is_lexical_replacement(unit, node.span, node_text(&unit.source, target))
+                && package
+                    .resolve_name_at(unit, target.span.start, node_text(&unit.source, target))
+                    .is_some_and(|symbol| symbol.declaration_span == Some(declaration_span))
+        };
+        let direct_write = matches!(
+            node.kind,
+            SyntaxKind::Assignment | SyntaxKind::PostfixExpression
+        ) && node.span != declaration_span
+            && node.children.first().is_some_and(resolves_to_binding);
+        let mutator_call = node.kind == SyntaxKind::CallExpression
+            && node.children.first().is_some_and(|callee| {
+                let [receiver, member] = callee.children.as_slice() else {
+                    return false;
+                };
+                callee.kind == SyntaxKind::MemberExpression
+                    && matches!(
+                        node_text(&unit.source, member),
+                        "append" | "set" | "add" | "remove"
+                    )
+                    && resolves_to_binding(receiver)
+            });
+        let writes_here = usize::from(direct_write || mutator_call);
         writes_here
             + node
                 .children

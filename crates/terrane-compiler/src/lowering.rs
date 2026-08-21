@@ -8,10 +8,9 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, ElementType, FunctionContract,
         MemberFamily, SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding,
-        ValueType,
-        binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read, bound_method,
-        contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
-        string_call_selection,
+        ValueType, binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read,
+        bound_method, contextual_constant, narrowed_optional_type, narrowed_value_type,
+        promoted_integer_type, string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -1195,16 +1194,23 @@ impl Emitter<'_> {
                         format!("terrane_collection_support::bytes_iterator(&({collection}))")
                     }
                     Some(ValueType::Iterator(_)) => collection,
-                    _ => format!(
-                        "terrane_collection_support::string_iterator(&({collection}))"
+                    Some(
+                        ValueType::List(_)
+                        | ValueType::Map(_, _)
+                        | ValueType::Set(_)
+                        | ValueType::Tuple(_, _)
+                        | ValueType::Range
+                        | ValueType::UnorderedMap(_, _)
+                        | ValueType::UnorderedSet(_),
+                    ) => format!(
+                        "terrane_collection_support::Iterable::terrane_iterator(&({collection}))"
                     ),
+                    _ => format!("terrane_collection_support::string_iterator(&({collection}))"),
                 };
                 self.line(&format!("let mut {iterator} = {constructor};"));
                 self.line("loop {");
                 self.indent += 1;
-                self.line(&format!(
-                    "let {mutable}{name} = match {iterator}.next() {{"
-                ));
+                self.line(&format!("let {mutable}{name} = match {iterator}.next() {{"));
                 self.indent += 1;
                 self.line("terrane_collection_support::IterationStep::Item(item) => item,");
                 self.line("terrane_collection_support::IterationStep::End => break,");
@@ -1270,6 +1276,7 @@ impl Emitter<'_> {
             SyntaxKind::BinaryExpression => self.binary(node),
             SyntaxKind::TypeMembershipExpression => self.type_membership(node),
             SyntaxKind::MemberExpression => self.member(node),
+            SyntaxKind::IndexExpression => self.index(node),
             SyntaxKind::CallExpression => self.call(node),
             SyntaxKind::PostfixExpression => node
                 .children
@@ -1337,6 +1344,18 @@ impl Emitter<'_> {
                     && self.lazy_namespace_binding_type(node).is_some() =>
             {
                 format!("(*{}).clone()", self.namespace_name(node))
+            }
+            ValueType::List(_)
+            | ValueType::Map(_, _)
+            | ValueType::Set(_)
+            | ValueType::Tuple(_, _)
+            | ValueType::Range
+            | ValueType::Entry(_, _)
+            | ValueType::UnorderedMap(_, _)
+            | ValueType::UnorderedSet(_)
+                if node.kind == SyntaxKind::Name =>
+            {
+                format!("({}).clone()", self.expression(node))
             }
             _ => self.expression(node),
         }
@@ -1789,6 +1808,36 @@ impl Emitter<'_> {
         })
     }
 
+    fn index(&mut self, node: &SyntaxNode) -> String {
+        let [receiver, index] = node.children.as_slice() else {
+            return String::new();
+        };
+        let receiver_type = self.value_type(receiver);
+        let receiver = self.expression(receiver);
+        match receiver_type {
+            Some(ValueType::List(_) | ValueType::Tuple(_, _)) => {
+                let index = if self.value_type(index) == Some(ValueType::Scalar(ScalarType::Int)) {
+                    let index_value = self.expression_as(index, ValueType::Scalar(ScalarType::Int));
+                    format!(
+                        "({index_value}).as_usize().expect(\"index-error: index is outside usize\")"
+                    )
+                } else {
+                    format!("({}) as usize", self.expression(index))
+                };
+                format!(
+                    "({receiver}).get({index}).cloned().expect(\"index-error: index is out of range\")"
+                )
+            }
+            Some(ValueType::Map(key, _) | ValueType::UnorderedMap(key, _)) => {
+                let index_value = self.expression_as(index, ValueType::Scalar(key));
+                format!(
+                    "({receiver}).get(&({index_value})).cloned().expect(\"missing-key: key is absent\")"
+                )
+            }
+            _ => String::new(),
+        }
+    }
+
     fn member(&mut self, node: &SyntaxNode) -> String {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
@@ -1857,8 +1906,20 @@ impl Emitter<'_> {
                     | ValueType::StringList
                     | ValueType::TextRangeList,
                 ) => format!("({receiver}).len() as i128"),
+                Some(
+                    ValueType::List(_)
+                    | ValueType::Map(_, _)
+                    | ValueType::Set(_)
+                    | ValueType::Tuple(_, _),
+                ) => format!("terrane_int_support::Int::from(({receiver}).length())"),
                 _ => format!("terrane_string_support::length(&{receiver}) as i128"),
             },
+            "key" if matches!(receiver_type, Some(ValueType::Entry(_, _))) => {
+                format!("({receiver}).key.clone()")
+            }
+            "value" if matches!(receiver_type, Some(ValueType::Entry(_, _))) => {
+                format!("({receiver}).value.clone()")
+            }
             "type" => "()".to_owned(),
             mode @ ("round" | "floor" | "ceiling" | "truncate")
                 if matches!(
@@ -1896,6 +1957,53 @@ impl Emitter<'_> {
         };
         if let Some(string_call) = self.string_call(node, arguments) {
             return string_call;
+        }
+        if callee.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = callee.children.as_slice()
+            && let Some(receiver_type) = self.value_type(receiver)
+        {
+            let receiver_value = self.expression(receiver);
+            let member_name = self.text(member).to_owned();
+            let values = arguments
+                .children
+                .iter()
+                .map(|argument| argument.children.last().unwrap_or(argument))
+                .collect::<Vec<_>>();
+            let call = match (receiver_type, member_name.as_str()) {
+                (ValueType::List(item), "append") => Some(format!(
+                    "({receiver_value}).append({})",
+                    self.expression_as(values[0], item.value_type())
+                )),
+                (ValueType::List(item), "set") => Some(format!(
+                    "({receiver_value}).set(({}).as_usize().expect(\"index-error\"), {}).expect(\"index-error\")",
+                    self.expression_as(values[0], ValueType::Scalar(ScalarType::Int)),
+                    self.expression_as(values[1], item.value_type())
+                )),
+                (ValueType::Map(key, value), "set") => Some(format!(
+                    "({receiver_value}).set({}, {})",
+                    self.expression_as(values[0], ValueType::Scalar(key)),
+                    self.expression_as(values[1], ValueType::Scalar(value))
+                )),
+                (ValueType::Set(item), "contains") => Some(format!(
+                    "({receiver_value}).contains(&({}))",
+                    self.expression_as(values[0], ValueType::Scalar(item))
+                )),
+                (ValueType::Set(item), "add") => Some(format!(
+                    "({receiver_value}).add({})",
+                    self.expression_as(values[0], ValueType::Scalar(item))
+                )),
+                (ValueType::Set(item), "remove") => Some(format!(
+                    "({receiver_value}).remove(&({}))",
+                    self.expression_as(values[0], ValueType::Scalar(item))
+                )),
+                (ValueType::Map(_, _), "keys" | "values" | "entries") => {
+                    Some(format!("({receiver_value}).{member_name}()"))
+                }
+                _ => None,
+            };
+            if let Some(call) = call {
+                return call;
+            }
         }
         if let Some(method) = bound_method(self.source, callee) {
             let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
@@ -1985,6 +2093,132 @@ impl Emitter<'_> {
                 rust_element_type(item_type),
                 values.join(", ")
             );
+        }
+        if let Some(value_type) = self.value_type(node) {
+            let constructor = match value_type {
+                ValueType::List(item) if self.is_builtin(callee, "/core/collections::list") => {
+                    Some(("List", item))
+                }
+                ValueType::Tuple(item, _)
+                    if self.is_builtin(callee, "/core/collections::tuple") =>
+                {
+                    Some(("Tuple", item))
+                }
+                ValueType::Set(item) if self.is_builtin(callee, "/core/collections::set") => {
+                    Some(("Set", ElementType::Scalar(item)))
+                }
+                ValueType::UnorderedSet(item)
+                    if self.is_builtin(callee, "/core/collections::unordered-set") =>
+                {
+                    Some(("UnorderedSet", ElementType::Scalar(item)))
+                }
+                _ => None,
+            };
+            if let Some((kind, item)) = constructor {
+                let values = arguments
+                    .children
+                    .iter()
+                    .map(|argument| argument.children.last().unwrap_or(argument))
+                    .map(|value| self.expression_as(value, item.value_type()))
+                    .collect::<Vec<_>>();
+                return format!(
+                    "terrane_collection_support::{kind}::<{}>::new(vec![{}])",
+                    rust_element_type(item),
+                    values.join(", ")
+                );
+            }
+            if let ValueType::Entry(key, value) = value_type
+                && self.is_builtin(callee, "/core/collections::entry")
+            {
+                let values = [
+                    self.expression_as(
+                        arguments.children[0]
+                            .children
+                            .last()
+                            .unwrap_or(&arguments.children[0]),
+                        ValueType::Scalar(key),
+                    ),
+                    self.expression_as(
+                        arguments.children[1]
+                            .children
+                            .last()
+                            .unwrap_or(&arguments.children[1]),
+                        ValueType::Scalar(value),
+                    ),
+                ];
+                return format!(
+                    "terrane_collection_support::Entry::<{}, {}>::new({}, {})",
+                    rust_type(key),
+                    rust_type(value),
+                    values[0],
+                    values[1]
+                );
+            }
+            if matches!(
+                value_type,
+                ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)
+            ) {
+                let (kind, key, value) = match value_type {
+                    ValueType::Map(key, value) => ("Map", key, value),
+                    ValueType::UnorderedMap(key, value) => ("UnorderedMap", key, value),
+                    _ => unreachable!(),
+                };
+                let identity = format!(
+                    "/core/collections::{}",
+                    if kind == "Map" {
+                        "map"
+                    } else {
+                        "unordered-map"
+                    }
+                );
+                if self.is_builtin(callee, &identity) {
+                    let entries = arguments
+                        .children
+                        .iter()
+                        .map(|argument| {
+                            let name = argument
+                                .children
+                                .first()
+                                .map(|name| self.text(name).to_owned())
+                                .expect("validated named map entry");
+                            let value_node = argument.children.last().unwrap_or(argument);
+                            let value =
+                                self.expression_as(value_node, ValueType::Scalar(value));
+                            format!(
+                                "terrane_collection_support::Entry::new(String::from({name:?}), {value})"
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    return format!(
+                        "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
+                        rust_type(key),
+                        rust_type(value),
+                        entries.join(", ")
+                    );
+                }
+            }
+            if value_type == ValueType::Range {
+                let through = callee.kind == SyntaxKind::MemberExpression
+                    && callee.children.first().is_some_and(|receiver| {
+                        self.is_builtin(receiver, "/core/collections::range")
+                    });
+                if through || self.is_builtin(callee, "/core/collections::range") {
+                    let mut values = arguments
+                        .children
+                        .iter()
+                        .map(|argument| argument.children.last().unwrap_or(argument))
+                        .map(|value| self.expression_as(value, ValueType::Scalar(ScalarType::Int)))
+                        .collect::<Vec<_>>();
+                    if values.len() == 2 {
+                        values.push("terrane_int_support::Int::from(1_i64)".to_owned());
+                    }
+                    let method = if through { "through" } else { "new" };
+                    return format!(
+                        "terrane_collection_support::Range::{method}({}, {}, {}).expect(\"range step must be non-zero\")",
+                        values[0], values[1], values[2]
+                    );
+                }
+            }
         }
         let mut values = arguments
             .children
@@ -2959,9 +3193,13 @@ fn rust_element_type(ty: ElementType) -> String {
     match ty {
         ElementType::Scalar(scalar) => rust_type(scalar).to_owned(),
         ElementType::TextRange => "terrane_string_support::TextRange".to_owned(),
+        ElementType::Entry(key, value) => format!(
+            "terrane_collection_support::Entry<{}, {}>",
+            rust_type(key),
+            rust_type(value)
+        ),
     }
 }
-
 
 fn rust_value_type(ty: ValueType) -> String {
     match ty {
@@ -2989,6 +3227,43 @@ fn rust_value_type(ty: ValueType) -> String {
             format!(
                 "terrane_collection_support::IterationStep<{}>",
                 rust_element_type(item)
+            )
+        }
+        ValueType::List(item) => {
+            format!(
+                "terrane_collection_support::List<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::Map(key, value) => format!(
+            "terrane_collection_support::Map<{}, {}>",
+            rust_type(key),
+            rust_type(value)
+        ),
+        ValueType::Set(item) => {
+            format!("terrane_collection_support::Set<{}>", rust_type(item))
+        }
+        ValueType::Tuple(item, _) => {
+            format!(
+                "terrane_collection_support::Tuple<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::Range => "terrane_collection_support::Range".to_owned(),
+        ValueType::Entry(key, value) => format!(
+            "terrane_collection_support::Entry<{}, {}>",
+            rust_type(key),
+            rust_type(value)
+        ),
+        ValueType::UnorderedMap(key, value) => format!(
+            "terrane_collection_support::UnorderedMap<{}, {}>",
+            rust_type(key),
+            rust_type(value)
+        ),
+        ValueType::UnorderedSet(item) => {
+            format!(
+                "terrane_collection_support::UnorderedSet<{}>",
+                rust_type(item)
             )
         }
         ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
