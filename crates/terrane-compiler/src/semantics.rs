@@ -1832,7 +1832,13 @@ fn validate_call_nodes<'a>(
         }
     }
     if node.kind == SyntaxKind::CallExpression {
-        infer_value_type(unit, node, scoped_bindings)?;
+        let inferred = infer_value_type(unit, node, scoped_bindings)?;
+        if inferred.is_none()
+            && let Some(callee) = node.children.first()
+            && callee.kind == SyntaxKind::MemberExpression
+        {
+            infer_member_value_type(unit, callee, scoped_bindings)?;
+        }
     }
     if node.kind == SyntaxKind::CallExpression
         && let [callee, arguments] = node.children.as_slice()
@@ -4168,17 +4174,16 @@ fn infer_member_value_type(
             "add" | "contains" | "remove"
         )
     );
-    let string_method = match &receiver_type {
-        Some(ValueType::Scalar(ScalarType::String)) => {
-            StringFamily::from_source_name(member_name).is_some()
-                || matches!(member_name, "concat" | "join")
-        }
-        Some(ValueType::Scalar(ScalarType::Bytes)) => member_name == "decode",
-        _ => false,
-    };
-    if collection_method || string_method {
+    let string_method = matches!(&receiver_type, Some(ValueType::Scalar(ScalarType::String)))
+        && (StringFamily::from_source_name(member_name).is_some()
+            || matches!(member_name, "concat" | "join"));
+    let bytes_method = matches!(&receiver_type, Some(ValueType::Scalar(ScalarType::Bytes)))
+        && member_name == "decode";
+    if collection_method || string_method || bytes_method {
         let family = if string_method {
             "string methods"
+        } else if bytes_method {
+            "bytes methods"
         } else {
             "collection methods"
         };
@@ -4276,8 +4281,19 @@ fn infer_member_value_type(
             receiver.span,
         ));
     }
-    if member_name != "length" {
+    if member_name == "type" {
         return Ok(None);
+    }
+    if member_name != "length" {
+        return match receiver_type {
+            Some(receiver_type) => Err(failure(
+                &unit.source,
+                "T0031",
+                format!("`{receiver_type}` has no member `.{member_name}`"),
+                member.span,
+            )),
+            None => Ok(None),
+        };
     }
     let receiver_type = infer_value_type(unit, receiver, bindings)?;
     if matches!(

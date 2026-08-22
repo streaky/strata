@@ -1580,7 +1580,7 @@ fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
                 "function consume; item\n",
                 "function main\n",
                 "  text = 'hello'\n",
-                "  text.clear;\n",
+                "  text.trim;\n",
                 "  consume; renderer\n",
                 "  renderer;\n",
             ),
