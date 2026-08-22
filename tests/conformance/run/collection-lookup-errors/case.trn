@@ -1,0 +1,19 @@
+namespace collection-lookup-errors
+from /core/collections import list, map
+from /core/errors import index-error, missing-key
+function main
+  values = list; 1
+  try
+    print; values[2]
+  catch index-error
+    print; 'index'
+  checked-index = values.get.checked; 2
+  print; checked-index == none
+  values-by-key = map; present=1
+  try
+    print; values-by-key['absent']
+  catch missing-key
+    print; 'missing'
+  checked-key = values-by-key.get.checked; 'absent'
+  present-key = values-by-key.get.checked; 'present'
+  print; checked-key == none, present-key != none

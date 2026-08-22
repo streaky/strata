@@ -1,0 +1,7 @@
+namespace collection-member-assignment-type
+from /core/collections import list, map
+function main
+  groups map of string, list of string = map; first=(list; 'a')
+  items list of int = list; 1
+  for entry in groups
+    items = entry.value

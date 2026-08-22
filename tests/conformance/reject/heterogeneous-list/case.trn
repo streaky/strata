@@ -1,0 +1,5 @@
+namespace heterogeneous-list
+from /core/collections import list
+function main
+  values = list; 1, 'two'
+  print; values.length

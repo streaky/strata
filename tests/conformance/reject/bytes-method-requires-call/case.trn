@@ -1,0 +1,4 @@
+namespace bytes-method-requires-call
+function main
+  data bytes = b'hello'
+  decoded string = data.decode

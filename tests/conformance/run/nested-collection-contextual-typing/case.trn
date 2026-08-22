@@ -1,0 +1,6 @@
+namespace nested-collection-contextual-typing
+from /core/collections import list
+from /core/output import print
+function main
+  outer list of list of int8 = list; (list; 5, 6)
+  print; outer[0][1]

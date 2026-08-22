@@ -244,7 +244,9 @@ fn core_error_registry_distinguishes_the_interface_and_mandated_objects() {
             "decode-error",
             "division-by-zero",
             "error",
+            "index-error",
             "integer-conversion-overflow",
+            "missing-key",
             "negative-shift-count",
         ]
     );
@@ -1062,7 +1064,7 @@ fn untyped_assignment_preserves_the_existing_lexical_binding_type() {
         bindings
             .iter()
             .filter(|binding| binding.name == "value")
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .collect::<Vec<_>>(),
         [ValueType::Scalar(ScalarType::Int8)]
     );
@@ -1124,6 +1126,7 @@ fn types_canonical_integer_coercion_family() {
             .find(|binding| binding.name == name)
             .unwrap()
             .value_type
+            .clone()
     };
 
     assert_eq!(type_of("exact"), ValueType::Scalar(ScalarType::Int16));
@@ -1375,7 +1378,7 @@ fn string_length_has_integer_type_and_rejects_other_receivers() {
     assert_eq!(failure.diagnostics[0].code, "T0013");
     assert_eq!(
         failure.diagnostics[0].message,
-        "`.length` requires `string` or `bytes`, found `int`"
+        "`.length` requires `string`, `bytes`, or a collection, found `int`"
     );
 }
 
@@ -1577,7 +1580,7 @@ fn preserves_calls_member_access_and_dot_objects_as_distinct_forms() {
                 "function consume; item\n",
                 "function main\n",
                 "  text = 'hello'\n",
-                "  text.clear;\n",
+                "  text.trim;\n",
                 "  consume; renderer\n",
                 "  renderer;\n",
             ),
@@ -1798,6 +1801,26 @@ fn rejects_extracted_string_methods_as_values() {
                 .message
                 .contains("string methods are not storable values")
         );
+    }
+}
+
+#[test]
+fn collection_constructor_mismatches_name_the_destination_position() {
+    for (source, position) in [
+        (
+            "namespace app\nfrom /core/collections import list\nfunction main\n  values list of int8 = list; 1, 'wrong'\n",
+            "values item 2",
+        ),
+        (
+            "namespace app\nfrom /core/collections import map\nfunction main\n  values map of string, int = map; first='wrong'\n",
+            "values entry 1 value",
+        ),
+    ] {
+        let failure = analyze(&package(false, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "T0002");
+        assert!(diagnostic.message.contains(position), "{source}");
+        assert!(!diagnostic.message.contains("collection item"), "{source}");
     }
 }
 

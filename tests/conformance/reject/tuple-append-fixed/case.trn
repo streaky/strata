@@ -1,0 +1,5 @@
+namespace tuple-append-fixed
+from /core/collections import tuple
+function main
+  pair tuple of int = tuple; 1, 2
+  pair.append; 3

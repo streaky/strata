@@ -1,0 +1,6 @@
+namespace heterogeneous-iterator
+from /core/collections import iterator
+function main
+  values = iterator; 1, 'two'
+  for value in values
+    print; value

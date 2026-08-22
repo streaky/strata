@@ -1,0 +1,4 @@
+namespace entry-constructor-too-many
+from /core/collections import entry
+function main
+  pair entry of string, int8 = entry; key='a', value=6, extra=7

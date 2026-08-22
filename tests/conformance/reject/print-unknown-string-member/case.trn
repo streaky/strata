@@ -1,0 +1,5 @@
+namespace print-unknown-string-member
+from /core/output import print
+function main
+  text string = 'alpha'
+  print; (text.starts-with; 'a')

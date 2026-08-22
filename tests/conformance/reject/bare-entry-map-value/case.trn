@@ -1,0 +1,4 @@
+namespace bare-entry-map-value
+from /core/collections import map, entry
+function main
+  values map of string, entry of string, int8 = map; a=entry

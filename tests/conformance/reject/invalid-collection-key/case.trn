@@ -1,0 +1,5 @@
+namespace invalid-collection-key
+from /core/collections import set, list
+function main
+  values = set; (list; 1)
+  print; values.length

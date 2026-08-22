@@ -393,6 +393,7 @@ fn write_generated_crate(
         .map_err(|error| CliFailure::backend(format!("cannot create generated crate: {error}")))?;
     let manifest = "[package]\nname = \"terrane_program\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
         [dependencies]\nterrane-int-support = { path = \"support/terrane-int-support\" }\n\
+        terrane-collection-support = { path = \"support/terrane-collection-support\" }\n\
         terrane-scalar-support = { path = \"support/terrane-scalar-support\" }\n\
         terrane-string-support = { path = \"support/terrane-string-support\" }\n\n[workspace]\n";
     write_if_changed(&directory.join("Cargo.toml"), manifest.as_bytes()).map_err(|error| {
@@ -428,14 +429,24 @@ fn write_generated_crate(
 
 fn write_generated_support(directory: &Path) -> std::io::Result<()> {
     let int = directory.join("support/terrane-int-support");
+    let collection = directory.join("support/terrane-collection-support");
     let scalar = directory.join("support/terrane-scalar-support");
     let string = directory.join("support/terrane-string-support");
     fs::create_dir_all(int.join("src"))?;
+    fs::create_dir_all(collection.join("src"))?;
     fs::create_dir_all(scalar.join("src"))?;
     fs::create_dir_all(string.join("src"))?;
     write_if_changed(
         &int.join("Cargo.toml"),
-        b"[package]\nname = \"terrane-int-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nnum-bigint = \"0.4\"\nnum-integer = \"0.1\"\nnum-traits = \"0.2\"\n",
+        b"[package]\nname = \"terrane-int-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nnum-bigint = { version = \"0.4\", features = [\"std\"] }\nnum-integer = \"0.1\"\nnum-traits = \"0.2\"\n",
+    )?;
+    write_if_changed(
+        &collection.join("Cargo.toml"),
+        b"[package]\nname = \"terrane-collection-support\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nindexmap = \"2\"\nterrane-int-support = { path = \"../terrane-int-support\" }\nunicode-segmentation = \"1\"\n",
+    )?;
+    write_if_changed(
+        &collection.join("src/lib.rs"),
+        include_bytes!("../../terrane-collection-support/src/lib.rs"),
     )?;
     write_if_changed(
         &int.join("src/lib.rs"),

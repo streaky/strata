@@ -26,6 +26,9 @@ function main
     returned = maybe;
     if returned != none
         print; returned
+    called int8|none = maybe;
+    if called != none
+        print; called
     missingvalue int8|none = none
     if missingvalue != none
         print; missingvalue

@@ -7,6 +7,8 @@ IntegerConversionOverflow,
 NegativeShiftCount,
 CoercionError,
 DecodeError,
+IndexError,
+MissingKey,
 ResourceError,
 SourceError,
 }
@@ -19,6 +21,8 @@ match name {
 ".negative-shift-count" => Self::NegativeShiftCount,
 ".coercion-error" => Self::CoercionError,
 ".decode-error" => Self::DecodeError,
+".index-error" => Self::IndexError,
+".missing-key" => Self::MissingKey,
 ".resource-error" => Self::ResourceError,
 _ => Self::SourceError,
 }
@@ -31,6 +35,8 @@ Self::IntegerConversionOverflow => ".integer-conversion-overflow",
 Self::NegativeShiftCount => ".negative-shift-count",
 Self::CoercionError => ".coercion-error",
 Self::DecodeError => ".decode-error",
+Self::IndexError => ".index-error",
+Self::MissingKey => ".missing-key",
 Self::ResourceError => ".resource-error",
 Self::SourceError => ".error",
 }
@@ -80,6 +86,21 @@ fn from(error: terrane_string_support::DecodeError) -> Self {
 Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(".decode-error: "))
 }
 }
+impl From<terrane_collection_support::IndexError> for TerraneError {
+fn from(error: terrane_collection_support::IndexError) -> Self {
+Self::new(TerraneErrorKind::IndexError, error.to_string())
+}
+}
+impl From<terrane_collection_support::MissingKey> for TerraneError {
+fn from(error: terrane_collection_support::MissingKey) -> Self {
+Self::new(TerraneErrorKind::MissingKey, error.to_string())
+}
+}
+impl From<terrane_collection_support::RangeStepError> for TerraneError {
+fn from(error: terrane_collection_support::RangeStepError) -> Self {
+Self::new(TerraneErrorKind::SourceError, error.to_string())
+}
+}
 fn __terrane_uncaught(error: TerraneError) -> ! {
 eprintln!("{}", error.render());
 std::process::exit(1);
@@ -107,11 +128,21 @@ fn main() {
         println!("{}", terrane_scalar_support::scalar_text(&(across_if)));
     }
     let mut across_loop: i8 = 0;
-    for first in terrane_string_support::graphemes(&String::from("ab")) {
+    let mut __terrane_iterator_0 = terrane_collection_support::string_iterator(&(String::from("ab")));
+    loop {
+        let first = match __terrane_iterator_0.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         let _ = &first;
         across_loop = 1;
     }
-    for second in terrane_string_support::graphemes(&String::from("cd")) {
+    let mut __terrane_iterator_1 = terrane_collection_support::string_iterator(&(String::from("cd")));
+    loop {
+        let second = match __terrane_iterator_1.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         let _ = &second;
         println!("{}", terrane_scalar_support::scalar_text(&(across_loop)));
     }

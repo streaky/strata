@@ -1,0 +1,5 @@
+namespace tuple-item-type-mismatch
+from /core/collections import tuple
+function main
+  values tuple of int = tuple; 'one', 'two'
+  print; values.length

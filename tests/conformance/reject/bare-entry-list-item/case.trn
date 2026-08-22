@@ -1,0 +1,4 @@
+namespace bare-entry-list-item
+from /core/collections import list, entry
+function main
+  values list of entry of string, int8 = list; entry

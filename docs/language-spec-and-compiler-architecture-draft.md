@@ -2202,10 +2202,11 @@ function parse int|parse-error; source string
 
 A function may return `none` explicitly or implicitly at the end of its body.
 
-Multiple logical results should normally be returned as an object or tuple:
+Multiple logical results should normally be returned as an object. A homogeneous tuple is also
+appropriate when every result has the same item type:
 
 ```terrane
-return tuple; value, error
+return tuple; minimum, maximum
 ```
 
 rather than inventing a second assignment protocol.
@@ -2578,7 +2579,10 @@ unique = set; a, b, c
 pair = tuple; first, second
 ```
 
-Tuples are fixed-length value objects.
+Tuples are fixed-length homogeneous value objects. Their applied type is `tuple of Item`; the
+runtime length is not part of the type, so tuples of the same item type may cross the same binding,
+parameter, and return boundaries even when their lengths differ. Tuple length cannot change after
+construction.
 
 Lists, maps, and sets are value-semantic copy-on-write objects by default.
 

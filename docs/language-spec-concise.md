@@ -547,6 +547,7 @@ inference: permitted for private functions; exported functions declare their pub
 Core environment should provide object protocols/facilities for list, map, set, tuple, range, entry; import them explicitly from standard namespaces unless prelude changes normatively.
 
 - List construction uses ordinary invocation; maps use named construction arguments; sets/tuples likewise object facilities.
+- Tuple type application is `tuple of Item`; tuples are homogeneous and fixed-length after construction, but runtime length is not part of the type.
 - Indexing: `value[index]`; slices/ranges are objects.
 - `for x in y` invokes iteration protocol.
 - `string` is Unicode text/UTF-8; default length is grapheme count and requires capability.

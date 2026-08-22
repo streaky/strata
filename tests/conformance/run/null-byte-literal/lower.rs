@@ -7,6 +7,8 @@ IntegerConversionOverflow,
 NegativeShiftCount,
 CoercionError,
 DecodeError,
+IndexError,
+MissingKey,
 ResourceError,
 SourceError,
 }
@@ -19,6 +21,8 @@ match name {
 ".negative-shift-count" => Self::NegativeShiftCount,
 ".coercion-error" => Self::CoercionError,
 ".decode-error" => Self::DecodeError,
+".index-error" => Self::IndexError,
+".missing-key" => Self::MissingKey,
 ".resource-error" => Self::ResourceError,
 _ => Self::SourceError,
 }
@@ -31,6 +35,8 @@ Self::IntegerConversionOverflow => ".integer-conversion-overflow",
 Self::NegativeShiftCount => ".negative-shift-count",
 Self::CoercionError => ".coercion-error",
 Self::DecodeError => ".decode-error",
+Self::IndexError => ".index-error",
+Self::MissingKey => ".missing-key",
 Self::ResourceError => ".resource-error",
 Self::SourceError => ".error",
 }
@@ -80,6 +86,21 @@ fn from(error: terrane_string_support::DecodeError) -> Self {
 Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(".decode-error: "))
 }
 }
+impl From<terrane_collection_support::IndexError> for TerraneError {
+fn from(error: terrane_collection_support::IndexError) -> Self {
+Self::new(TerraneErrorKind::IndexError, error.to_string())
+}
+}
+impl From<terrane_collection_support::MissingKey> for TerraneError {
+fn from(error: terrane_collection_support::MissingKey) -> Self {
+Self::new(TerraneErrorKind::MissingKey, error.to_string())
+}
+}
+impl From<terrane_collection_support::RangeStepError> for TerraneError {
+fn from(error: terrane_collection_support::RangeStepError) -> Self {
+Self::new(TerraneErrorKind::SourceError, error.to_string())
+}
+}
 fn __terrane_uncaught(error: TerraneError) -> ! {
 eprintln!("{}", error.render());
 std::process::exit(1);
@@ -100,7 +121,12 @@ Continue,
 // Namespace: null-byte-literal
 fn main() {
     let raw: Vec<u8> = Vec::from([97, 0, 99]);
-    for byte in (raw).iter().copied() {
+    let mut __terrane_iterator_0 = terrane_collection_support::bytes_iterator(&(raw));
+    loop {
+        let byte = match __terrane_iterator_0.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
         println!("{}", terrane_scalar_support::scalar_text(&(byte)));
     }
     println!("{}{}", terrane_scalar_support::scalar_text(&((raw).len() as i128)), terrane_scalar_support::scalar_text(&((terrane_string_support::decode(&(raw), terrane_string_support::Encoding::Utf8)).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/null-byte-literal::main (case.trn:6:23)"))))));

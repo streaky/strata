@@ -6,7 +6,7 @@ use num_bigint::BigInt;
 use num_traits::{FromPrimitive, ToPrimitive};
 
 /// Exact Terrane `int`, normalized to the smallest representation after every operation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Int {
     Small(i64),
     Wide(i128),
@@ -159,6 +159,10 @@ impl Int {
             Self::Wide(value) => BigInt::from(*value),
             Self::Big(value) => value.clone(),
         }
+    }
+    #[must_use]
+    pub fn as_usize(&self) -> Option<usize> {
+        self.as_big().to_usize()
     }
 
     /// Constructs an exact integer from a compiler-validated decimal literal.

@@ -36,6 +36,10 @@ fn main() {
     if returned != None {
         println!("{}", terrane_scalar_support::scalar_text(&(*returned.as_ref().expect("semantic optional narrowing"))));
     }
+    let called: Option<i8> = maybe();
+    if called != None {
+        println!("{}", terrane_scalar_support::scalar_text(&(*called.as_ref().expect("semantic optional narrowing"))));
+    }
     let missingvalue: Option<i8> = None;
     if missingvalue != None {
         println!("{}", terrane_scalar_support::scalar_text(&(*missingvalue.as_ref().expect("semantic optional narrowing"))));

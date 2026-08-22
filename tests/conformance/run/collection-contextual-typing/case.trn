@@ -1,0 +1,10 @@
+namespace collection-contextual-typing
+from /core/collections import list
+from /core/output import print
+function main
+  values list of int = list; 1
+  found int|none = values.get.checked; 0
+  narrow list of int8 = list; 5, 6
+  print; narrow[0]
+  if found != none
+    print; found

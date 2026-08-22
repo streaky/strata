@@ -6,9 +6,9 @@ use crate::{
     ScalarType, SourceFile, TypeCategory,
     rust_ir::{Item, Module, Program},
     semantics::{
-        ArithmeticFamily, CoercionPolicy, ContextualConstant, FunctionContract, MemberFamily,
-        SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding, ValueType,
-        binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read, bound_method,
+        ArithmeticFamily, CoercionPolicy, ContextualConstant, ElementType, FunctionContract,
+        MemberFamily, SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding,
+        ValueType, binding_span_is_mutated, binding_store_value_is_read, bound_method,
         contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
         string_call_selection,
     },
@@ -105,16 +105,44 @@ struct Emitter<'a> {
 }
 
 fn package_uses_structured_errors(package: &SemanticPackage) -> bool {
-    fn contains(unit: &SemanticUnit, node: &SyntaxNode) -> bool {
+    fn contains(package: &SemanticPackage, unit: &SemanticUnit, node: &SyntaxNode) -> bool {
         matches!(
             node.kind,
-            SyntaxKind::ThrowStatement | SyntaxKind::TryStatement
+            SyntaxKind::ThrowStatement | SyntaxKind::TryStatement | SyntaxKind::IndexExpression
         ) || string_call_selection(&unit.source, node)
             .is_some_and(|selection| selection.family == StringFamily::Decode)
-            || node.children.iter().any(|child| contains(unit, child))
+            || node
+                .children
+                .iter()
+                .any(|child| contains(package, unit, child))
+            || (node.kind == SyntaxKind::CallExpression
+                && node.children.first().is_some_and(|callee| {
+                    let range = if callee.kind == SyntaxKind::MemberExpression {
+                        callee.children.first()
+                    } else {
+                        Some(callee)
+                    };
+                    range.is_some_and(|range| {
+                        package
+                            .resolve_name_at(
+                                unit,
+                                range.span.start,
+                                &unit.source.text()[range.span.start..range.span.end],
+                            )
+                            .is_some_and(|symbol| symbol.identity == "/core/collections::range")
+                    })
+                }))
+            || (node.kind == SyntaxKind::CallExpression
+                && node.children.first().is_some_and(|callee| {
+                    callee.kind == SyntaxKind::MemberExpression
+                        && callee.children.get(1).is_some_and(|member| {
+                            &unit.source.text()[member.span.start..member.span.end] == "set"
+                        })
+                }))
     }
     package.units.iter().any(|unit| {
-        unit.functions.iter().any(|contract| contract.throws) || contains(unit, &unit.tree.root)
+        unit.functions.iter().any(|contract| contract.throws)
+            || contains(package, unit, &unit.tree.root)
     })
 }
 
@@ -123,7 +151,7 @@ fn emit_error_support(output: &mut String) {
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
          enum TerraneErrorKind {\n\
          ArithmeticOverflow,\nDivisionByZero,\nIntegerConversionOverflow,\nNegativeShiftCount,\n\
-         CoercionError,\nDecodeError,\nResourceError,\nSourceError,\n}\n\
+         CoercionError,\nDecodeError,\nIndexError,\nMissingKey,\nResourceError,\nSourceError,\n}\n\
          impl TerraneErrorKind {\n\
          fn from_source_name(name: &str) -> Self {\nmatch name {\n\
          \".arithmetic-overflow\" => Self::ArithmeticOverflow,\n\
@@ -132,6 +160,8 @@ fn emit_error_support(output: &mut String) {
          \".negative-shift-count\" => Self::NegativeShiftCount,\n\
          \".coercion-error\" => Self::CoercionError,\n\
          \".decode-error\" => Self::DecodeError,\n\
+         \".index-error\" => Self::IndexError,\n\
+         \".missing-key\" => Self::MissingKey,\n\
          \".resource-error\" => Self::ResourceError,\n\
          _ => Self::SourceError,\n}\n}\n\
          fn source_name(self) -> &'static str {\nmatch self {\n\
@@ -141,6 +171,8 @@ fn emit_error_support(output: &mut String) {
          Self::NegativeShiftCount => \".negative-shift-count\",\n\
          Self::CoercionError => \".coercion-error\",\n\
          Self::DecodeError => \".decode-error\",\n\
+         Self::IndexError => \".index-error\",\n\
+         Self::MissingKey => \".missing-key\",\n\
          Self::ResourceError => \".resource-error\",\n\
          Self::SourceError => \".error\",\n}\n}\n}\n\
          #[derive(Clone, Debug)]\nstruct TerraneError {\n\
@@ -170,6 +202,15 @@ fn emit_error_support(output: &mut String) {
          impl From<terrane_string_support::DecodeError> for TerraneError {\n\
          fn from(error: terrane_string_support::DecodeError) -> Self {\n\
          Self::new(TerraneErrorKind::DecodeError, error.to_string().trim_start_matches(\".decode-error: \"))\n}\n}\n\
+         impl From<terrane_collection_support::IndexError> for TerraneError {\n\
+         fn from(error: terrane_collection_support::IndexError) -> Self {\n\
+         Self::new(TerraneErrorKind::IndexError, error.to_string())\n}\n}\n\
+         impl From<terrane_collection_support::MissingKey> for TerraneError {\n\
+         fn from(error: terrane_collection_support::MissingKey) -> Self {\n\
+         Self::new(TerraneErrorKind::MissingKey, error.to_string())\n}\n}\n\
+         impl From<terrane_collection_support::RangeStepError> for TerraneError {\n\
+         fn from(error: terrane_collection_support::RangeStepError) -> Self {\n\
+         Self::new(TerraneErrorKind::SourceError, error.to_string())\n}\n}\n\
          fn __terrane_uncaught(error: TerraneError) -> ! {\n\
          eprintln!(\"{}\", error.render());\nstd::process::exit(1);\n}\n\
          fn __terrane_generated_defect(message: &str) -> ! {\n\
@@ -231,7 +272,7 @@ fn emit_global_storage(package: &SemanticPackage, output: &mut String) {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == span)
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .or_else(|| emitter.value_type(name_node));
         let Some(ValueType::Scalar(scalar)) = value_type else {
             continue;
@@ -403,7 +444,7 @@ impl Emitter<'_> {
         else {
             return;
         };
-        let ValueType::Scalar(scalar) = binding.value_type else {
+        let ValueType::Scalar(scalar) = binding.value_type.clone() else {
             return;
         };
         let initializers = self
@@ -448,7 +489,7 @@ impl Emitter<'_> {
         self.namespace_initializer = Some((source_name.to_owned(), local.clone()));
         let values = initializers
             .iter()
-            .map(|initializer| self.expression_as(initializer, binding.value_type))
+            .map(|initializer| self.expression_as(initializer, binding.value_type.clone()))
             .collect::<Vec<_>>();
         self.namespace_initializer = None;
         if values.len() == 1 {
@@ -489,6 +530,7 @@ impl Emitter<'_> {
             }
             let ty = parameter
                 .value_type
+                .clone()
                 .map_or_else(|| "i128".to_owned(), rust_value_type);
             let mutable = if parameter.mutable { "mut " } else { "" };
             write!(self.output, "{mutable}{}: {ty}", rust_name(&parameter.name)).unwrap();
@@ -498,15 +540,17 @@ impl Emitter<'_> {
         if function_errors {
             let result = contract
                 .return_type
+                .clone()
                 .map_or_else(|| "()".to_owned(), rust_value_type);
             write!(self.output, " -> Result<{result}, TerraneError>").unwrap();
-        } else if let Some(return_type) = contract.return_type
+        } else if let Some(return_type) = contract.return_type.clone()
             && return_type != ValueType::Scalar(ScalarType::None)
         {
             write!(self.output, " -> {}", rust_value_type(return_type)).unwrap();
         }
         self.output.push_str(" {\n");
-        let outer_return_type = std::mem::replace(&mut self.return_type, contract.return_type);
+        let outer_return_type =
+            std::mem::replace(&mut self.return_type, contract.return_type.clone());
         let outer_function_errors = std::mem::replace(&mut self.function_errors, function_errors);
         let outer_propagation = std::mem::replace(&mut self.propagate_errors, function_errors);
         let outer_function = self.current_function.replace(format!(
@@ -522,6 +566,7 @@ impl Emitter<'_> {
                 .filter_map(|parameter| {
                     parameter
                         .value_type
+                        .clone()
                         .map(|value_type| (parameter.name.clone(), value_type))
                 })
                 .collect(),
@@ -535,9 +580,7 @@ impl Emitter<'_> {
             .parameters
             .iter()
             .filter(|parameter| {
-                block.is_none_or(|block| {
-                    !node_contains_name(&self.unit.source, block, &parameter.name)
-                })
+                !binding_store_value_is_read(self.package, parameter.span, parameter.span)
             })
             .map(|parameter| format!("&{}", rust_name(&parameter.name)))
             .collect::<Vec<_>>();
@@ -552,6 +595,7 @@ impl Emitter<'_> {
         if function_errors
             && contract
                 .return_type
+                .clone()
                 .is_none_or(|ty| ty == ValueType::Scalar(ScalarType::None))
             && node
                 .children
@@ -585,7 +629,7 @@ impl Emitter<'_> {
                     .rev()
                     .find(|binding| {
                         binding.name == self.text(node)
-                            && binding.span.start <= node.span.start
+                            && binding.is_visible_at(self.source.id(), node.span.start)
                             && !binding.destination_arms.is_empty()
                     })
                     .cloned()
@@ -687,7 +731,9 @@ impl Emitter<'_> {
             }
             SyntaxKind::Assignment => self.assignment(node),
             SyntaxKind::CallExpression => {
-                let expression = self.expression(node);
+                let expression = self
+                    .collection_mutation_statement(node)
+                    .unwrap_or_else(|| self.expression(node));
                 self.line(&format!("{expression};"));
             }
             SyntaxKind::PostfixExpression => self.postfix(node),
@@ -698,7 +744,7 @@ impl Emitter<'_> {
                 let value = node.children.first().map_or_else(
                     || "()".to_owned(),
                     |value| {
-                        let value = if let Some(return_type) = self.return_type {
+                        let value = if let Some(return_type) = self.return_type.clone() {
                             self.expression_as(value, return_type)
                         } else {
                             self.expression(value)
@@ -736,8 +782,81 @@ impl Emitter<'_> {
         }
     }
 
+    fn collection_mutation_statement(&mut self, node: &SyntaxNode) -> Option<String> {
+        let [callee, arguments] = node.children.as_slice() else {
+            return None;
+        };
+        let [receiver, member] = callee.children.as_slice() else {
+            return None;
+        };
+        if callee.kind != SyntaxKind::MemberExpression {
+            return None;
+        }
+        let receiver_type = self.value_type(receiver)?;
+        let receiver = self.expression(receiver);
+        let values = arguments
+            .children
+            .iter()
+            .map(|argument| argument.children.last().unwrap_or(argument))
+            .collect::<Vec<_>>();
+        match (receiver_type, self.text(member)) {
+            (ValueType::List(item), "append") => Some(format!(
+                "({receiver}).append({})",
+                self.expression_as(values[0], item.value_type())
+            )),
+            (ValueType::List(item), "set") => {
+                let index = self.expression_as(values[0], ValueType::Scalar(ScalarType::Int));
+                let index = self.fallible(
+                    format!("terrane_collection_support::index_from_int(&({index}))"),
+                    node,
+                );
+                let value = self.expression_as(values[1], item.value_type());
+                Some(self.fallible(format!("({receiver}).set({index}, {value})"), node))
+            }
+            (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "set") => {
+                Some(format!(
+                    "({receiver}).set({}, {})",
+                    self.expression_as(values[0], key.value_type()),
+                    self.expression_as(values[1], value.value_type())
+                ))
+            }
+            (ValueType::Set(item) | ValueType::UnorderedSet(item), "add") => Some(format!(
+                "({receiver}).add({})",
+                self.expression_as(values[0], item.value_type())
+            )),
+            _ => None,
+        }
+    }
+
     fn assignment(&mut self, node: &SyntaxNode) {
         if self.global_assignment(node) {
+            return;
+        }
+        if let [target, value] = node.children.as_slice()
+            && target.kind == SyntaxKind::IndexExpression
+            && let [receiver, index] = target.children.as_slice()
+            && let Some(receiver_type) = self.value_type(receiver)
+        {
+            let receiver_value = self.expression(receiver);
+            match receiver_type {
+                ValueType::List(item) => {
+                    let index = self.expression_as(index, ValueType::Scalar(ScalarType::Int));
+                    let index = self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index}))"),
+                        node,
+                    );
+                    let value = self.expression_as(value, item.value_type());
+                    let mutation =
+                        self.fallible(format!("({receiver_value}).set({index}, {value})"), node);
+                    self.line(&format!("let _ = {mutation};"));
+                }
+                ValueType::Map(key, value_type) | ValueType::UnorderedMap(key, value_type) => {
+                    let key = self.expression_as(index, key.value_type());
+                    let value = self.expression_as(value, value_type.value_type());
+                    self.line(&format!("let _ = ({receiver_value}).set({key}, {value});"));
+                }
+                _ => {}
+            }
             return;
         }
         if self
@@ -767,7 +886,7 @@ impl Emitter<'_> {
             });
         let union_binding = self.union_binding(left);
         let value_type = assigned_binding
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
             .or_else(|| self.value_type(left));
         let value = if let Some(binding) = union_binding {
             self.union_value(&binding, right)
@@ -849,6 +968,7 @@ impl Emitter<'_> {
         self.try_counter += 1;
         let result = self
             .return_type
+            .clone()
             .map_or_else(|| "()".to_owned(), rust_value_type);
         let mutable = if node
             .children
@@ -1032,7 +1152,7 @@ impl Emitter<'_> {
             if let Some(storage_type) = storage_type {
                 return rust_type(storage_type).to_owned();
             }
-            rust_value_type(binding.value_type)
+            rust_value_type(binding.value_type.clone())
         });
         let initializer = binding_initializer(node, name_index);
         assert!(
@@ -1063,7 +1183,7 @@ impl Emitter<'_> {
             } else if let Some(storage_type) = storage_type {
                 self.expression_as(initializer, ValueType::Scalar(storage_type))
             } else if let Some(binding) = binding {
-                self.expression_as(initializer, binding.value_type)
+                self.expression_as(initializer, binding.value_type.clone())
             } else {
                 self.expression(initializer)
             };
@@ -1104,6 +1224,10 @@ impl Emitter<'_> {
         self.line(&format!("{target} = {updated};"));
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the optional recursive value type is matched as a complete lowering decision"
+    )]
     fn postfix_updated_value(
         &self,
         value: &str,
@@ -1187,17 +1311,36 @@ impl Emitter<'_> {
                 let name = rust_name(self.text(name));
                 let collection_type = self.value_type(collection);
                 let collection = self.expression(collection);
-                if collection_type == Some(ValueType::Scalar(ScalarType::Bytes)) {
-                    self.line(&format!(
-                        "for {mutable}{name} in ({collection}).iter().copied() {{"
-                    ));
-                } else {
-                    self.line(&format!(
-                        "for {mutable}{name} in terrane_string_support::graphemes(&{collection}) {{"
-                    ));
-                }
+                let iterator = format!("__terrane_iterator_{}", self.loop_counter);
+                self.loop_counter += 1;
+                let constructor = match collection_type {
+                    Some(ValueType::Scalar(ScalarType::Bytes)) => {
+                        format!("terrane_collection_support::bytes_iterator(&({collection}))")
+                    }
+                    Some(ValueType::Iterator(_)) => format!("&mut ({collection})"),
+                    Some(
+                        ValueType::List(_)
+                        | ValueType::Map(_, _)
+                        | ValueType::Set(_)
+                        | ValueType::Tuple(_, _)
+                        | ValueType::Range
+                        | ValueType::UnorderedMap(_, _)
+                        | ValueType::UnorderedSet(_),
+                    ) => format!(
+                        "terrane_collection_support::Iterable::terrane_iterator(&({collection}))"
+                    ),
+                    _ => format!("terrane_collection_support::string_iterator(&({collection}))"),
+                };
+                self.line(&format!("let mut {iterator} = {constructor};"));
+                self.line("loop {");
                 self.indent += 1;
-                if !binding_span_is_read(self.package, name_span) {
+                self.line(&format!("let {mutable}{name} = match {iterator}.next() {{"));
+                self.indent += 1;
+                self.line("terrane_collection_support::IterationStep::Item(item) => item,");
+                self.line("terrane_collection_support::IterationStep::End => break,");
+                self.indent -= 1;
+                self.line("};");
+                if !binding_store_value_is_read(self.package, name_span, name_span) {
                     self.line(&format!("let _ = &{name};"));
                 }
                 let outer_continue = self.continue_label.take();
@@ -1257,6 +1400,7 @@ impl Emitter<'_> {
             SyntaxKind::BinaryExpression => self.binary(node),
             SyntaxKind::TypeMembershipExpression => self.type_membership(node),
             SyntaxKind::MemberExpression => self.member(node),
+            SyntaxKind::IndexExpression => self.index(node),
             SyntaxKind::CallExpression => self.call(node),
             SyntaxKind::PostfixExpression => node
                 .children
@@ -1266,12 +1410,102 @@ impl Emitter<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "destination-directed lowering keeps every recursive value form in one auditable dispatch"
+    )]
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if matches!(
+            &value_type,
+            ValueType::List(_)
+                | ValueType::Map(_, _)
+                | ValueType::Set(_)
+                | ValueType::Tuple(_, _)
+                | ValueType::Entry(_, _)
+                | ValueType::UnorderedMap(_, _)
+                | ValueType::UnorderedSet(_)
+        ) && node.kind == SyntaxKind::GroupExpression
+            && let [grouped] = node.children.as_slice()
+        {
+            return self.expression_as(grouped, value_type);
+        }
+        if node.kind == SyntaxKind::CallExpression
+            && let [callee, arguments] = node.children.as_slice()
+        {
+            let constructor = match value_type.clone() {
+                ValueType::List(item) if self.is_builtin(callee, "/core/collections::list") => {
+                    Some(("List", item))
+                }
+                ValueType::Tuple(item, _)
+                    if self.is_builtin(callee, "/core/collections::tuple") =>
+                {
+                    Some(("Tuple", item))
+                }
+                ValueType::Set(item) if self.is_builtin(callee, "/core/collections::set") => {
+                    Some(("Set", item))
+                }
+                ValueType::UnorderedSet(item)
+                    if self.is_builtin(callee, "/core/collections::unordered-set") =>
+                {
+                    Some(("UnorderedSet", item))
+                }
+                _ => None,
+            };
+            if let Some((kind, item)) = constructor {
+                let values = arguments
+                    .children
+                    .iter()
+                    .map(|argument| argument.children.last().unwrap_or(argument))
+                    .map(|value| self.expression_as(value, item.value_type()))
+                    .collect::<Vec<_>>();
+                return format!(
+                    "terrane_collection_support::{kind}::<{}>::new(vec![{}])",
+                    rust_element_type(item),
+                    values.join(", ")
+                );
+            }
+            if let ValueType::Entry(key, value) = value_type.clone()
+                && self.is_builtin(callee, "/core/collections::entry")
+            {
+                let [key_argument, value_argument] = arguments.children.as_slice() else {
+                    unreachable!("semantic analysis validates entry constructor arity");
+                };
+                let key_node = key_argument.children.last().unwrap_or(key_argument);
+                let value_node = value_argument.children.last().unwrap_or(value_argument);
+                let key_expression = self.expression_as(key_node, key.value_type());
+                let value_expression = self.expression_as(value_node, value.value_type());
+                return format!(
+                    "terrane_collection_support::Entry::<{}, {}>::new({key_expression}, {value_expression})",
+                    rust_element_type(key),
+                    rust_element_type(value),
+                );
+            }
+            let map_constructor = match value_type.clone() {
+                ValueType::Map(key, value) if self.is_builtin(callee, "/core/collections::map") => {
+                    Some(("Map", key, value))
+                }
+                ValueType::UnorderedMap(key, value)
+                    if self.is_builtin(callee, "/core/collections::unordered-map") =>
+                {
+                    Some(("UnorderedMap", key, value))
+                }
+                _ => None,
+            };
+            if let Some((kind, key, value)) = map_constructor {
+                return self.map_constructor(arguments, kind, key, value);
+            }
+        }
         if let ValueType::ScalarOrNone(scalar) = value_type {
-            return if self.value_type(node) == Some(value_type) {
+            let actual = self.value_type(node);
+            return if actual == Some(value_type)
+                || matches!(
+                    &actual,
+                    Some(ValueType::ElementOrNone(item))
+                        if item.value_type() == ValueType::Scalar(scalar)
+                ) {
                 self.expression(node)
             } else if self.text(node).trim() == "none"
-                || self.value_type(node) == Some(ValueType::Scalar(ScalarType::None))
+                || actual == Some(ValueType::Scalar(ScalarType::None))
             {
                 "None".to_owned()
             } else {
@@ -1325,8 +1559,115 @@ impl Emitter<'_> {
             {
                 format!("(*{}).clone()", self.namespace_name(node))
             }
+            ValueType::List(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::list") =>
+            {
+                format!(
+                    "terrane_collection_support::List::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::Tuple(item, _)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::tuple") =>
+            {
+                format!(
+                    "terrane_collection_support::Tuple::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::Set(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::set") =>
+            {
+                format!(
+                    "terrane_collection_support::Set::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::UnorderedSet(item)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::unordered-set") =>
+            {
+                format!(
+                    "terrane_collection_support::UnorderedSet::<{}>::new(Vec::new())",
+                    rust_element_type(item)
+                )
+            }
+            ValueType::Map(key, value)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::map") =>
+            {
+                format!(
+                    "terrane_collection_support::Map::<{}, {}>::new(Vec::new())",
+                    rust_element_type(key),
+                    rust_element_type(value)
+                )
+            }
+            ValueType::UnorderedMap(key, value)
+                if node.kind == SyntaxKind::Name
+                    && self.is_builtin(node, "/core/collections::unordered-map") =>
+            {
+                format!(
+                    "terrane_collection_support::UnorderedMap::<{}, {}>::new(Vec::new())",
+                    rust_element_type(key),
+                    rust_element_type(value)
+                )
+            }
+            ValueType::List(_)
+            | ValueType::Map(_, _)
+            | ValueType::Set(_)
+            | ValueType::Tuple(_, _)
+            | ValueType::Range
+            | ValueType::Entry(_, _)
+            | ValueType::UnorderedMap(_, _)
+            | ValueType::UnorderedSet(_)
+                if node.kind == SyntaxKind::Name =>
+            {
+                format!("({}).clone()", self.expression(node))
+            }
             _ => self.expression(node),
         }
+    }
+
+    fn map_constructor(
+        &mut self,
+        arguments: &SyntaxNode,
+        kind: &str,
+        key: ElementType,
+        value: ElementType,
+    ) -> String {
+        let entries = arguments
+            .children
+            .iter()
+            .map(|argument| {
+                let value_node = argument.children.last().unwrap_or(argument);
+                if argument.children.len() < 2
+                    && matches!(self.value_type(value_node), Some(ValueType::Entry(_, _)))
+                {
+                    return self.expression_as(
+                        value_node,
+                        ValueType::Entry(key.clone(), value.clone()),
+                    );
+                }
+                let name = argument
+                    .children
+                    .first()
+                    .map(|name| self.text(name).to_owned())
+                    .expect("validated named map entry");
+                let value_expression = self.expression_as(value_node, value.value_type());
+                format!(
+                    "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
+            rust_element_type(key),
+            rust_element_type(value),
+            entries.join(", ")
+        )
     }
 
     fn adaptive_expression(&mut self, node: &SyntaxNode) -> String {
@@ -1451,7 +1792,11 @@ impl Emitter<'_> {
         let is_optional = |value_type| {
             matches!(
                 value_type,
-                Some(ValueType::ScalarOrNone(_) | ValueType::TextRangeOrNone)
+                Some(
+                    ValueType::ScalarOrNone(_)
+                        | ValueType::TextRangeOrNone
+                        | ValueType::ElementOrNone(_)
+                )
             )
         };
         let left_is_none = self.text(left).trim() == "none"
@@ -1539,7 +1884,7 @@ impl Emitter<'_> {
             }
         {
             let operation_type = ValueType::Scalar(operation_type);
-            let left = Self::unwrapped_expression(self.expression_as(left, operation_type));
+            let left = Self::unwrapped_expression(self.expression_as(left, operation_type.clone()));
             let right = if matches!(source_operator, "<<" | ">>") {
                 self.expression(right)
             } else {
@@ -1636,6 +1981,10 @@ impl Emitter<'_> {
         format!("{{ {effect} {result} }}")
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "category membership matches the optional recursive value type as one decision"
+    )]
     fn category_membership(
         &mut self,
         node: &SyntaxNode,
@@ -1731,13 +2080,16 @@ impl Emitter<'_> {
                     .typed_bindings
                     .iter()
                     .rev()
-                    .find(|binding| binding.name == name && binding.span.start <= node.span.start)
-                    .map(|binding| binding.value_type)
+                    .find(|binding| {
+                        binding.name == name
+                            && binding.is_visible_at(self.source.id(), node.span.start)
+                    })
+                    .map(|binding| binding.value_type.clone())
                     .or_else(|| {
                         self.parameter_types
                             .iter()
                             .find(|(parameter, _)| parameter == name)
-                            .map(|(_, value_type)| *value_type)
+                            .map(|(_, value_type)| value_type.clone())
                     })
             }
             SyntaxKind::TypeExpression
@@ -1750,6 +2102,10 @@ impl Emitter<'_> {
         }
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "string-view dispatch matches the optional recursive receiver type as one decision"
+    )]
     fn direct_string_view_length(
         &mut self,
         receiver: &SyntaxNode,
@@ -1776,12 +2132,56 @@ impl Emitter<'_> {
         })
     }
 
+    fn index(&mut self, node: &SyntaxNode) -> String {
+        let [receiver, index] = node.children.as_slice() else {
+            return String::new();
+        };
+        let receiver_type = self.value_type(receiver);
+        let receiver = self.expression(receiver);
+        match receiver_type {
+            Some(ValueType::List(_) | ValueType::Tuple(_, _)) => {
+                let index = if self.value_type(index) == Some(ValueType::Scalar(ScalarType::Int)) {
+                    let index_value = self.expression_as(index, ValueType::Scalar(ScalarType::Int));
+                    self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index_value}))"),
+                        node,
+                    )
+                } else {
+                    format!("({}) as usize", self.expression(index))
+                };
+                self.fallible(format!("({receiver}).get_or_error({index})"), node)
+            }
+            Some(ValueType::Map(key, _) | ValueType::UnorderedMap(key, _)) => {
+                let index_value = self.expression_as(index, key.value_type());
+                self.fallible(format!("({receiver}).get_or_error(&({index_value}))"), node)
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn borrowed_expression(&mut self, node: &SyntaxNode) -> String {
+        if node.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = node.children.as_slice()
+            && matches!(self.value_type(receiver), Some(ValueType::Entry(_, _)))
+            && matches!(self.text(member), "key" | "value")
+        {
+            return format!("({}).{}", self.expression(receiver), self.text(member));
+        }
+        self.expression(node)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "member lowering keeps one ordered dispatch across scalar and collection surfaces"
+    )]
     fn member(&mut self, node: &SyntaxNode) -> String {
         let [receiver, member] = node.children.as_slice() else {
             return String::new();
         };
         let receiver_type = self.value_type(receiver);
-        if let Some(length) = self.direct_string_view_length(receiver, receiver_type, member) {
+        if let Some(length) =
+            self.direct_string_view_length(receiver, receiver_type.clone(), member)
+        {
             return length;
         }
         let receiver = self.expression(receiver);
@@ -1802,7 +2202,7 @@ impl Emitter<'_> {
                 receiver
             }
             boundary @ ("start" | "end") => {
-                let method = match (receiver_type, boundary) {
+                let method = match (receiver_type.clone(), boundary) {
                     (
                         Some(ValueType::TextRangeView(crate::semantics::TextUnit::Bytes)),
                         "start",
@@ -1844,12 +2244,26 @@ impl Emitter<'_> {
                     | ValueType::StringList
                     | ValueType::TextRangeList,
                 ) => format!("({receiver}).len() as i128"),
+                Some(
+                    ValueType::List(_)
+                    | ValueType::Map(_, _)
+                    | ValueType::Set(_)
+                    | ValueType::Tuple(_, _)
+                    | ValueType::UnorderedMap(_, _)
+                    | ValueType::UnorderedSet(_),
+                ) => format!("terrane_int_support::Int::from(({receiver}).length())"),
                 _ => format!("terrane_string_support::length(&{receiver}) as i128"),
             },
+            "key" if matches!(receiver_type, Some(ValueType::Entry(_, _))) => {
+                format!("({receiver}).key.clone()")
+            }
+            "value" if matches!(receiver_type, Some(ValueType::Entry(_, _))) => {
+                format!("({receiver}).value.clone()")
+            }
             "type" => "()".to_owned(),
             mode @ ("round" | "floor" | "ceiling" | "truncate")
                 if matches!(
-                    receiver_type,
+                    receiver_type.clone(),
                     Some(ValueType::Scalar(ScalarType::Float32 | ScalarType::Float64))
                 ) =>
             {
@@ -1881,8 +2295,92 @@ impl Emitter<'_> {
         let [callee, arguments] = node.children.as_slice() else {
             return String::new();
         };
+        if callee.kind == SyntaxKind::MemberExpression
+            && let [family, child] = callee.children.as_slice()
+            && self.text(child) == "checked"
+            && family.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = family.children.as_slice()
+            && self.text(member) == "get"
+            && let Some(receiver_type) = self.value_type(receiver)
+            && let Some(argument) = arguments.children.first()
+        {
+            let argument = argument.children.last().unwrap_or(argument);
+            let receiver_value = self.expression(receiver);
+            return match receiver_type {
+                ValueType::List(_) | ValueType::Tuple(_, _) => {
+                    let index = self.expression_as(argument, ValueType::Scalar(ScalarType::Int));
+                    format!(
+                        "terrane_collection_support::index_from_int(&({index})).ok().and_then(|index| ({receiver_value}).get(index).cloned())"
+                    )
+                }
+                ValueType::Map(key, _) | ValueType::UnorderedMap(key, _) => {
+                    let key = self.expression_as(argument, key.value_type());
+                    format!("({receiver_value}).get(&({key})).cloned()")
+                }
+                _ => String::new(),
+            };
+        }
         if let Some(string_call) = self.string_call(node, arguments) {
             return string_call;
+        }
+        if callee.kind == SyntaxKind::MemberExpression
+            && let [receiver, member] = callee.children.as_slice()
+            && let Some(receiver_type) = self.value_type(receiver)
+        {
+            let receiver_value = self.expression(receiver);
+            let member_name = self.text(member).to_owned();
+            let values = arguments
+                .children
+                .iter()
+                .map(|argument| argument.children.last().unwrap_or(argument))
+                .collect::<Vec<_>>();
+            let call = match (receiver_type, member_name.as_str()) {
+                (ValueType::List(item), "append") => Some(format!(
+                    "({{ let collection = &mut ({receiver_value}); collection.append({}); collection.clone() }})",
+                    self.expression_as(values[0], item.value_type())
+                )),
+                (ValueType::List(item), "set") => {
+                    let index = self.expression_as(values[0], ValueType::Scalar(ScalarType::Int));
+                    let index = self.fallible(
+                        format!("terrane_collection_support::index_from_int(&({index}))"),
+                        node,
+                    );
+                    let value = self.expression_as(values[1], item.value_type());
+                    let mutation = self.fallible(format!("collection.set({index}, {value})"), node);
+                    Some(format!(
+                        "({{ let collection = &mut ({receiver_value}); {mutation}; collection.clone() }})"
+                    ))
+                }
+                (ValueType::Map(key, value) | ValueType::UnorderedMap(key, value), "set") => {
+                    Some(format!(
+                        "({{ let collection = &mut ({receiver_value}); collection.set({}, {}); collection.clone() }})",
+                        self.expression_as(values[0], key.value_type()),
+                        self.expression_as(values[1], value.value_type())
+                    ))
+                }
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "contains") => {
+                    Some(format!(
+                        "({receiver_value}).contains(&({}))",
+                        self.expression_as(values[0], item.value_type())
+                    ))
+                }
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "add") => Some(format!(
+                    "({{ let collection = &mut ({receiver_value}); collection.add({}); collection.clone() }})",
+                    self.expression_as(values[0], item.value_type())
+                )),
+                (ValueType::Set(item) | ValueType::UnorderedSet(item), "remove") => Some(format!(
+                    "({receiver_value}).remove(&({}))",
+                    self.expression_as(values[0], item.value_type())
+                )),
+                (
+                    ValueType::Map(_, _) | ValueType::UnorderedMap(_, _),
+                    "keys" | "values" | "entries",
+                ) => Some(format!("({receiver_value}).{member_name}()")),
+                _ => None,
+            };
+            if let Some(call) = call {
+                return call;
+            }
         }
         if let Some(method) = bound_method(self.source, callee) {
             let receiver_node = find_node_by_span(&self.unit.tree.root, method.receiver)
@@ -1953,23 +2451,140 @@ impl Emitter<'_> {
                 self.fallible(call, node)
             };
         }
-        let mut values = arguments
+        if self.is_builtin(callee, "/core/collections::iterator") {
+            let item_type = self
+                .value_type(node)
+                .and_then(|ty| match ty {
+                    ValueType::Iterator(item) => Some(item),
+                    _ => None,
+                })
+                .expect("validated iterator constructor has an item type");
+            let values = arguments
+                .children
+                .iter()
+                .map(|argument| argument.children.last().unwrap_or(argument))
+                .map(|value| self.expression_as(value, item_type.value_type()))
+                .collect::<Vec<_>>();
+            return format!(
+                "terrane_collection_support::Iterator::<{}>::new(vec![{}])",
+                rust_element_type(item_type),
+                values.join(", ")
+            );
+        }
+        if let Some(value_type) = self.value_type(node) {
+            let constructor = match value_type.clone() {
+                ValueType::List(item) if self.is_builtin(callee, "/core/collections::list") => {
+                    Some(("List", item))
+                }
+                ValueType::Tuple(item, _)
+                    if self.is_builtin(callee, "/core/collections::tuple") =>
+                {
+                    Some(("Tuple", item))
+                }
+                ValueType::Set(item) if self.is_builtin(callee, "/core/collections::set") => {
+                    Some(("Set", item))
+                }
+                ValueType::UnorderedSet(item)
+                    if self.is_builtin(callee, "/core/collections::unordered-set") =>
+                {
+                    Some(("UnorderedSet", item))
+                }
+                _ => None,
+            };
+            if let Some((kind, item)) = constructor {
+                let values = arguments
+                    .children
+                    .iter()
+                    .map(|argument| argument.children.last().unwrap_or(argument))
+                    .map(|value| self.expression_as(value, item.value_type()))
+                    .collect::<Vec<_>>();
+                return format!(
+                    "terrane_collection_support::{kind}::<{}>::new(vec![{}])",
+                    rust_element_type(item),
+                    values.join(", ")
+                );
+            }
+            if let ValueType::Entry(key, value) = value_type.clone()
+                && self.is_builtin(callee, "/core/collections::entry")
+            {
+                let [key_argument, value_argument] = arguments.children.as_slice() else {
+                    unreachable!("semantic analysis validates entry constructor arity");
+                };
+                let key_node = key_argument.children.last().unwrap_or(key_argument);
+                let value_node = value_argument.children.last().unwrap_or(value_argument);
+                let values = [
+                    self.expression_as(key_node, key.value_type()),
+                    self.expression_as(value_node, value.value_type()),
+                ];
+                return format!(
+                    "terrane_collection_support::Entry::<{}, {}>::new({}, {})",
+                    rust_element_type(key),
+                    rust_element_type(value),
+                    values[0],
+                    values[1]
+                );
+            }
+            let map_constructor = match value_type.clone() {
+                ValueType::Map(key, value) if self.is_builtin(callee, "/core/collections::map") => {
+                    Some(("Map", key, value))
+                }
+                ValueType::UnorderedMap(key, value)
+                    if self.is_builtin(callee, "/core/collections::unordered-map") =>
+                {
+                    Some(("UnorderedMap", key, value))
+                }
+                _ => None,
+            };
+            if let Some((kind, key, value)) = map_constructor {
+                return self.map_constructor(arguments, kind, key, value);
+            }
+            if value_type == ValueType::Range {
+                let through = callee.kind == SyntaxKind::MemberExpression
+                    && callee.children.first().is_some_and(|receiver| {
+                        self.is_builtin(receiver, "/core/collections::range")
+                    });
+                if through || self.is_builtin(callee, "/core/collections::range") {
+                    let mut values = arguments
+                        .children
+                        .iter()
+                        .map(|argument| argument.children.last().unwrap_or(argument))
+                        .map(|value| self.expression_as(value, ValueType::Scalar(ScalarType::Int)))
+                        .collect::<Vec<_>>();
+                    if values.len() == 2 {
+                        values.push("terrane_int_support::Int::from(1_i64)".to_owned());
+                    }
+                    let method = if through { "through" } else { "new" };
+                    return self.fallible(
+                        format!(
+                            "terrane_collection_support::Range::{method}({}, {}, {})",
+                            values[0], values[1], values[2]
+                        ),
+                        node,
+                    );
+                }
+            }
+        }
+        let argument_values = arguments
             .children
             .iter()
             .map(|argument| argument.children.last().unwrap_or(argument))
-            .map(|value| self.expression(value))
             .collect::<Vec<_>>();
         if self.is_builtin(callee, "/core/output::print") {
-            if values.is_empty() {
+            if argument_values.is_empty() {
                 return "println!()".to_owned();
             }
-            let values = values
-                .into_iter()
+            let values = argument_values
+                .iter()
+                .map(|value| self.borrowed_expression(value))
                 .map(|value| format!("terrane_scalar_support::scalar_text(&({value}))"))
                 .collect::<Vec<_>>();
             let format = "{}".repeat(values.len());
             return format!("println!(\"{format}\", {})", values.join(", "));
         }
+        let mut values = argument_values
+            .into_iter()
+            .map(|value| self.expression(value))
+            .collect::<Vec<_>>();
         if callee.kind == SyntaxKind::MemberExpression
             && callee
                 .children
@@ -2026,7 +2641,7 @@ impl Emitter<'_> {
                 );
                 let value = argument.children.last().unwrap_or(argument);
                 let parameter = &contract.parameters[index];
-                ordered[index] = Some(if let Some(ty) = parameter.value_type {
+                ordered[index] = Some(if let Some(ty) = parameter.value_type.clone() {
                     self.expression_as(value, ty)
                 } else {
                     self.expression(value)
@@ -2502,7 +3117,7 @@ impl Emitter<'_> {
                     .rev()
                     .find(|(name, _)| name == source_name)
                     .and_then(|(_, value_type)| {
-                        narrowed_optional_type(self.unit, node, *value_type)
+                        narrowed_optional_type(self.unit, node, value_type.clone())
                     })
             });
         if let Some(narrowed) = narrowed {
@@ -2597,7 +3212,8 @@ impl Emitter<'_> {
                     .rev()
                     .find(|binding| {
                         binding.name == self.text(node)
-                            && binding.span.start <= node.span.start
+                            && binding.is_visible_at(self.source.id(), node.span.start)
+                            && !self.is_namespace_binding_span(binding.span)
                             && !binding_span_is_mutated(self.package, self.unit, binding.span, true)
                     })
                     .and_then(|binding| binding.storage_type)
@@ -2632,7 +3248,7 @@ impl Emitter<'_> {
             .typed_bindings
             .iter()
             .find(|binding| binding.span == span)
-            .map(|binding| binding.value_type)
+            .map(|binding| binding.value_type.clone())
     }
 
     fn is_namespace_binding_span(&self, span: crate::Span) -> bool {
@@ -2681,7 +3297,7 @@ impl Emitter<'_> {
             if let Some(default) = parameter.children.last().filter(|child| {
                 !matches!(child.kind, SyntaxKind::Name | SyntaxKind::TypeExpression)
             }) {
-                let destination = contract.parameters[index].value_type;
+                let destination = contract.parameters[index].value_type.clone();
                 let value = destination
                     .and_then(|destination| match destination {
                         ValueType::Scalar(destination) => {
@@ -2922,6 +3538,13 @@ fn binding_initializer(node: &SyntaxNode, name_index: usize) -> Option<&SyntaxNo
 fn rust_type(ty: ScalarType) -> &'static str {
     ty.lowering_type()
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "element lowering owns the recursively described value type"
+)]
+fn rust_element_type(ty: ElementType) -> String {
+    rust_value_type(ty.value_type())
+}
 
 fn rust_value_type(ty: ValueType) -> String {
     match ty {
@@ -2939,6 +3562,61 @@ fn rust_value_type(ty: ValueType) -> String {
         ValueType::Encoding => "terrane_string_support::Encoding".to_owned(),
         ValueType::TextRange => "terrane_string_support::TextRange".to_owned(),
         ValueType::TextRangeOrNone => "Option<terrane_string_support::TextRange>".to_owned(),
+        ValueType::Iterator(item) => {
+            format!(
+                "terrane_collection_support::Iterator<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::IterationStep(item) => {
+            format!(
+                "terrane_collection_support::IterationStep<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::ElementOrNone(item) => {
+            format!("Option<{}>", rust_element_type(item))
+        }
+        ValueType::List(item) => {
+            format!(
+                "terrane_collection_support::List<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::Map(key, value) => format!(
+            "terrane_collection_support::Map<{}, {}>",
+            rust_element_type(key),
+            rust_element_type(value)
+        ),
+        ValueType::Set(item) => {
+            format!(
+                "terrane_collection_support::Set<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::Tuple(item, _) => {
+            format!(
+                "terrane_collection_support::Tuple<{}>",
+                rust_element_type(item)
+            )
+        }
+        ValueType::Range => "terrane_collection_support::Range".to_owned(),
+        ValueType::Entry(key, value) => format!(
+            "terrane_collection_support::Entry<{}, {}>",
+            rust_element_type(key),
+            rust_element_type(value)
+        ),
+        ValueType::UnorderedMap(key, value) => format!(
+            "terrane_collection_support::UnorderedMap<{}, {}>",
+            rust_element_type(key),
+            rust_element_type(value)
+        ),
+        ValueType::UnorderedSet(item) => {
+            format!(
+                "terrane_collection_support::UnorderedSet<{}>",
+                rust_element_type(item)
+            )
+        }
         ValueType::TextRangeList => "Vec<terrane_string_support::TextRange>".to_owned(),
     }
 }
@@ -2986,20 +3664,6 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
         ScalarType::Uint128 => Some((false, 128)),
         _ => None,
     }
-}
-
-fn node_contains_name(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
-    if node.kind == SyntaxKind::Name && &source.text()[node.span.start..node.span.end] == name {
-        return true;
-    }
-    let children = match node.kind {
-        SyntaxKind::Binding => node.children.get(1..).unwrap_or_default(),
-        SyntaxKind::MemberExpression => node.children.get(..1).unwrap_or_default(),
-        _ => &node.children,
-    };
-    children
-        .iter()
-        .any(|child| node_contains_name(source, child, name))
 }
 
 fn block_may_fall_through(block: &SyntaxNode) -> bool {
@@ -3070,6 +3734,8 @@ fn rust_error_kind(kind: &str) -> &'static str {
         "negative-shift-count" => "NegativeShiftCount",
         "coercion-error" => "CoercionError",
         "decode-error" => "DecodeError",
+        "index-error" => "IndexError",
+        "missing-key" => "MissingKey",
         "resource-error" => "ResourceError",
         _ => "SourceError",
     }
@@ -3083,6 +3749,8 @@ fn error_message(kind: &str) -> &'static str {
         "negative-shift-count" => "negative integer shift count",
         "coercion-error" => "coercion has no compatible result",
         "decode-error" => "invalid byte sequence for selected encoding",
+        "index-error" => "collection index is out of range",
+        "missing-key" => "collection key is absent",
         "resource-error" => "integer shift count cannot be represented on this target",
         _ => "source error",
     }

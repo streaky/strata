@@ -1,0 +1,4 @@
+namespace unordered-map-constructor-value-type
+from /core/collections import unordered-map
+function main
+  items unordered-map of string, int8 = unordered-map; first='wrong'

@@ -1,0 +1,2 @@
+case.trn:4:16: warning[W4002]: initial value assigned to `v` is never read
+case.trn:7:18: warning[W4002]: initial value assigned to `v` is never read

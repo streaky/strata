@@ -55,14 +55,25 @@ Terrane package
 │   │   │   ├── negative-shift-count           catchable error object
 │   │   │   ├── resource-error                 catchable error object
 │   │   │   ├── coercion-error                 catchable error object
-│   │   │   └── decode-error                   catchable error object
+│   │   │   ├── decode-error                   catchable error object
+│   │   │   ├── index-error                    catchable collection lookup error
+│   │   │   └── missing-key                    catchable map lookup error
 │   │   ├── /core/encodings
 │   │   │   ├── utf8                           encoding object
 │   │   │   ├── utf16-le                       encoding object
 │   │   │   ├── utf16-be                       encoding object
 │   │   │   ├── utf32-le                       encoding object
 │   │   │   └── utf32-be                       encoding object
-│   │   └── /core/collections                  empty namespace; name only
+│   │   └── /core/collections
+│   │       ├── iterator                       typed linear iterator constructor
+│   │       ├── list                           insertion-ordered sequence constructor
+│   │       ├── map                            insertion-ordered key/value constructor
+│   │       ├── set                            insertion-ordered unique-value constructor
+│   │       ├── tuple                          fixed-length sequence constructor
+│   │       ├── range                          half-open range constructor; `.through` is inclusive
+│   │       ├── entry                          key/value pair constructor
+│   │       ├── unordered-map                  deterministic unordered map constructor
+│   │       └── unordered-set                  deterministic unordered set constructor
 ├── default prelude
 │   ├── print                                  binding to /core/output::print
 │   ├── bool                                   type name for /core/types::bool
@@ -314,6 +325,31 @@ objects are compiler-owned values; string `.encode` is total for each one. Built
 iteration yields `uint8` values. General bytes indexing and slicing remain deferred until
 the range/index contract is implemented.
 
+### Collection types
+
+The collection constructors also define applied value types for binding annotations, function
+parameters, and function returns:
+
+```text
+list of Item
+map of Key, Value
+set of Item
+tuple of Item
+unordered-map of Key, Value
+unordered-set of Item
+entry of Key, Value
+```
+
+Collection type application is recursive, so an item or value may itself be an applied collection
+type. Map and set keys must be immutable scalar values. A bare constructor name such as `list` is a
+value constructor, not a type: every collection type carries its `of` argument or arguments.
+Tuples are homogeneous and fixed-length after construction. Their runtime length is not part of
+`tuple of Item`, so differently sized tuples with the same item type share binding and function
+boundaries.
+Iteration takes a value snapshot of its source collection. Mutating or replacing the source binding
+inside a `for` does not change the items remaining in that traversal; copy-on-write separates the
+mutated value while the iterator retains the original shared storage.
+
 ## Type descriptor objects
 
 Every implemented scalar type has one canonical descriptor object:
@@ -440,19 +476,19 @@ A top-level plain assignment creates a namespace variable. Functions cannot read
 | `string` | `.encode; encoding` | method | encoded `bytes` |
 | `bytes` | `.length` | property | byte count |
 | `bytes` | `.decode; encoding` | method | validated `string` or deterministic decode error |
+| collection iterator | `.next` (compiler protocol) | method | typed `item` or sticky `end` step |
+| list / tuple | `[index]` | lookup | value or `index-error`; `.get.checked; index` returns value or `none` |
+| map / unordered map | `[key]` | lookup | value or `missing-key`; `.get.checked; key` returns value or `none` |
+| list / map / set / tuple / unordered variants | `.length` | property | adaptive `int` count |
+| list | `.append`, `.set` | methods | copy-on-write mutation |
+| map / unordered map | `.set`, `.keys`, `.values`, `.entries` | methods | deterministic mutation/views |
+| set / unordered set | `.contains`, `.add`, `.remove` | methods | deterministic membership/mutation |
+| entry | `.key`, `.value` | properties | cloned key/value |
 
 The compiler represents callable families as bound methods with a distinguished default,
 typed children, signatures, and availability constraints. Semantic analysis resolves the
 family before lowering; generated Rust erases it to a direct function or support operation.
 Family selections must be invoked in the same expression.
-
-## Compiler-owned names without implemented object behavior
-
-The remaining names in this section exist only so resolution has stable identities:
-
-```text
-/core/collections
-```
 
 The `/core/errors` interface and error objects are runtime identities used by `throw`,
 `try`, `catch`, and `finally`. Arithmetic and coercion failures enter the same typed
@@ -468,14 +504,13 @@ that cannot be used.
 The authoritative language draft proposes a much larger ontology. None of the following should be inferred from compiler-owned names or Rust support internals as implemented Terrane API:
 
 ```text
-collections: .list, .map, .set, .tuple, .range, .entry
+collection checked lookup children and source-visible typed lookup errors
 protocols and interfaces
 classes, structs, enums, traits, and constructors
 reflection beyond canonical scalar `.type`
 user-defined error objects, source-visible error fields, and error hierarchies
-bytes indexing, slicing, and general sequence iteration
-collection properties and methods
-general iteration protocols
+bytes indexing and slicing
+user-authored implementations of general iteration protocols
 user-declared type parameters and generic application
 function/class/namespace/type reflection objects
 ```

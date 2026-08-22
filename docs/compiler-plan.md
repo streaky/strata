@@ -1055,6 +1055,13 @@ Deliver:
 
 Exit criterion: a user-defined iterator drives `for` through the same path as the built-in string iteration, and an iterator yielding `none` as a legitimate item is distinguished from exhaustion.
 
+Implemented evidence (partial; the exit criterion remains open): `iteration-step` is a
+compiler-owned typed result with distinct `item` and sticky `end` alternatives. Compiler-owned
+`iterator` values, strings, bytes, ranges, and every collection enter `for` through the same
+`Iterable::terrane_iterator` / `Iterator::next` support protocol; conformance distinguishes a
+yielded `none` from exhaustion and advances again after exhaustion. Source-defined iterator
+objects are not implemented yet, so the required user-defined iterator case does not pass.
+
 ### Milestone 14 — Collections and value semantics
 
 Collections are the first non-scalar mutable value type, so the value-semantics half of ownership
@@ -1075,6 +1082,17 @@ Deliver:
 
 Exit criterion: each collection has parsing, inference, mutation, lowering, and execution evidence; ordering is observable and reproducible across runs for both ordered and unordered variants; and value assignment, separation, and drop order are each observable through a collection rather than asserted in the abstract.
 
+Implemented evidence (partial; the exit criterion remains open): the compiler-owned collection
+descriptors construct statically typed copy-on-write lists, insertion-ordered maps and sets,
+homogeneous fixed-length tuples, ranges, entries, and separately named unordered maps and sets
+using a deterministic fixed-seed hash implementation. Applied `tuple of Item` types cross binding,
+parameter, and return boundaries; tuple runtime length is not part of the type. Conformance covers
+member and indexed mutation, checked and throwing lookup with typed `index-error` / `missing-key`,
+ordered and unordered iteration, range direction and inclusivity, homogeneous-item rejection, and
+assignment separation. Collection
+drop order is not yet source-observable, and collection identity metadata plus source `is`
+behavior are not implemented; those parts of the exit criterion remain outstanding.
+
 ### Milestone 15 — Function values and closures
 
 Deliver:
@@ -1090,12 +1108,36 @@ Exit criterion: a selected method family can be stored, passed, and invoked; the
 
 Deliver:
 
-- class declaration, fields, construction through `construct`, and deterministic drop;
+- class declaration, fields, construction through `construct`, destruction through `destruct`, and deterministic drop;
 - single class inheritance preserving complete subclass state;
 - structural named interfaces and non-type traits with explicit conflict resolution;
 - dispatch and compatibility over the descriptor model rather than a parallel class table.
 
 Exit criterion: each of construction, inheritance, interface conformance, and trait reuse has an executable slice; dynamic-object state is preserved end to end.
+
+Construct/destruct notes, and the docs should be updated to reflect this when we get there:
+
+```markdown
+Ordinary declared methods with compiler-recognized lifecycle roles. That preserves the object model while still letting the compiler guarantee invocation at the right times.
+
+A few semantics worth fixing explicitly:
+
+`construct`
+
+- called by class default invocation;
+- may take parameters (though doesn't have to);
+- runs after storage exists but before the instance becomes externally observable;
+- if it throws, partially initialized state is cleaned up deterministically.
+
+`destruct`
+
+- zero-argument;
+- invoked exactly once for an owned instance when its lifetime ends;
+- should probably not be called automatically on values whose ownership was moved away;
+- throwing from destruct either forbidden or very constrained, because destruction during another error path gets ugly quickly.
+
+Destruct over drop for Terrane. drop is excellent Rust terminology, but construct / destruct form a much more obvious pair at the source-language level. That symmetry is valuable.
+```
 
 ### Milestone 17 — References and provenance
 
@@ -1183,6 +1225,9 @@ Deliver:
 - YAML restricted to a safe core schema with no executable tags and enforced depth, size, and alias-expansion limits;
 - descriptor-driven `serializable` and `deserializable` mapping with field names, optional and default fields, unknown-field policy, and full data-path diagnostics;
 - parsed `url` values following the pinned WHATWG standard with UTS #46 processing, ordered query entries, and credentials never displayed by default.
+- adversarial-key handling for document maps: the core collection contract uses a deterministic
+  fixed-seed hash, which is reproducible but not collision-resistant, so parsers must not expose
+  untrusted chosen keys to an algorithmically unbounded hash-table path.
 
 Exit criterion: a decode failure reports its document path and expected descriptor; canonical output is byte-identical across runs; a YAML alias bomb is refused by limit.
 

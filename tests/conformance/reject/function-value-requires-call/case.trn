@@ -1,0 +1,5 @@
+namespace function-value-requires-call
+function make int
+  return 1
+function main
+  value int = make
