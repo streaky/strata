@@ -7295,6 +7295,13 @@ fn declared_binding_at_node<'a>(
     unit: &'a SemanticUnit,
     node: &SyntaxNode,
 ) -> Option<&'a TypedBinding> {
+    if node.kind == SyntaxKind::ForTarget {
+        let name = node.children.first()?;
+        return unit
+            .typed_bindings
+            .iter()
+            .find(|binding| binding.span == name.span);
+    }
     matches!(
         node.kind,
         SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::Parameter
@@ -7389,9 +7396,9 @@ fn collect_binding_events(
             }
         }
     }
-
     if let Some(binding) = declared_binding
-        && (node.kind == SyntaxKind::Parameter
+        && (node.kind == SyntaxKind::ForTarget
+            || node.kind == SyntaxKind::Parameter
             || unit.source.text()[node.span.start..node.span.end].contains('='))
     {
         events
@@ -7506,20 +7513,22 @@ pub(crate) fn binding_store_value_is_read(
         })
 }
 
-pub(crate) fn binding_span_is_read(package: &SemanticPackage, declaration_span: Span) -> bool {
-    package
-        .binding_events
-        .get(&span_key(declaration_span))
-        .is_some_and(|events| {
-            events
-                .iter()
-                .any(|event| matches!(event, BindingEvent::Read { .. }))
-        })
+fn collect_loop_target_spans(node: &SyntaxNode, loop_targets: &mut BTreeSet<(u32, usize, usize)>) {
+    if node.kind == SyntaxKind::ForTarget
+        && let Some(name) = node.children.first()
+    {
+        loop_targets.insert(span_key(name.span));
+    }
+    for child in &node.children {
+        collect_loop_target_spans(child, loop_targets);
+    }
 }
 
 pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
     let mut warnings = Vec::new();
     for unit in &package.units {
+        let mut loop_targets = BTreeSet::new();
+        collect_loop_target_spans(&unit.tree.root, &mut loop_targets);
         for binding in &unit.typed_bindings {
             if package
                 .globals
@@ -7534,6 +7543,7 @@ pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
                     .iter()
                     .any(|parameter| parameter.span == binding.span)
             });
+            let loop_target = loop_targets.contains(&span_key(binding.span));
             let Some(events) = package.binding_events.get(&span_key(binding.span)) else {
                 continue;
             };
@@ -7550,12 +7560,13 @@ pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
                 let later_store = events[index + 1..]
                     .iter()
                     .any(|event| matches!(event, BindingEvent::Write { .. }));
-                let (code, message) = if *store_span == binding.span && !later_store {
-                    if parameter {
+                let initial_store = *store_span == binding.span || (loop_target && index == 0);
+                let (code, message) = if initial_store && !later_store {
+                    if parameter || loop_target {
                         continue;
                     }
                     ("W4001", format!("binding `{}` is never read", binding.name))
-                } else if *store_span == binding.span {
+                } else if initial_store {
                     (
                         "W4002",
                         format!("initial value assigned to `{}` is never read", binding.name),

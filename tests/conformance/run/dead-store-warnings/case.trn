@@ -8,3 +8,10 @@ function main
   stale = 4
   for ignored in 'ab'
     print; 'tick'
+  for replaced in 'ab'
+    replaced = 'x'
+    print; replaced
+  for preserved in 'c'
+    print; preserved
+    preserved = 'y'
+    print; preserved

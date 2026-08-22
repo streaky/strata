@@ -8,9 +8,9 @@ use crate::{
     semantics::{
         ArithmeticFamily, CoercionPolicy, ContextualConstant, ElementType, FunctionContract,
         MemberFamily, SemanticPackage, SemanticUnit, StringFamily, SymbolKind, TypedBinding,
-        ValueType, binding_span_is_mutated, binding_span_is_read, binding_store_value_is_read,
-        bound_method, contextual_constant, narrowed_optional_type, narrowed_value_type,
-        promoted_integer_type, string_call_selection,
+        ValueType, binding_span_is_mutated, binding_store_value_is_read, bound_method,
+        contextual_constant, narrowed_optional_type, narrowed_value_type, promoted_integer_type,
+        string_call_selection,
     },
     syntax::{SyntaxKind, SyntaxNode},
 };
@@ -1340,7 +1340,7 @@ impl Emitter<'_> {
                 self.line("terrane_collection_support::IterationStep::End => break,");
                 self.indent -= 1;
                 self.line("};");
-                if !binding_span_is_read(self.package, name_span) {
+                if !binding_store_value_is_read(self.package, name_span, target.span) {
                     self.line(&format!("let _ = &{name};"));
                 }
                 let outer_continue = self.continue_label.take();

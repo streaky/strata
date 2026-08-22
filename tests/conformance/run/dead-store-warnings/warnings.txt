@@ -1,3 +1,4 @@
 case.trn:4:3: warning[W4002]: initial value assigned to `value` is never read
 case.trn:7:3: warning[W4002]: initial value assigned to `stale` is never read
 case.trn:8:3: warning[W4002]: value assigned to `stale` is never read
+case.trn:11:7: warning[W4002]: initial value assigned to `replaced` is never read
