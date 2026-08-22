@@ -1,0 +1,13 @@
+namespace collection-boundary-contextual-typing
+from /core/collections import list, map, entry
+from /core/output import print
+function take; values list of int8
+  print; values[1]
+function make list of int8
+  return list; 5, 6
+function main
+  pair entry of string, int8 = entry; key='a', value=6
+  keyed map of int8, string = map; (entry; 5, 'x')
+  take; (list; 5, 6)
+  made list of int8 = make;
+  print; pair.value, keyed[5], made[0]

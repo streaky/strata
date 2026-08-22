@@ -2153,16 +2153,25 @@ fn validate_call_arguments(
             ));
         }
         let value = argument.children.last().unwrap_or(argument);
-        let actual = infer_value_type(unit, value, bindings)?;
-        if let (Some(expected), Some(actual)) = (parameter.value_type.clone(), actual) {
-            validate_value_destination(
-                &unit.source,
-                &parameter.name,
-                expected,
-                actual,
-                value,
-                "T0012",
-            )?;
+        if let Some(expected) = parameter.value_type.clone() {
+            if contextual_collection_constructor_matches(unit, value, &expected, bindings) {
+                validate_collection_constructor_value(
+                    unit,
+                    value,
+                    &expected,
+                    &parameter.name,
+                    bindings,
+                )?;
+            } else if let Some(actual) = infer_value_type(unit, value, bindings)? {
+                validate_value_destination(
+                    &unit.source,
+                    &parameter.name,
+                    expected,
+                    actual,
+                    value,
+                    "T0012",
+                )?;
+            }
         }
     }
     if let Some(missing) = contract
@@ -3831,7 +3840,22 @@ fn collection_constructor_matches(
             | ("set", ValueType::Set(_))
             | ("tuple", ValueType::Tuple(_, _))
             | ("unordered-set", ValueType::UnorderedSet(_))
+            | ("entry", ValueType::Entry(_, _))
     )
+}
+
+fn contextual_collection_constructor_matches(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    expected: &ValueType,
+    bindings: &[TypedBinding],
+) -> bool {
+    if node.kind == SyntaxKind::GroupExpression
+        && let [grouped] = node.children.as_slice()
+    {
+        return contextual_collection_constructor_matches(unit, grouped, expected, bindings);
+    }
+    collection_constructor_matches(unit, node, expected, bindings)
 }
 
 fn validate_collection_constructor_items(
@@ -3937,11 +3961,7 @@ fn validate_collection_constructor_value(
             bindings,
         );
     }
-    if collection_constructor_matches(unit, value, expected, bindings)
-        || matches!(expected, ValueType::Entry(_, _))
-            && collection_constructor_identity(unit, value, bindings)
-                .is_some_and(|identity| identity == "/core/collections::entry")
-    {
+    if collection_constructor_matches(unit, value, expected, bindings) {
         return validate_collection_constructor_items(unit, value, expected, destination, bindings);
     }
     if let Some(actual) = infer_value_type(unit, value, bindings)? {
@@ -3997,7 +4017,7 @@ fn collection_constructor_identity<'a>(
         identity
             .strip_prefix("/core/collections::")
             .unwrap_or(identity),
-        "list" | "map" | "unordered-map" | "set" | "tuple" | "unordered-set"
+        "list" | "map" | "unordered-map" | "set" | "tuple" | "unordered-set" | "entry"
     )
     .then_some(identity)
 }
@@ -6495,6 +6515,15 @@ fn validate_return(
             statement.span,
         )),
         (Some(expected), Some(value)) => {
+            if contextual_collection_constructor_matches(unit, value, &expected, bindings) {
+                return validate_collection_constructor_value(
+                    unit,
+                    value,
+                    &expected,
+                    &contract.name,
+                    bindings,
+                );
+            }
             let Some(actual) = infer_value_type(unit, value, bindings)? else {
                 return Err(failure(
                     &unit.source,

@@ -1466,6 +1466,25 @@ impl Emitter<'_> {
                     values.join(", ")
                 );
             }
+            if let ValueType::Entry(key, value) = value_type.clone()
+                && self.is_builtin(callee, "/core/collections::entry")
+            {
+                let key_node = arguments.children[0]
+                    .children
+                    .last()
+                    .unwrap_or(&arguments.children[0]);
+                let value_node = arguments.children[1]
+                    .children
+                    .last()
+                    .unwrap_or(&arguments.children[1]);
+                let key_expression = self.expression_as(key_node, key.value_type());
+                let value_expression = self.expression_as(value_node, value.value_type());
+                return format!(
+                    "terrane_collection_support::Entry::<{}, {}>::new({key_expression}, {value_expression})",
+                    rust_element_type(key),
+                    rust_element_type(value),
+                );
+            }
         }
         if let ValueType::ScalarOrNone(scalar) = value_type {
             let actual = self.value_type(node);
