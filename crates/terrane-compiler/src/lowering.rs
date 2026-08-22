@@ -580,9 +580,7 @@ impl Emitter<'_> {
             .parameters
             .iter()
             .filter(|parameter| {
-                block.is_none_or(|block| {
-                    !node_contains_name(&self.unit.source, block, &parameter.name)
-                })
+                !binding_store_value_is_read(self.package, parameter.span, parameter.span)
             })
             .map(|parameter| format!("&{}", rust_name(&parameter.name)))
             .collect::<Vec<_>>();
@@ -3666,20 +3664,6 @@ const fn fixed_integer_shape(ty: ScalarType) -> Option<(bool, u16)> {
         ScalarType::Uint128 => Some((false, 128)),
         _ => None,
     }
-}
-
-fn node_contains_name(source: &SourceFile, node: &SyntaxNode, name: &str) -> bool {
-    if node.kind == SyntaxKind::Name && &source.text()[node.span.start..node.span.end] == name {
-        return true;
-    }
-    let children = match node.kind {
-        SyntaxKind::Binding => node.children.get(1..).unwrap_or_default(),
-        SyntaxKind::MemberExpression => node.children.get(..1).unwrap_or_default(),
-        _ => &node.children,
-    };
-    children
-        .iter()
-        .any(|child| node_contains_name(source, child, name))
 }
 
 fn block_may_fall_through(block: &SyntaxNode) -> bool {

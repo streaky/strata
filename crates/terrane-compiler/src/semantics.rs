@@ -7378,7 +7378,8 @@ fn collect_binding_events(
     }
 
     if let Some(binding) = declared_binding
-        && unit.source.text()[node.span.start..node.span.end].contains('=')
+        && (node.kind == SyntaxKind::Parameter
+            || unit.source.text()[node.span.start..node.span.end].contains('='))
     {
         events
             .entry(span_key(binding.span))

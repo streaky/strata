@@ -1,0 +1,12 @@
+namespace parameter-dead-store-warnings
+from /core/collections import list
+from /core/output import print
+function take; v list of int
+  v = list; 7, 8
+  print; v[1]
+function scalar; v int
+  v = 4
+  print; v
+function main
+  take; (list; 1, 2)
+  scalar; 3
