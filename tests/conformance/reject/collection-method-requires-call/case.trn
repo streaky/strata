@@ -1,0 +1,5 @@
+namespace collection-method-requires-call
+from /core/collections import list, map
+function main
+  values map of string, string = map; first='one'
+  items list of string = values.values

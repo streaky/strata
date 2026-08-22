@@ -2023,10 +2023,7 @@ fn validate_resolved_assignment(
         infer_collection_call_type(unit, initializer, &unit.typed_bindings)?
     {
         actual
-    } else if matches!(
-        initializer.kind,
-        SyntaxKind::Name | SyntaxKind::IndexExpression
-    ) {
+    } else if initializer.kind != SyntaxKind::CallExpression {
         let Some(actual) = infer_value_type(unit, initializer, &unit.typed_bindings)? else {
             return Ok(());
         };
@@ -2040,7 +2037,12 @@ fn validate_resolved_assignment(
         .iter()
         .rev()
         .find(|binding| {
-            binding.name == name && binding.is_visible_at(unit.source.id(), node.span.start)
+            binding.name == name
+                && if node.kind == SyntaxKind::Binding {
+                    binding.span == node.span
+                } else {
+                    binding.is_visible_at(unit.source.id(), node.span.start)
+                }
         })
         .map(|binding| binding.value_type.clone())
     else {
@@ -4151,16 +4153,45 @@ fn infer_member_value_type(
     let [receiver, member] = node.children.as_slice() else {
         return Ok(None);
     };
-    if matches!(node_text(&unit.source, member), "concat" | "join") {
+    let member_name = node_text(&unit.source, member);
+    let receiver_type = infer_value_type(unit, receiver, bindings)?;
+    let collection_method = matches!(
+        (&receiver_type, member_name),
+        (
+            Some(ValueType::List(_) | ValueType::Tuple(_, _)),
+            "append" | "set" | "get"
+        ) | (
+            Some(ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)),
+            "set" | "get" | "keys" | "values" | "entries"
+        ) | (
+            Some(ValueType::Set(_) | ValueType::UnorderedSet(_)),
+            "add" | "contains" | "remove"
+        )
+    );
+    let string_method = match &receiver_type {
+        Some(ValueType::Scalar(ScalarType::String)) => {
+            StringFamily::from_source_name(member_name).is_some()
+                || matches!(member_name, "concat" | "join")
+        }
+        Some(ValueType::Scalar(ScalarType::Bytes)) => member_name == "decode",
+        _ => false,
+    };
+    if collection_method || string_method {
+        let family = if string_method {
+            "string methods"
+        } else {
+            "collection methods"
+        };
         return Err(failure(
             &unit.source,
             "T0018",
-            "string methods are not storable values before bound methods exist",
+            format!(
+                "{family} are not storable values before bound methods exist; \
+                 method `.{member_name}` must be invoked with `;`"
+            ),
             node.span,
         ));
     }
-    let member_name = node_text(&unit.source, member);
-    let receiver_type = infer_value_type(unit, receiver, bindings)?;
     if matches!(
         receiver_type,
         Some(
