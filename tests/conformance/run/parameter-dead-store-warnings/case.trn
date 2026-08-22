@@ -7,6 +7,13 @@ function take; v list of int
 function scalar; v int
   v = 4
   print; v
+function unused; v list of int
+  print; 'ignored'
+function optional; v int = 5
+  print; v
 function main
   take; (list; 1, 2)
   scalar; 3
+  unused; (list; 1, 2)
+  optional; 7
+  optional;

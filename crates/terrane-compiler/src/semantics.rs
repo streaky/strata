@@ -7291,6 +7291,22 @@ fn binding_event_child_region(
     })
 }
 
+fn declared_binding_at_node<'a>(
+    unit: &'a SemanticUnit,
+    node: &SyntaxNode,
+) -> Option<&'a TypedBinding> {
+    matches!(
+        node.kind,
+        SyntaxKind::Binding | SyntaxKind::Assignment | SyntaxKind::Parameter
+    )
+    .then(|| {
+        unit.typed_bindings
+            .iter()
+            .find(|binding| binding.span == node.span)
+    })
+    .flatten()
+}
+
 fn collect_binding_events(
     package: &SemanticPackage,
     unit: &SemanticUnit,
@@ -7333,10 +7349,7 @@ fn collect_binding_events(
         return;
     }
 
-    let declared_binding = unit
-        .typed_bindings
-        .iter()
-        .find(|binding| binding.span == node.span);
+    let declared_binding = declared_binding_at_node(unit, node);
     let assignment_target = if matches!(
         node.kind,
         SyntaxKind::Assignment | SyntaxKind::PostfixExpression
@@ -7515,6 +7528,12 @@ pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
             {
                 continue;
             }
+            let parameter = unit.functions.iter().any(|contract| {
+                contract
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.span == binding.span)
+            });
             let Some(events) = package.binding_events.get(&span_key(binding.span)) else {
                 continue;
             };
@@ -7532,6 +7551,9 @@ pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
                     .iter()
                     .any(|event| matches!(event, BindingEvent::Write { .. }));
                 let (code, message) = if *store_span == binding.span && !later_store {
+                    if parameter {
+                        continue;
+                    }
                     ("W4001", format!("binding `{}` is never read", binding.name))
                 } else if *store_span == binding.span {
                     (
