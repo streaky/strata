@@ -2964,7 +2964,13 @@ fn analyze_binding_node(
             if let Some(declared_value) = declared_value.clone()
                 && collection_constructor_matches(unit, value, &declared_value, bindings)
             {
-                validate_collection_constructor_items(unit, value, &declared_value, bindings)?;
+                validate_collection_constructor_items(
+                    unit,
+                    value,
+                    &declared_value,
+                    &name,
+                    bindings,
+                )?;
                 Ok(Some(declared_value))
             } else {
                 infer_value_type(unit, value, bindings)
@@ -3832,30 +3838,121 @@ fn validate_collection_constructor_items(
     unit: &SemanticUnit,
     node: &SyntaxNode,
     expected: &ValueType,
+    destination: &str,
     bindings: &[TypedBinding],
 ) -> Result<(), SemanticFailure> {
     let [_, arguments] = node.children.as_slice() else {
         return Ok(());
     };
-    let (ValueType::List(item)
-    | ValueType::Tuple(item, _)
-    | ValueType::Set(item)
-    | ValueType::UnorderedSet(item)) = expected
-    else {
-        return Ok(());
-    };
-    for argument in &arguments.children {
-        let value = argument.children.last().unwrap_or(argument);
-        if let Some(actual) = infer_value_type(unit, value, bindings)? {
-            validate_value_destination(
-                &unit.source,
-                "collection item",
-                item.value_type(),
-                actual,
-                value,
-                "T0002",
-            )?;
+    match expected {
+        ValueType::List(item)
+        | ValueType::Tuple(item, _)
+        | ValueType::Set(item)
+        | ValueType::UnorderedSet(item) => {
+            for (index, argument) in arguments.children.iter().enumerate() {
+                let value = argument.children.last().unwrap_or(argument);
+                validate_collection_constructor_value(
+                    unit,
+                    value,
+                    &item.value_type(),
+                    &format!("{destination} item {}", index + 1),
+                    bindings,
+                )?;
+            }
         }
+        ValueType::Map(key, value) | ValueType::UnorderedMap(key, value) => {
+            let entry_type = ValueType::Entry(key.clone(), value.clone());
+            for (index, argument) in arguments.children.iter().enumerate() {
+                let label = format!("{destination} entry {}", index + 1);
+                if argument.children.len() >= 2 {
+                    validate_value_destination(
+                        &unit.source,
+                        &format!("{label} key"),
+                        key.value_type(),
+                        ValueType::Scalar(ScalarType::String),
+                        argument,
+                        "T0002",
+                    )?;
+                    let entry_value = argument.children.last().unwrap_or(argument);
+                    validate_collection_constructor_value(
+                        unit,
+                        entry_value,
+                        &value.value_type(),
+                        &format!("{label} value"),
+                        bindings,
+                    )?;
+                } else {
+                    let entry = argument.children.last().unwrap_or(argument);
+                    validate_collection_constructor_value(
+                        unit,
+                        entry,
+                        &entry_type,
+                        &label,
+                        bindings,
+                    )?;
+                }
+            }
+        }
+        ValueType::Entry(key, value) => {
+            let values = &arguments.children;
+            if let [key_argument, value_argument] = values.as_slice() {
+                let key_node = key_argument.children.last().unwrap_or(key_argument);
+                let value_node = value_argument.children.last().unwrap_or(value_argument);
+                validate_collection_constructor_value(
+                    unit,
+                    key_node,
+                    &key.value_type(),
+                    &format!("{destination} key"),
+                    bindings,
+                )?;
+                validate_collection_constructor_value(
+                    unit,
+                    value_node,
+                    &value.value_type(),
+                    &format!("{destination} value"),
+                    bindings,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_collection_constructor_value(
+    unit: &SemanticUnit,
+    value: &SyntaxNode,
+    expected: &ValueType,
+    destination: &str,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    if value.kind == SyntaxKind::GroupExpression
+        && let [grouped] = value.children.as_slice()
+    {
+        return validate_collection_constructor_value(
+            unit,
+            grouped,
+            expected,
+            destination,
+            bindings,
+        );
+    }
+    if collection_constructor_matches(unit, value, expected, bindings)
+        || matches!(expected, ValueType::Entry(_, _))
+            && collection_constructor_identity(unit, value, bindings)
+                .is_some_and(|identity| identity == "/core/collections::entry")
+    {
+        return validate_collection_constructor_items(unit, value, expected, destination, bindings);
+    }
+    if let Some(actual) = infer_value_type(unit, value, bindings)? {
+        validate_value_destination(
+            &unit.source,
+            destination,
+            expected.clone(),
+            actual,
+            value,
+            "T0002",
+        )?;
     }
     Ok(())
 }

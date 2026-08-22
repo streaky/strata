@@ -1805,6 +1805,26 @@ fn rejects_extracted_string_methods_as_values() {
 }
 
 #[test]
+fn collection_constructor_mismatches_name_the_destination_position() {
+    for (source, position) in [
+        (
+            "namespace app\nfrom /core/collections import list\nfunction main\n  values list of int8 = list; 1, 'wrong'\n",
+            "values item 2",
+        ),
+        (
+            "namespace app\nfrom /core/collections import map\nfunction main\n  values map of string, int = map; first='wrong'\n",
+            "values entry 1 value",
+        ),
+    ] {
+        let failure = analyze(&package(false, &[("main.trn", source)])).unwrap_err();
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "T0002");
+        assert!(diagnostic.message.contains(position), "{source}");
+        assert!(!diagnostic.message.contains("collection item"), "{source}");
+    }
+}
+
+#[test]
 fn records_parameter_mutability() {
     let analyzed = analyze(&package(
         true,

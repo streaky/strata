@@ -1,0 +1,4 @@
+namespace map-constructor-value-type
+from /core/collections import map
+function main
+  items map of string, int = map; first='wrong'
