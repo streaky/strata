@@ -2940,6 +2940,19 @@ fn analyze_binding_node(
         && initializer.kind == SyntaxKind::Name
     {
         let initializer_name = node_text(&unit.source, initializer);
+        if collection_constructor_identity(unit, initializer, bindings).is_some_and(|identity| {
+            identity
+                .strip_prefix("/core/collections::")
+                .unwrap_or(identity)
+                == "entry"
+        }) {
+            return Err(failure(
+                &unit.source,
+                "T0045",
+                "`entry` requires exactly a key and value",
+                initializer.span,
+            ));
+        }
         let shadowed_by_binding = bindings.iter().rev().any(|binding| {
             binding.name == initializer_name
                 && binding.is_visible_at(unit.source.id(), initializer.span.start)
@@ -3918,25 +3931,30 @@ fn validate_collection_constructor_items(
             }
         }
         ValueType::Entry(key, value) => {
-            let values = &arguments.children;
-            if let [key_argument, value_argument] = values.as_slice() {
-                let key_node = key_argument.children.last().unwrap_or(key_argument);
-                let value_node = value_argument.children.last().unwrap_or(value_argument);
-                validate_collection_constructor_value(
-                    unit,
-                    key_node,
-                    &key.value_type(),
-                    &format!("{destination} key"),
-                    bindings,
-                )?;
-                validate_collection_constructor_value(
-                    unit,
-                    value_node,
-                    &value.value_type(),
-                    &format!("{destination} value"),
-                    bindings,
-                )?;
-            }
+            let [key_argument, value_argument] = arguments.children.as_slice() else {
+                return Err(failure(
+                    &unit.source,
+                    "T0045",
+                    "`entry` requires exactly a key and value",
+                    arguments.span,
+                ));
+            };
+            let key_node = key_argument.children.last().unwrap_or(key_argument);
+            let value_node = value_argument.children.last().unwrap_or(value_argument);
+            validate_collection_constructor_value(
+                unit,
+                key_node,
+                &key.value_type(),
+                &format!("{destination} key"),
+                bindings,
+            )?;
+            validate_collection_constructor_value(
+                unit,
+                value_node,
+                &value.value_type(),
+                &format!("{destination} value"),
+                bindings,
+            )?;
         }
         _ => {}
     }

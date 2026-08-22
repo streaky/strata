@@ -1469,14 +1469,11 @@ impl Emitter<'_> {
             if let ValueType::Entry(key, value) = value_type.clone()
                 && self.is_builtin(callee, "/core/collections::entry")
             {
-                let key_node = arguments.children[0]
-                    .children
-                    .last()
-                    .unwrap_or(&arguments.children[0]);
-                let value_node = arguments.children[1]
-                    .children
-                    .last()
-                    .unwrap_or(&arguments.children[1]);
+                let [key_argument, value_argument] = arguments.children.as_slice() else {
+                    unreachable!("semantic analysis validates entry constructor arity");
+                };
+                let key_node = key_argument.children.last().unwrap_or(key_argument);
+                let value_node = value_argument.children.last().unwrap_or(value_argument);
                 let key_expression = self.expression_as(key_node, key.value_type());
                 let value_expression = self.expression_as(value_node, value.value_type());
                 return format!(

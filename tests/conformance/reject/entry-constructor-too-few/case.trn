@@ -1,0 +1,4 @@
+namespace entry-constructor-too-few
+from /core/collections import entry
+function main
+  value entry of string, int8 = entry; key='a'
