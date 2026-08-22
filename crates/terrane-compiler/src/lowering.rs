@@ -1482,6 +1482,57 @@ impl Emitter<'_> {
                     rust_element_type(value),
                 );
             }
+            if matches!(
+                value_type,
+                ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)
+            ) {
+                let (kind, key, value, identity) = match value_type.clone() {
+                    ValueType::Map(key, value) => ("Map", key, value, "/core/collections::map"),
+                    ValueType::UnorderedMap(key, value) => (
+                        "UnorderedMap",
+                        key,
+                        value,
+                        "/core/collections::unordered-map",
+                    ),
+                    _ => unreachable!(),
+                };
+                if self.is_builtin(callee, identity) {
+                    let entries = arguments
+                        .children
+                        .iter()
+                        .map(|argument| {
+                            let value_node = argument.children.last().unwrap_or(argument);
+                            if argument.children.len() < 2
+                                && matches!(
+                                    self.value_type(value_node),
+                                    Some(ValueType::Entry(_, _))
+                                )
+                            {
+                                return self.expression_as(
+                                    value_node,
+                                    ValueType::Entry(key.clone(), value.clone()),
+                                );
+                            }
+                            let name = argument
+                                .children
+                                .first()
+                                .map(|name| self.text(name).to_owned())
+                                .expect("validated named map entry");
+                            let value_expression =
+                                self.expression_as(value_node, value.value_type());
+                            format!(
+                                "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    return format!(
+                        "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
+                        rust_element_type(key),
+                        rust_element_type(value),
+                        entries.join(", ")
+                    );
+                }
+            }
         }
         if let ValueType::ScalarOrNone(scalar) = value_type {
             let actual = self.value_type(node);

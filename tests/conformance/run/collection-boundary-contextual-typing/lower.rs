@@ -125,10 +125,18 @@ fn take(values: terrane_collection_support::List<i8>) {
 fn make() -> terrane_collection_support::List<i8> {
     return terrane_collection_support::List::<i8>::new(vec![5, 6]);
 }
+fn take_entry_map(values: terrane_collection_support::Map<String, terrane_collection_support::Entry<String, i8>>) {
+    println!("{}{}", terrane_scalar_support::scalar_text(&(((values).get_or_error(&(String::from("a")))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::take-entry-map (case.trn:9:10)"))).key)), terrane_scalar_support::scalar_text(&(((values).get_or_error(&(String::from("a")))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::take-entry-map (case.trn:9:27)"))).value)));
+}
+fn make_entry_map() -> terrane_collection_support::Map<String, terrane_collection_support::Entry<String, i8>> {
+    return terrane_collection_support::Map::<String, terrane_collection_support::Entry<String, i8>>::new(vec![terrane_collection_support::Entry::new(String::from("a"), terrane_collection_support::Entry::<String, i8>::new(String::from("c"), 8))]);
+}
 fn main() {
     let pair: terrane_collection_support::Entry<String, i8> = terrane_collection_support::Entry::<String, i8>::new(String::from("a"), 6);
     let keyed: terrane_collection_support::Map<i8, String> = terrane_collection_support::Map::<i8, String>::new(vec![terrane_collection_support::Entry::<i8, String>::new(5, String::from("x"))]);
     take(terrane_collection_support::List::<i8>::new(vec![5, 6]));
+    take_entry_map(terrane_collection_support::Map::<String, terrane_collection_support::Entry<String, i8>>::new(vec![terrane_collection_support::Entry::new(String::from("a"), terrane_collection_support::Entry::<String, i8>::new(String::from("b"), 7))]));
     let made: terrane_collection_support::List<i8> = make();
-    println!("{}{}{}", terrane_scalar_support::scalar_text(&((pair).value)), terrane_scalar_support::scalar_text(&(((keyed).get_or_error(&(5))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:13:22)"))))), terrane_scalar_support::scalar_text(&(((made).get_or_error((terrane_collection_support::index_from_int(&(terrane_int_support::Int::from(0_i128)))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:13:32)"))))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:13:32)"))))));
+    let made_entries: terrane_collection_support::Map<String, terrane_collection_support::Entry<String, i8>> = make_entry_map();
+    println!("{}{}{}{}{}", terrane_scalar_support::scalar_text(&((pair).value)), terrane_scalar_support::scalar_text(&(((keyed).get_or_error(&(5))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:19:22)"))))), terrane_scalar_support::scalar_text(&(((made).get_or_error((terrane_collection_support::index_from_int(&(terrane_int_support::Int::from(0_i128)))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:19:32)"))))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:19:32)"))))), terrane_scalar_support::scalar_text(&((((made_entries).get_or_error(&(String::from("a")))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:19:41)")))).key)), terrane_scalar_support::scalar_text(&((((made_entries).get_or_error(&(String::from("a")))).unwrap_or_else(|error| __terrane_uncaught(TerraneError::from(error).at("/collection-boundary-contextual-typing::main (case.trn:19:64)")))).value)));
 }

@@ -5,9 +5,15 @@ function take; values list of int8
   print; values[1]
 function make list of int8
   return list; 5, 6
+function take-entry-map; values map of string, entry of string, int8
+  print; values['a'].key, values['a'].value
+function make-entry-map map of string, entry of string, int8
+  return map; a=(entry; key='c', value=8)
 function main
   pair entry of string, int8 = entry; key='a', value=6
   keyed map of int8, string = map; (entry; 5, 'x')
   take; (list; 5, 6)
+  take-entry-map; (map; a=(entry; key='b', value=7))
   made list of int8 = make;
-  print; pair.value, keyed[5], made[0]
+  made-entries map of string, entry of string, int8 = make-entry-map;
+  print; pair.value, keyed[5], made[0], made-entries['a'].key, made-entries['a'].value
