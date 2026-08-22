@@ -1417,11 +1417,67 @@ impl Emitter<'_> {
         reason = "destination-directed lowering keeps every recursive value form in one auditable dispatch"
     )]
     fn expression_as(&mut self, node: &SyntaxNode, value_type: ValueType) -> String {
+        if matches!(
+            &value_type,
+            ValueType::List(_)
+                | ValueType::Map(_, _)
+                | ValueType::Set(_)
+                | ValueType::Tuple(_, _)
+                | ValueType::Entry(_, _)
+                | ValueType::UnorderedMap(_, _)
+                | ValueType::UnorderedSet(_)
+        ) && node.kind == SyntaxKind::GroupExpression
+            && let [grouped] = node.children.as_slice()
+        {
+            return self.expression_as(grouped, value_type);
+        }
+        if node.kind == SyntaxKind::CallExpression
+            && let [callee, arguments] = node.children.as_slice()
+        {
+            let constructor = match value_type.clone() {
+                ValueType::List(item) if self.is_builtin(callee, "/core/collections::list") => {
+                    Some(("List", item))
+                }
+                ValueType::Tuple(item, _)
+                    if self.is_builtin(callee, "/core/collections::tuple") =>
+                {
+                    Some(("Tuple", item))
+                }
+                ValueType::Set(item) if self.is_builtin(callee, "/core/collections::set") => {
+                    Some(("Set", item))
+                }
+                ValueType::UnorderedSet(item)
+                    if self.is_builtin(callee, "/core/collections::unordered-set") =>
+                {
+                    Some(("UnorderedSet", item))
+                }
+                _ => None,
+            };
+            if let Some((kind, item)) = constructor {
+                let values = arguments
+                    .children
+                    .iter()
+                    .map(|argument| argument.children.last().unwrap_or(argument))
+                    .map(|value| self.expression_as(value, item.value_type()))
+                    .collect::<Vec<_>>();
+                return format!(
+                    "terrane_collection_support::{kind}::<{}>::new(vec![{}])",
+                    rust_element_type(item),
+                    values.join(", ")
+                );
+            }
+        }
         if let ValueType::ScalarOrNone(scalar) = value_type {
-            return if self.value_type(node) == Some(value_type) {
+            let actual = self.value_type(node);
+            return if actual == Some(value_type)
+                || matches!(
+                    &actual,
+                    Some(ValueType::ElementOrNone(item))
+                        if item.value_type() == ValueType::Scalar(scalar)
+                ) {
                 self.expression(node)
             } else if self.text(node).trim() == "none"
-                || self.value_type(node) == Some(ValueType::Scalar(ScalarType::None))
+                || actual == Some(ValueType::Scalar(ScalarType::None))
             {
                 "None".to_owned()
             } else {

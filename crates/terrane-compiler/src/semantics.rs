@@ -1849,6 +1849,14 @@ fn validate_call_nodes<'a>(
     {
         for argument in &arguments.children {
             let value = argument.children.last().unwrap_or(argument);
+            validate_call_nodes(
+                package,
+                unit,
+                value,
+                contracts,
+                active_function,
+                scoped_bindings,
+            )?;
             let value_type = infer_value_type(unit, value, scoped_bindings)?;
             if !matches!(
                 value_type,
@@ -2911,7 +2919,7 @@ fn analyze_binding_node(
     {
         let collection = identity
             .strip_prefix("/core/collections::")
-            .expect("matched collection identity");
+            .unwrap_or(identity);
         let message = if matches!(collection, "map" | "unordered-map") {
             format!("an empty `{collection}` requires explicit key and value types")
         } else {
@@ -2954,8 +2962,9 @@ fn analyze_binding_node(
     let inferred = initializer
         .map(|value| {
             if let Some(declared_value) = declared_value.clone()
-                && empty_collection_constructor_matches(unit, value, &declared_value, bindings)
+                && collection_constructor_matches(unit, value, &declared_value, bindings)
             {
+                validate_collection_constructor_items(unit, value, &declared_value, bindings)?;
                 Ok(Some(declared_value))
             } else {
                 infer_value_type(unit, value, bindings)
@@ -3299,6 +3308,11 @@ fn validate_value_destination(
     if let ValueType::ScalarOrNone(expected) = expected {
         if actual == ValueType::Scalar(ScalarType::None)
             || actual == ValueType::ScalarOrNone(expected)
+            || matches!(
+                &actual,
+                ValueType::ElementOrNone(item)
+                    if item.value_type() == ValueType::Scalar(expected)
+            )
         {
             return Ok(());
         }
@@ -3791,30 +3805,59 @@ fn homogeneous_element_type(
     })
 }
 
-fn empty_collection_constructor_matches(
+fn collection_constructor_matches(
     unit: &SemanticUnit,
     node: &SyntaxNode,
     expected: &ValueType,
     bindings: &[TypedBinding],
 ) -> bool {
-    let Some(identity) = empty_collection_identity(unit, node, bindings) else {
+    let Some(identity) = collection_constructor_identity(unit, node, bindings) else {
         return false;
     };
+    let constructor = identity
+        .strip_prefix("/core/collections::")
+        .unwrap_or(identity);
     matches!(
-        (identity, expected),
-        ("/core/collections::list", ValueType::List(_))
-            | ("/core/collections::map", ValueType::Map(_, _))
-            | (
-                "/core/collections::unordered-map",
-                ValueType::UnorderedMap(_, _)
-            )
-            | ("/core/collections::set", ValueType::Set(_))
-            | ("/core/collections::tuple", ValueType::Tuple(_, _))
-            | (
-                "/core/collections::unordered-set",
-                ValueType::UnorderedSet(_)
-            )
+        (constructor, expected),
+        ("list", ValueType::List(_))
+            | ("map", ValueType::Map(_, _))
+            | ("unordered-map", ValueType::UnorderedMap(_, _))
+            | ("set", ValueType::Set(_))
+            | ("tuple", ValueType::Tuple(_, _))
+            | ("unordered-set", ValueType::UnorderedSet(_))
     )
+}
+
+fn validate_collection_constructor_items(
+    unit: &SemanticUnit,
+    node: &SyntaxNode,
+    expected: &ValueType,
+    bindings: &[TypedBinding],
+) -> Result<(), SemanticFailure> {
+    let [_, arguments] = node.children.as_slice() else {
+        return Ok(());
+    };
+    let (ValueType::List(item)
+    | ValueType::Tuple(item, _)
+    | ValueType::Set(item)
+    | ValueType::UnorderedSet(item)) = expected
+    else {
+        return Ok(());
+    };
+    for argument in &arguments.children {
+        let value = argument.children.last().unwrap_or(argument);
+        if let Some(actual) = infer_value_type(unit, value, bindings)? {
+            validate_value_destination(
+                &unit.source,
+                "collection item",
+                item.value_type(),
+                actual,
+                value,
+                "T0002",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn empty_collection_identity<'a>(
@@ -3822,14 +3865,29 @@ fn empty_collection_identity<'a>(
     node: &'a SyntaxNode,
     bindings: &[TypedBinding],
 ) -> Option<&'a str> {
+    let is_empty = if node.kind == SyntaxKind::Name {
+        true
+    } else {
+        let [_, arguments] = node.children.as_slice() else {
+            return None;
+        };
+        node.kind == SyntaxKind::CallExpression && arguments.children.is_empty()
+    };
+    is_empty.then(|| collection_constructor_identity(unit, node, bindings))?
+}
+
+fn collection_constructor_identity<'a>(
+    unit: &'a SemanticUnit,
+    node: &'a SyntaxNode,
+    bindings: &[TypedBinding],
+) -> Option<&'a str> {
     let callee = if node.kind == SyntaxKind::Name {
         node
     } else {
-        let [callee, arguments] = node.children.as_slice() else {
+        let [callee, _] = node.children.as_slice() else {
             return None;
         };
-        (node.kind == SyntaxKind::CallExpression && arguments.children.is_empty())
-            .then_some(callee)?
+        (node.kind == SyntaxKind::CallExpression).then_some(callee)?
     };
     let identity = resolved_compiler_object_identity(unit, callee).or_else(|| {
         let name = node_text(&unit.source, callee);
@@ -3839,12 +3897,10 @@ fn empty_collection_identity<'a>(
         .then_some(name)
     })?;
     matches!(
-        identity,
-        "/core/collections::list"
-            | "/core/collections::map"
-            | "/core/collections::unordered-map"
-            | "/core/collections::set"
-            | "/core/collections::unordered-set"
+        identity
+            .strip_prefix("/core/collections::")
+            .unwrap_or(identity),
+        "list" | "map" | "unordered-map" | "set" | "tuple" | "unordered-set"
     )
     .then_some(identity)
 }
@@ -3942,15 +3998,14 @@ fn infer_collection_call_type(
     if shadowed {
         return Ok(None);
     }
-    if arguments.children.is_empty()
-        && let Some(expected) = bindings
-            .iter()
-            .filter(|binding| {
-                binding.span.start <= node.span.start && node.span.end <= binding.span.end
-            })
-            .min_by_key(|binding| binding.span.end - binding.span.start)
-            .map(|binding| &binding.value_type)
-        && empty_collection_constructor_matches(unit, node, expected, bindings)
+    if let Some(expected) = bindings
+        .iter()
+        .filter(|binding| {
+            binding.span.start <= node.span.start && node.span.end <= binding.span.end
+        })
+        .min_by_key(|binding| binding.span.end - binding.span.start)
+        .map(|binding| &binding.value_type)
+        && collection_constructor_matches(unit, node, expected, bindings)
     {
         return Ok(Some(expected.clone()));
     }
