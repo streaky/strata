@@ -1,0 +1,6 @@
+namespace bare-entry-return
+from /core/collections import entry
+function make entry of string, int8
+  return entry
+function main
+  make;

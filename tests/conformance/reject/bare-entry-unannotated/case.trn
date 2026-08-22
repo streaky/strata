@@ -1,0 +1,4 @@
+namespace bare-entry-unannotated
+from /core/collections import entry
+function main
+  value = entry

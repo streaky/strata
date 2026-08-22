@@ -2929,6 +2929,14 @@ fn analyze_binding_node(
         let collection = identity
             .strip_prefix("/core/collections::")
             .unwrap_or(identity);
+        if collection == "entry" {
+            return Err(failure(
+                &unit.source,
+                "T0045",
+                "`entry` requires exactly a key and value",
+                initializer.span,
+            ));
+        }
         let message = if matches!(collection, "map" | "unordered-map") {
             format!("an empty `{collection}` requires explicit key and value types")
         } else {
@@ -3978,6 +3986,22 @@ fn validate_collection_constructor_value(
             destination,
             bindings,
         );
+    }
+    if value.kind == SyntaxKind::Name
+        && matches!(expected, ValueType::Entry(_, _))
+        && collection_constructor_identity(unit, value, bindings).is_some_and(|identity| {
+            identity
+                .strip_prefix("/core/collections::")
+                .unwrap_or(identity)
+                == "entry"
+        })
+    {
+        return Err(failure(
+            &unit.source,
+            "T0045",
+            "`entry` requires exactly a key and value",
+            value.span,
+        ));
     }
     if collection_constructor_matches(unit, value, expected, bindings) {
         return validate_collection_constructor_items(unit, value, expected, destination, bindings);
