@@ -2456,21 +2456,14 @@ impl Emitter<'_> {
             if let ValueType::Entry(key, value) = value_type.clone()
                 && self.is_builtin(callee, "/core/collections::entry")
             {
+                let [key_argument, value_argument] = arguments.children.as_slice() else {
+                    unreachable!("semantic analysis validates entry constructor arity");
+                };
+                let key_node = key_argument.children.last().unwrap_or(key_argument);
+                let value_node = value_argument.children.last().unwrap_or(value_argument);
                 let values = [
-                    self.expression_as(
-                        arguments.children[0]
-                            .children
-                            .last()
-                            .unwrap_or(&arguments.children[0]),
-                        key.value_type(),
-                    ),
-                    self.expression_as(
-                        arguments.children[1]
-                            .children
-                            .last()
-                            .unwrap_or(&arguments.children[1]),
-                        value.value_type(),
-                    ),
+                    self.expression_as(key_node, key.value_type()),
+                    self.expression_as(value_node, value.value_type()),
                 ];
                 return format!(
                     "terrane_collection_support::Entry::<{}, {}>::new({}, {})",
@@ -2503,7 +2496,12 @@ impl Emitter<'_> {
                         .iter()
                         .map(|argument| {
                             let value_node = argument.children.last().unwrap_or(argument);
-                            if matches!(self.value_type(value_node), Some(ValueType::Entry(_, _))) {
+                            if argument.children.len() < 2
+                                && matches!(
+                                    self.value_type(value_node),
+                                    Some(ValueType::Entry(_, _))
+                                )
+                            {
                                 return self.expression_as(
                                     value_node,
                                     ValueType::Entry(key.clone(), value.clone()),

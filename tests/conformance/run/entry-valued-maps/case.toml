@@ -1,0 +1,4 @@
+phase = "run"
+status = "accept"
+stdout = "stdout.txt"
+lower = "lower.rs"
