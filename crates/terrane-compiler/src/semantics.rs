@@ -2023,6 +2023,14 @@ fn validate_resolved_assignment(
         infer_collection_call_type(unit, initializer, &unit.typed_bindings)?
     {
         actual
+    } else if matches!(
+        initializer.kind,
+        SyntaxKind::Name | SyntaxKind::IndexExpression
+    ) {
+        let Some(actual) = infer_value_type(unit, initializer, &unit.typed_bindings)? else {
+            return Ok(());
+        };
+        actual
     } else {
         return Ok(());
     };
