@@ -8,7 +8,11 @@ function main
   ordered-inline map of string, entry of string, int8 = map; a=(entry; key='c', value=8)
   unordered-bound unordered-map of string, entry of string, int8 = unordered-map; a=inner
   unordered-inline unordered-map of string, entry of string, int8 = unordered-map; a=(entry; key='d', value=9)
+  inferred-ordered = map; a=(entry; key='e', value=6)
+  inferred-unordered = unordered-map; a=(entry; key='f', value=5)
   print; ordered-bound['a'].key, ordered-bound['a'].value
   print; ordered-inline['a'].key, ordered-inline['a'].value
   print; unordered-bound['a'].key, unordered-bound['a'].value
   print; unordered-inline['a'].key, unordered-inline['a'].value
+  print; inferred-ordered['a'].key, inferred-ordered['a'].value
+  print; inferred-unordered['a'].key, inferred-unordered['a'].value

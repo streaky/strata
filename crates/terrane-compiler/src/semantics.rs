@@ -2487,19 +2487,25 @@ fn collect_typed_bindings(
             .iter()
             .find(|contract| contract.span == node.span)
             .expect("analyzed function declaration must have a semantic contract");
-        let mut function_bindings = visible_bindings.clone();
-        function_bindings.extend(contract.parameters.iter().filter_map(|parameter| {
-            parameter.value_type.clone().map(|value_type| TypedBinding {
-                name: parameter.name.clone(),
-                span: parameter.span,
-                visible_from: parameter.span.start,
-                scope: Some(node.span),
-                value_type,
-                destination_arms: Vec::new(),
-                storage_type: None,
-                mutable: false,
+        let parameter_bindings = contract
+            .parameters
+            .iter()
+            .filter_map(|parameter| {
+                parameter.value_type.clone().map(|value_type| TypedBinding {
+                    name: parameter.name.clone(),
+                    span: parameter.span,
+                    visible_from: parameter.span.start,
+                    scope: Some(node.span),
+                    value_type,
+                    destination_arms: Vec::new(),
+                    storage_type: None,
+                    mutable: false,
+                })
             })
-        }));
+            .collect::<Vec<_>>();
+        let mut function_bindings = visible_bindings.clone();
+        function_bindings.extend(parameter_bindings.iter().cloned());
+        bindings.extend(parameter_bindings);
         for child in &node.children {
             collect_typed_bindings(
                 unit,
@@ -4227,7 +4233,7 @@ fn infer_collection_call_type(
                 let value_node = argument.children.last().unwrap_or(argument);
                 let inferred = element_type(unit, value_node, bindings)?;
                 let (key, value) = match inferred.value_type() {
-                    ValueType::Entry(key, value) => (key, value),
+                    ValueType::Entry(key, value) if argument.children.len() < 2 => (key, value),
                     _ => (
                         ElementType::new(ValueType::Scalar(ScalarType::String)),
                         inferred,

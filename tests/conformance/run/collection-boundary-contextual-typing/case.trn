@@ -9,11 +9,20 @@ function take-entry-map; values map of string, entry of string, int8
   print; values['a'].key, values['a'].value
 function make-entry-map map of string, entry of string, int8
   return map; a=(entry; key='c', value=8)
+function take-nested-map; values map of string, map of string, int8
+  print; values['a']['b']
+function take-nested-list; values list of list of int8
+  print; values[0][1]
+function take-map-list; values map of string, list of int8
+  print; values['a'][0]
 function main
   pair entry of string, int8 = entry; key='a', value=6
   keyed map of int8, string = map; (entry; 5, 'x')
   take; (list; 5, 6)
   take-entry-map; (map; a=(entry; key='b', value=7))
+  take-nested-map; (map; a=(map; b=7))
+  take-nested-list; (list; (list; 5, 6))
+  take-map-list; (map; a=(list; 9))
   made list of int8 = make;
   made-entries map of string, entry of string, int8 = make-entry-map;
   print; pair.value, keyed[5], made[0], made-entries['a'].key, made-entries['a'].value

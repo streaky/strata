@@ -1482,56 +1482,19 @@ impl Emitter<'_> {
                     rust_element_type(value),
                 );
             }
-            if matches!(
-                value_type,
-                ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)
-            ) {
-                let (kind, key, value, identity) = match value_type.clone() {
-                    ValueType::Map(key, value) => ("Map", key, value, "/core/collections::map"),
-                    ValueType::UnorderedMap(key, value) => (
-                        "UnorderedMap",
-                        key,
-                        value,
-                        "/core/collections::unordered-map",
-                    ),
-                    _ => unreachable!(),
-                };
-                if self.is_builtin(callee, identity) {
-                    let entries = arguments
-                        .children
-                        .iter()
-                        .map(|argument| {
-                            let value_node = argument.children.last().unwrap_or(argument);
-                            if argument.children.len() < 2
-                                && matches!(
-                                    self.value_type(value_node),
-                                    Some(ValueType::Entry(_, _))
-                                )
-                            {
-                                return self.expression_as(
-                                    value_node,
-                                    ValueType::Entry(key.clone(), value.clone()),
-                                );
-                            }
-                            let name = argument
-                                .children
-                                .first()
-                                .map(|name| self.text(name).to_owned())
-                                .expect("validated named map entry");
-                            let value_expression =
-                                self.expression_as(value_node, value.value_type());
-                            format!(
-                                "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    return format!(
-                        "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
-                        rust_element_type(key),
-                        rust_element_type(value),
-                        entries.join(", ")
-                    );
+            let map_constructor = match value_type.clone() {
+                ValueType::Map(key, value) if self.is_builtin(callee, "/core/collections::map") => {
+                    Some(("Map", key, value))
                 }
+                ValueType::UnorderedMap(key, value)
+                    if self.is_builtin(callee, "/core/collections::unordered-map") =>
+                {
+                    Some(("UnorderedMap", key, value))
+                }
+                _ => None,
+            };
+            if let Some((kind, key, value)) = map_constructor {
+                return self.map_constructor(arguments, kind, key, value);
             }
         }
         if let ValueType::ScalarOrNone(scalar) = value_type {
@@ -1668,6 +1631,45 @@ impl Emitter<'_> {
             }
             _ => self.expression(node),
         }
+    }
+
+    fn map_constructor(
+        &mut self,
+        arguments: &SyntaxNode,
+        kind: &str,
+        key: ElementType,
+        value: ElementType,
+    ) -> String {
+        let entries = arguments
+            .children
+            .iter()
+            .map(|argument| {
+                let value_node = argument.children.last().unwrap_or(argument);
+                if argument.children.len() < 2
+                    && matches!(self.value_type(value_node), Some(ValueType::Entry(_, _)))
+                {
+                    return self.expression_as(
+                        value_node,
+                        ValueType::Entry(key.clone(), value.clone()),
+                    );
+                }
+                let name = argument
+                    .children
+                    .first()
+                    .map(|name| self.text(name).to_owned())
+                    .expect("validated named map entry");
+                let value_expression = self.expression_as(value_node, value.value_type());
+                format!(
+                    "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
+            rust_element_type(key),
+            rust_element_type(value),
+            entries.join(", ")
+        )
     }
 
     fn adaptive_expression(&mut self, node: &SyntaxNode) -> String {
@@ -2524,59 +2526,19 @@ impl Emitter<'_> {
                     values[1]
                 );
             }
-            if matches!(
-                value_type,
-                ValueType::Map(_, _) | ValueType::UnorderedMap(_, _)
-            ) {
-                let (kind, key, value) = match value_type.clone() {
-                    ValueType::Map(key, value) => ("Map", key, value),
-                    ValueType::UnorderedMap(key, value) => ("UnorderedMap", key, value),
-                    _ => unreachable!(),
-                };
-                let identity = format!(
-                    "/core/collections::{}",
-                    if kind == "Map" {
-                        "map"
-                    } else {
-                        "unordered-map"
-                    }
-                );
-                if self.is_builtin(callee, &identity) {
-                    let entries = arguments
-                        .children
-                        .iter()
-                        .map(|argument| {
-                            let value_node = argument.children.last().unwrap_or(argument);
-                            if argument.children.len() < 2
-                                && matches!(
-                                    self.value_type(value_node),
-                                    Some(ValueType::Entry(_, _))
-                                )
-                            {
-                                return self.expression_as(
-                                    value_node,
-                                    ValueType::Entry(key.clone(), value.clone()),
-                                );
-                            }
-                            let name = argument
-                                .children
-                                .first()
-                                .map(|name| self.text(name).to_owned())
-                                .expect("validated named map entry");
-                            let value_expression =
-                                self.expression_as(value_node, value.value_type());
-                            format!(
-                                "terrane_collection_support::Entry::new(String::from({name:?}), {value_expression})"
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    return format!(
-                        "terrane_collection_support::{kind}::<{}, {}>::new(vec![{}])",
-                        rust_element_type(key),
-                        rust_element_type(value),
-                        entries.join(", ")
-                    );
+            let map_constructor = match value_type.clone() {
+                ValueType::Map(key, value) if self.is_builtin(callee, "/core/collections::map") => {
+                    Some(("Map", key, value))
                 }
+                ValueType::UnorderedMap(key, value)
+                    if self.is_builtin(callee, "/core/collections::unordered-map") =>
+                {
+                    Some(("UnorderedMap", key, value))
+                }
+                _ => None,
+            };
+            if let Some((kind, key, value)) = map_constructor {
+                return self.map_constructor(arguments, kind, key, value);
             }
             if value_type == ValueType::Range {
                 let through = callee.kind == SyntaxKind::MemberExpression
