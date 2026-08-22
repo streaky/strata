@@ -7254,6 +7254,14 @@ fn span_key(span: Span) -> (u32, usize, usize) {
 }
 
 fn binding_event_child_repeats(node: &SyntaxNode, index: usize) -> bool {
+    if node.kind == SyntaxKind::ForStatement
+        && node
+            .children
+            .get(index)
+            .is_some_and(|child| child.kind == SyntaxKind::ForTarget)
+    {
+        return true;
+    }
     match node.kind {
         SyntaxKind::WhileStatement => true,
         SyntaxKind::ForStatement if node.children.len() == 3 => index == 2,
@@ -7267,6 +7275,12 @@ fn binding_event_child_region(
     child: &SyntaxNode,
     index: usize,
 ) -> Option<ControlRegion> {
+    if node.kind == SyntaxKind::ForStatement && child.kind == SyntaxKind::ForTarget {
+        return Some(ControlRegion {
+            statement: node.span,
+            arm: None,
+        });
+    }
     if node.kind == SyntaxKind::IfStatement
         && matches!(child.kind, SyntaxKind::Block | SyntaxKind::ElseClause)
     {
@@ -7312,6 +7326,14 @@ fn declared_binding_at_node<'a>(
             .find(|binding| binding.span == node.span)
     })
     .flatten()
+}
+
+fn initial_store_span(node: &SyntaxNode, binding: &TypedBinding) -> Span {
+    if node.kind == SyntaxKind::ForTarget {
+        binding.span
+    } else {
+        node.span
+    }
 }
 
 fn collect_binding_events(
@@ -7405,7 +7427,7 @@ fn collect_binding_events(
             .entry(span_key(binding.span))
             .or_default()
             .push(BindingEvent::Write {
-                span: node.span,
+                span: initial_store_span(node, binding),
                 loops: loops.clone(),
                 regions: regions.clone(),
             });
@@ -7560,7 +7582,7 @@ pub(crate) fn warnings(package: &SemanticPackage) -> Vec<Diagnostic> {
                 let later_store = events[index + 1..]
                     .iter()
                     .any(|event| matches!(event, BindingEvent::Write { .. }));
-                let initial_store = *store_span == binding.span || (loop_target && index == 0);
+                let initial_store = *store_span == binding.span;
                 let (code, message) = if initial_store && !later_store {
                     if parameter || loop_target {
                         continue;

@@ -1340,7 +1340,7 @@ impl Emitter<'_> {
                 self.line("terrane_collection_support::IterationStep::End => break,");
                 self.indent -= 1;
                 self.line("};");
-                if !binding_store_value_is_read(self.package, name_span, target.span) {
+                if !binding_store_value_is_read(self.package, name_span, name_span) {
                     self.line(&format!("let _ = &{name};"));
                 }
                 let outer_continue = self.continue_label.take();

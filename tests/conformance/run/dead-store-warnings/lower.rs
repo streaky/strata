@@ -39,4 +39,21 @@ fn main() {
         preserved = String::from("y");
         println!("{}", terrane_scalar_support::scalar_text(&(preserved)));
     }
+    let mut __terrane_iterator_3 = terrane_collection_support::string_iterator(&(String::from("a")));
+    loop {
+        let outer = match __terrane_iterator_3.next() {
+            terrane_collection_support::IterationStep::Item(item) => item,
+            terrane_collection_support::IterationStep::End => break,
+        };
+        let mut __terrane_iterator_4 = terrane_collection_support::string_iterator(&(String::from("b")));
+        loop {
+            let mut inner = match __terrane_iterator_4.next() {
+                terrane_collection_support::IterationStep::Item(item) => item,
+                terrane_collection_support::IterationStep::End => break,
+            };
+            let _ = &inner;
+            inner = String::from("z");
+            println!("{}{}", terrane_scalar_support::scalar_text(&(outer)), terrane_scalar_support::scalar_text(&(inner)));
+        }
+    }
 }

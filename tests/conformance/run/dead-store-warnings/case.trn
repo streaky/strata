@@ -15,3 +15,7 @@ function main
     print; preserved
     preserved = 'y'
     print; preserved
+  for outer in 'a'
+    for inner in 'b'
+      inner = 'z'
+      print; outer, inner
